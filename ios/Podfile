@@ -22,8 +22,11 @@ target 'PridethisWay' do
     # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
-
+  pre_install do |installer|
+    $RNMapboxMaps.pre_install(installer)
+  end
   post_install do |installer|
+    $RNMapboxMaps.post_install(installer)
     react_native_post_install(
       installer,
       config[:reactNativePath],

@@ -7,10 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0BC61CCE8876BA39A9321327 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		0C80B921A6F3F58F76C31292 /* libPods-PridethisWay.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-PridethisWay.a */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		274B5ADE4A1046089D8E4923 /* PlusJakartaSans-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 77E1663C630D4089967BF8DB /* PlusJakartaSans-Regular.ttf */; };
+		4EC04E068E024C738A7DD5B0 /* InterTight-Light.ttf in Resources */ = {isa = PBXBuildFile; fileRef = F7A9F670466F4FE9AAF15605 /* InterTight-Light.ttf */; };
+		61EDC0ACB2EC4020986F795D /* InterTight-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA2E5784E04440B1BA63B41A /* InterTight-SemiBold.ttf */; };
+		71B2F47EF99B44FC86371E89 /* Poppins-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 36BF1FB499CC45AAA74FFC16 /* Poppins-Regular.ttf */; };
+		71DF3B2B8632468EB8960E06 /* InterTight-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 873C2C5C4EA746998D67914A /* InterTight-Bold.ttf */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		93BB7960CBBF4274A7514002 /* PlusJakartaSans-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 24027199351140B0A6A97BF6 /* PlusJakartaSans-Medium.ttf */; };
+		CAA0D0D9FA4343289BE95DA4 /* InterTight-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DCE1BC253EA84E09A41866D3 /* InterTight-Medium.ttf */; };
+		D3D760480E734AF1BF0ECD52 /* InterTight-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 7FB92BF7CA004346A86271BD /* InterTight-Regular.ttf */; };
+		DD6093657AFB4296ACE6F144 /* Poppins-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B7220DBAF1E140FD91C7FA07 /* Poppins-SemiBold.ttf */; };
+		ECAC42204AEA4AB5A3CD55DA /* Poppins-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4924B92A0FDD4EE2B9627BB8 /* Poppins-Medium.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -18,12 +29,22 @@
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = PridethisWay/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = PridethisWay/Info.plist; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = PridethisWay/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		24027199351140B0A6A97BF6 /* PlusJakartaSans-Medium.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "PlusJakartaSans-Medium.ttf"; path = "../src/assets/fonts/PlusJakartaSans-Medium.ttf"; sourceTree = "<group>"; };
+		36BF1FB499CC45AAA74FFC16 /* Poppins-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "Poppins-Regular.ttf"; path = "../src/assets/fonts/Poppins-Regular.ttf"; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-PridethisWay.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PridethisWay.debug.xcconfig"; path = "Target Support Files/Pods-PridethisWay/Pods-PridethisWay.debug.xcconfig"; sourceTree = "<group>"; };
+		4924B92A0FDD4EE2B9627BB8 /* Poppins-Medium.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "Poppins-Medium.ttf"; path = "../src/assets/fonts/Poppins-Medium.ttf"; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-PridethisWay.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PridethisWay.release.xcconfig"; path = "Target Support Files/Pods-PridethisWay/Pods-PridethisWay.release.xcconfig"; sourceTree = "<group>"; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-PridethisWay.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-PridethisWay.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = PridethisWay/AppDelegate.swift; sourceTree = "<group>"; };
+		77E1663C630D4089967BF8DB /* PlusJakartaSans-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "PlusJakartaSans-Regular.ttf"; path = "../src/assets/fonts/PlusJakartaSans-Regular.ttf"; sourceTree = "<group>"; };
+		7FB92BF7CA004346A86271BD /* InterTight-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "InterTight-Regular.ttf"; path = "../src/assets/fonts/InterTight-Regular.ttf"; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = PridethisWay/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		873C2C5C4EA746998D67914A /* InterTight-Bold.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "InterTight-Bold.ttf"; path = "../src/assets/fonts/InterTight-Bold.ttf"; sourceTree = "<group>"; };
+		B7220DBAF1E140FD91C7FA07 /* Poppins-SemiBold.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "Poppins-SemiBold.ttf"; path = "../src/assets/fonts/Poppins-SemiBold.ttf"; sourceTree = "<group>"; };
+		DCE1BC253EA84E09A41866D3 /* InterTight-Medium.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "InterTight-Medium.ttf"; path = "../src/assets/fonts/InterTight-Medium.ttf"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		F7A9F670466F4FE9AAF15605 /* InterTight-Light.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "InterTight-Light.ttf"; path = "../src/assets/fonts/InterTight-Light.ttf"; sourceTree = "<group>"; };
+		FA2E5784E04440B1BA63B41A /* InterTight-SemiBold.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "InterTight-SemiBold.ttf"; path = "../src/assets/fonts/InterTight-SemiBold.ttf"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -74,6 +95,7 @@
 				83CBBA001A601CBA00E9B192 /* Products */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
+				C0A60101B38A429D97B9D042 /* Resources */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -95,6 +117,24 @@
 				5709B34CF0A7D63546082F79 /* Pods-PridethisWay.release.xcconfig */,
 			);
 			path = Pods;
+			sourceTree = "<group>";
+		};
+		C0A60101B38A429D97B9D042 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B7220DBAF1E140FD91C7FA07 /* Poppins-SemiBold.ttf */,
+				FA2E5784E04440B1BA63B41A /* InterTight-SemiBold.ttf */,
+				F7A9F670466F4FE9AAF15605 /* InterTight-Light.ttf */,
+				DCE1BC253EA84E09A41866D3 /* InterTight-Medium.ttf */,
+				7FB92BF7CA004346A86271BD /* InterTight-Regular.ttf */,
+				24027199351140B0A6A97BF6 /* PlusJakartaSans-Medium.ttf */,
+				77E1663C630D4089967BF8DB /* PlusJakartaSans-Regular.ttf */,
+				873C2C5C4EA746998D67914A /* InterTight-Bold.ttf */,
+				4924B92A0FDD4EE2B9627BB8 /* Poppins-Medium.ttf */,
+				36BF1FB499CC45AAA74FFC16 /* Poppins-Regular.ttf */,
+			);
+			name = Resources;
+			path = "";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -159,6 +199,17 @@
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+				0BC61CCE8876BA39A9321327 /* PrivacyInfo.xcprivacy in Resources */,
+				DD6093657AFB4296ACE6F144 /* Poppins-SemiBold.ttf in Resources */,
+				61EDC0ACB2EC4020986F795D /* InterTight-SemiBold.ttf in Resources */,
+				4EC04E068E024C738A7DD5B0 /* InterTight-Light.ttf in Resources */,
+				CAA0D0D9FA4343289BE95DA4 /* InterTight-Medium.ttf in Resources */,
+				D3D760480E734AF1BF0ECD52 /* InterTight-Regular.ttf in Resources */,
+				93BB7960CBBF4274A7514002 /* PlusJakartaSans-Medium.ttf in Resources */,
+				274B5ADE4A1046089D8E4923 /* PlusJakartaSans-Regular.ttf in Resources */,
+				71DF3B2B8632468EB8960E06 /* InterTight-Bold.ttf in Resources */,
+				ECAC42204AEA4AB5A3CD55DA /* Poppins-Medium.ttf in Resources */,
+				71B2F47EF99B44FC86371E89 /* Poppins-Regular.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -370,6 +421,10 @@
 				);
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
+				);
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-DFOLLY_NO_CONFIG",
@@ -377,8 +432,13 @@
 					"-DFOLLY_USE_LIBCPP=1",
 					"-DFOLLY_CFG_NO_COROUTINES=1",
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
 				);
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				USE_HERMES = true;
 			};
 			name = Debug;
 		};
@@ -435,6 +495,10 @@
 					"\"$(inherited)\"",
 				);
 				MTL_ENABLE_DEBUG_INFO = NO;
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
+				);
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-DFOLLY_NO_CONFIG",
@@ -442,8 +506,12 @@
 					"-DFOLLY_USE_LIBCPP=1",
 					"-DFOLLY_CFG_NO_COROUTINES=1",
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
+					"-DRCT_REMOVE_LEGACY_ARCH=1",
 				);
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				USE_HERMES = true;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
