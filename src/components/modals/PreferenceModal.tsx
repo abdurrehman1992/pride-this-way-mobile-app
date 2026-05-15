@@ -29,6 +29,7 @@ interface Props {
     togglePreference: (item: string) => void;
     clearAll: () => void;
     onClose: () => void;
+    preferences?: string[];
     mode?: ModalMode;
     onPrimary?: () => void;
     onSecondary?: () => void;
@@ -43,6 +44,7 @@ const PreferenceModal: React.FC<Props> = ({
     togglePreference,
     clearAll,
     onClose,
+    preferences = ["Food", "Adventure", "History", "Shopping"],
     mode = "myTour",
     onPrimary,
     onSecondary,
@@ -64,7 +66,7 @@ const PreferenceModal: React.FC<Props> = ({
         } else {
             panY.setValue(1000);
         }
-    }, [visible]);
+    }, [panY, visible]);
 
     const panResponder = useRef(
         PanResponder.create({
@@ -90,8 +92,6 @@ const PreferenceModal: React.FC<Props> = ({
 
     const secondaryText =
         secondaryLabel || (mode === "forYou" ? "Cancel" : "Back");
-
-    const preferences = ["Food", "Adventure", "History", "Shopping"];
 
     return (
         <Modal visible={visible} transparent animationType="fade">
@@ -127,7 +127,7 @@ const PreferenceModal: React.FC<Props> = ({
                     </View>
 
                     {/* LIST */}
-                    <ScrollView style={{ maxHeight: 300 }}>
+                    <ScrollView style={styles.scrollArea}>
                         {preferences.map((item, i) => {
                             const isLast = i === preferences.length - 1;
 
@@ -253,6 +253,9 @@ const styles = StyleSheet.create({
         gap: 12,
         marginTop: 16
 
+    },
+    scrollArea: {
+        maxHeight: 300,
     },
 
     secondaryBtnSmall: {

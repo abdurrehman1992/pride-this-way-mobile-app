@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     View,
     Text,
@@ -7,7 +7,8 @@ import {
     TouchableOpacity,
     ScrollView,
     KeyboardAvoidingView,
-    Platform
+    Platform,
+    ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -25,18 +26,33 @@ import {
     validatePhone
 } from "../../utils/validation";
 import { useNavigation } from "@react-navigation/native";
-import { showSuccess } from "../../components/common/AppToast";
+import { useDispatch, useSelector } from "react-redux";
+import { showError, showSuccess } from "../../components/common/AppToast";
+import { RootState } from "../../Redux/store";
+import { loginSuccess } from "../../Redux/slices/authSlice";
+import { updateCurrentUserProfile } from "../../services/authService";
 const EditProfile = () => {
     const navigation = useNavigation<any>()
+    const dispatch = useDispatch();
+    const user = useSelector((state: RootState) => state.auth.user);
     const [image, setImage] = useState<string | null>(null);
     const [fullName, setFullName] = useState("");
     const [email, setEmail] = useState("");
     const [phone, setPhone] = useState("");
+    const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState({
         name: "",
         email: "",
         phone: ""
     });
+
+    useEffect(() => {
+        if (!user) return;
+
+        setFullName(user.name || "");
+        setEmail(user.email || "");
+        setPhone(user.phone || "");
+    }, [user]);
 
     const handlePickImage = async () => {
         const uri = await pickImageFromGallery();
@@ -76,30 +92,41 @@ const EditProfile = () => {
         );
     }, [fullName, email, phone, errors]);
 
-    const handleUpdateProfile = () => {
-        if (!isFormValid) return;
-        console.log("Profile Updated:", {
-            fullName,
-            email,
-            phone,
-            image
-        });
-        showSuccess("Profile updated sucessfully")
-        navigation.reset({
-            index: 0,
-            routes: [
-                {
-                    name: 'Profile',
-                },
-            ],
-        });
-        // navigation.navigate('')
+    const handleUpdateProfile = async () => {
+        if (!isFormValid || loading) return;
+
+        setLoading(true);
+
+        try {
+            const session = await updateCurrentUserProfile({
+                fullName,
+                email,
+                phone,
+            });
+
+            dispatch(loginSuccess(session));
+            showSuccess("Profile updated successfully");
+            navigation.reset({
+                index: 0,
+                routes: [
+                    {
+                        name: 'Profile',
+                    },
+                ],
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unable to update profile.";
+            showError("Update Failed", message);
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
         <SafeAreaView style={styles.container} edges={["top"]}>
             <KeyboardAvoidingView
-                style={{ flex: 1 }}
+                style={styles.keyboardAvoidingView}
                 behavior={Platform.OS === "ios" ? "padding" : "height"}
             >
                 <ScrollView
@@ -128,7 +155,7 @@ const EditProfile = () => {
                     </View>
 
                     {/* INPUTS */}
-                    <View style={{ marginTop: 40, gap: 10 }}>
+                    <View style={styles.inputs}>
                         <CustomInput
                             label="Full Name"
                             placeholder="Enter Full Name"
@@ -156,15 +183,20 @@ const EditProfile = () => {
                         />
                     </View>
 
+                    {loading ? (
+                        <ActivityIndicator
+                            size="large"
+                            color={COLORS.BUTTON_COLOR}
+                            style={styles.loader}
+                        />
+                    ) : (
                         <CustomButton
                             title="Update Profile"
                             Icon={SinupIcon}
                             onPress={handleUpdateProfile}
                             disabled={!isFormValid}
-                            style={{
-                                opacity: isFormValid ? 1 : 0.5
-                            }}
                         />
+                    )}
                 </ScrollView>
             </KeyboardAvoidingView>
         </SafeAreaView>
@@ -177,6 +209,9 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: COLORS.BACKGROUND,
+    },
+    keyboardAvoidingView: {
+        flex: 1,
     },
     scrollContent: {
         flexGrow: 1,
@@ -211,5 +246,12 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: COLORS.TEXT_PRIMARY,
         fontFamily: FONT_FAMILY.Poppins_Medium,
+    },
+    inputs: {
+        marginTop: 40,
+        gap: 10,
+    },
+    loader: {
+        marginVertical: 20,
     },
 });

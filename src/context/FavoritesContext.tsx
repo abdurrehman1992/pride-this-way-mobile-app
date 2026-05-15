@@ -1,4 +1,14 @@
-import React, { createContext, useContext, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import firestore from "@react-native-firebase/firestore";
+import { useSelector } from "react-redux";
+import { RootState } from "../Redux/store";
 
 export type CategoryType =
   | "Restaurant"
@@ -17,40 +27,123 @@ export type FavoriteItem = {
   sourceScreen?: string;
   routeName?: string;
   routeParams?: any;
+  city_name?: string;
+  country?: string;
+  createdAt?: string;
 };
 
 type FavoritesContextType = {
   favorites: FavoriteItem[];
-  addToFavorites: (item: FavoriteItem) => void;
-  removeFromFavorites: (id: string) => void;
+  addToFavorites: (item: FavoriteItem) => Promise<void>;
+  removeFromFavorites: (id: string) => Promise<void>;
   isFavorite: (id: string) => boolean;
 };
 
 const FavoritesContext = createContext<FavoritesContextType | null>(null);
 
+const USERS_COLLECTION = "users";
+const FAVORITES_SUBCOLLECTION = "favorites";
+
 export const FavoritesProvider = ({ children }: any) => {
+  const userId = useSelector((state: RootState) => state.auth.user?.id);
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
 
-  const addToFavorites = (item: FavoriteItem) => {
-    setFavorites((prev) => {
-      const exists = prev.find((i) => i.id === item.id);
-      if (exists) return prev;
-      return [...prev, item];
-    });
-  };
+  useEffect(() => {
+    if (!userId) {
+      setFavorites([]);
+      return;
+    }
 
-  const removeFromFavorites = (id: string) => {
-    setFavorites((prev) => prev.filter((i) => i.id !== id));
-  };
+    const unsubscribe = firestore()
+      .collection(USERS_COLLECTION)
+      .doc(userId)
+      .collection(FAVORITES_SUBCOLLECTION)
+      .onSnapshot(
+        (snapshot) => {
+          const items = snapshot.docs
+            .map((doc) => {
+              const data = doc.data();
+              return {
+                id: doc.id,
+                title: data.title || "",
+                description: data.description || "",
+                rating: data.rating || "",
+                image: data.image || "",
+                category: (data.category || "Food") as CategoryType,
+                sourceScreen: data.sourceScreen || "",
+                routeName: data.routeName || "",
+                routeParams: data.routeParams || undefined,
+                city_name: data.city_name || "",
+                country: data.country || "",
+                createdAt: data.createdAt || "",
+              };
+            })
+            .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
-  const isFavorite = (id: string) => {
-    return favorites.some((i) => i.id === id);
-  };
+          setFavorites(items);
+        },
+        () => setFavorites([])
+      );
+
+    return unsubscribe;
+  }, [userId]);
+
+  const addToFavorites = useCallback(
+    async (item: FavoriteItem) => {
+      if (!userId) {
+        return;
+      }
+
+      await firestore()
+        .collection(USERS_COLLECTION)
+        .doc(userId)
+        .collection(FAVORITES_SUBCOLLECTION)
+        .doc(item.id)
+        .set(
+          {
+            ...item,
+            createdAt: item.createdAt || new Date().toISOString(),
+            user_id: userId,
+          },
+          { merge: true }
+        );
+    },
+    [userId]
+  );
+
+  const removeFromFavorites = useCallback(
+    async (id: string) => {
+      if (!userId) {
+        return;
+      }
+
+      await firestore()
+        .collection(USERS_COLLECTION)
+        .doc(userId)
+        .collection(FAVORITES_SUBCOLLECTION)
+        .doc(id)
+        .delete();
+    },
+    [userId]
+  );
+
+  const isFavorite = useCallback(
+    (id: string) => favorites.some((item) => item.id === id),
+    [favorites]
+  );
+
+  const value = useMemo(
+    () => ({
+      favorites,
+      addToFavorites,
+      removeFromFavorites,
+      isFavorite,
+    }),
+    [favorites, addToFavorites, removeFromFavorites, isFavorite]
+  );
 
   return (
-    <FavoritesContext.Provider
-      value={{ favorites, addToFavorites, removeFromFavorites, isFavorite }}
-    >
+    <FavoritesContext.Provider value={value}>
       {children}
     </FavoritesContext.Provider>
   );

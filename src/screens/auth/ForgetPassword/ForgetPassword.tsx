@@ -4,6 +4,7 @@ import {
     KeyboardAvoidingView,
     Platform,
     ScrollView,
+    ActivityIndicator,
 } from "react-native";
 import React, { useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -15,57 +16,69 @@ import { AuthStackParamList } from "../../../types/types";
 import ForgeTopHeader from "../../../components/common/ForgeTopHeader";
 import {
     validateEmail,
-    validatePhone,
 } from "../../../utils/validation";
-import { showSuccess } from "../../../components/common/AppToast";
+import { showError, showSuccess } from "../../../components/common/AppToast";
+import { sendResetPasswordEmail } from "../../../services/authService";
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, "EnterCode">;
 const ForgetPassword = () => {
     const navigation = useNavigation<NavigationProp>();
     const [identifier, setIdentifier] = useState("");
     const [error, setError] = useState("");
-    const isEmail = (text: string) => /[a-zA-Z]/.test(text);
-    const shouldValidateEmail = (text: string) => text.includes("@");
+    const [loading, setLoading] = useState(false);
     const handleChange = (text: string) => {
         setIdentifier(text);
         if (!text.trim()) {
             setError("Field is required");
             return;
         }
-        let validationError = "";
-        if (isEmail(text)) {
-            if (!shouldValidateEmail(text)) {
-                setError("");
-                return;
-            }
-            validationError = validateEmail(text);
-        } else {
-            validationError = validatePhone(text);
+        if (!text.includes("@")) {
+            setError("Use your registered email address");
+            return;
         }
 
-        setError(validationError);
+        setError(validateEmail(text));
     };
-    const handleForget = () => {
+    const handleForget = async () => {
         if (!identifier.trim()) {
             setError("Field is required");
             return;
         }
-        let validationError = "";
-        if (isEmail(identifier)) {
-            validationError = validateEmail(identifier);
-        } else {
-            validationError = validatePhone(identifier);
+
+        if (!identifier.includes("@")) {
+            setError("Use your registered email address");
+            return;
         }
+
+        const validationError = validateEmail(identifier);
+
         if (validationError) {
             setError(validationError);
             return;
         }
-        showSuccess("We have sent verification code to you")
-        navigation.navigate("EnterCode");
+
+        setLoading(true);
+
+        try {
+            await sendResetPasswordEmail(identifier);
+            showSuccess(
+                "Reset Email Sent",
+                "Check your inbox to create a new password."
+            );
+            navigation.navigate("Login");
+        } catch (resetError) {
+            const message =
+                resetError instanceof Error
+                    ? resetError.message
+                    : "Unable to send reset email.";
+            showError("Reset Failed", message);
+        } finally {
+            setLoading(false);
+        }
     };
     return (
         <SafeAreaView style={styles.container}>
             <KeyboardAvoidingView
-                style={{ flex: 1 }}
+                style={styles.keyboardAvoidingView}
                 behavior={Platform.OS === "ios" ? "padding" : "height"}
             >
                 <ScrollView
@@ -77,7 +90,7 @@ const ForgetPassword = () => {
                     <View>
                         <ForgeTopHeader title="Forgot Password" />
 
-                        <View style={{ marginTop: 49 }}>
+                        <View style={styles.inputWrapper}>
                             <ForgetPasswordInput
                                 label="Email or Phone Number"
                                 placeholder="Enter your registered email or phone number"
@@ -89,11 +102,19 @@ const ForgetPassword = () => {
                         </View>
                     </View>
                     <View style={styles.buttonContainer}>
-                        <CustomButton
-                            title="Send Verification Code"
-                            onPress={handleForget}
-                            disabled={!identifier || !!error}
-                        />
+                        {loading ? (
+                            <ActivityIndicator
+                                size="large"
+                                color="#0286FF"
+                                style={styles.loader}
+                            />
+                        ) : (
+                            <CustomButton
+                                title="Send Verification Code"
+                                onPress={handleForget}
+                                disabled={!identifier || !!error}
+                            />
+                        )}
                     </View>
                 </ScrollView>
             </KeyboardAvoidingView>
@@ -113,7 +134,16 @@ const styles = StyleSheet.create({
         paddingTop: 19,
         paddingBottom: 16,
     },
+    keyboardAvoidingView: {
+        flex: 1,
+    },
+    inputWrapper: {
+        marginTop: 49,
+    },
     buttonContainer: {
         marginTop: 20,
+    },
+    loader: {
+        marginVertical: 20,
     },
 });

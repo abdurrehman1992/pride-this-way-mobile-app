@@ -36,13 +36,17 @@ interface Props {
     visible: boolean;
     onClose: () => void;
     onNext: (location: string) => void;
+    title?: string;
+    locations?: string[];
+    searchValue?: string;
+    onSearchChange?: (value: string) => void;
+    loadingSuggestions?: boolean;
     showActions?: boolean;
     primaryLabel?: string;
     secondaryLabel?: string;
     onSecondaryPress?: () => void;
 }
-
-const LOCATION_LIST = [
+const DEFAULT_LOCATION_LIST = [
     "San Diego, CA",
     "San Jose, CA",
     "Fresno, CA",
@@ -53,11 +57,21 @@ const LOCATION_LIST = [
     "Austin, TX",
 ];
 
-const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
-    const [search, setSearch] = useState("");
+const LocationModal: React.FC<Props> = ({
+    visible,
+    onClose,
+    onNext,
+    title = "Select Your Location",
+    locations = DEFAULT_LOCATION_LIST,
+    searchValue,
+    onSearchChange,
+    loadingSuggestions = false,
+}) => {
+    const [internalSearch, setInternalSearch] = useState("");
     const [selected, setSelected] = useState("");
     const [loadingLocation, setLoadingLocation] = useState(false);
     const [isKeyboardVisible, setKeyboardVisible] = useState(false);
+    const search = searchValue ?? internalSearch;
 
     const panY = useRef(new Animated.Value(1000)).current;
     useEffect(() => {
@@ -126,14 +140,18 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                 : "70%";
 
     const filteredLocations = useMemo(() => {
-        if (!search.trim()) return LOCATION_LIST;
-        return LOCATION_LIST.filter((item) =>
+        if (!search.trim()) return locations;
+        return locations.filter((item) =>
             item.toLowerCase().includes(search.toLowerCase())
         );
-    }, [search]);
+    }, [locations, search]);
 
     const handleSelect = (item: string) => {
-        setSearch(item);
+        if (onSearchChange) {
+            onSearchChange(item);
+        } else {
+            setInternalSearch(item);
+        }
         setSelected(item);
         Keyboard.dismiss();
     };
@@ -171,7 +189,11 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                 pos.coords.longitude
             );
 
-            setSearch(addr);
+            if (onSearchChange) {
+                onSearchChange(addr);
+            } else {
+                setInternalSearch(addr);
+            }
             setSelected(addr);
         } catch (error) {
             console.log("LOCATION ERROR:", error);
@@ -212,7 +234,7 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                     </View>
 
                     <Text style={[styles.title, isKeyboardVisible && styles.titleKeyboard]}>
-                        Select Your Location
+                        {title}
                     </Text>
                     <View style={styles.inputBox}>
                         <SelectLocationInput width={25} height={25} />
@@ -221,7 +243,11 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                             placeholderTextColor={COLORS.TEXT_PRIMARY}
                             value={search}
                             onChangeText={(value) => {
-                                setSearch(value);
+                                if (onSearchChange) {
+                                    onSearchChange(value);
+                                } else {
+                                    setInternalSearch(value);
+                                }
                                 setSelected("");
                             }}
                             placeholder="Search location..."
@@ -239,7 +265,11 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                             styles.scrollContentBottom,
                         ]}
                     >
-                        {filteredLocations.length > 0 ? (
+                        {loadingSuggestions ? (
+                            <View style={styles.emptyState}>
+                                <ActivityIndicator color={COLORS.BUTTON_COLOR} />
+                            </View>
+                        ) : filteredLocations.length > 0 ? (
                             <>
                                 {filteredLocations.map((item, i) => (
                                     <TouchableOpacity

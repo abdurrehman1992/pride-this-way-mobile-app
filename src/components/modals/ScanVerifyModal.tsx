@@ -13,36 +13,37 @@ import {
   Camera,
   useCameraDevice,
   useCameraPermission,
-  type PhotoFile,
 } from "react-native-vision-camera";
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
-import { CrossIcon, VisionCameraIcon } from "../../constants/icons";
+import { CrossIcon } from "../../constants/icons";
 import { CameraIcon, DoneModalIcon } from "../../constants/images";
 import { showSuccess } from "../common/AppToast";
 
 type Props = {
   visible: boolean;
+  title?: string;
   onClose: () => void;
-  onScanSuccess: () => void;
+  onScanSuccess: (imageUri: string) => void | Promise<void>;
 };
 
 type StepType = "scan" | "confirm" | "success";
 
 const ScanVerifyModal: React.FC<Props> = ({
   visible,
+  title,
   onClose,
   onScanSuccess,
 }) => {
   const [step, setStep] = useState<StepType>("scan");
   const [capturedImage, setCapturedImage] = useState<{ uri: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const cameraRef = useRef<any>(null);
   const scanAnim = useRef(new Animated.Value(0)).current;
 
+  /* eslint-disable no-bitwise */
   const encodeArrayBufferToBase64 = (buffer: ArrayBuffer) => {
     const bytes = new Uint8Array(buffer);
     const enc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -72,6 +73,7 @@ const ScanVerifyModal: React.FC<Props> = ({
 
     return base64;
   };
+  /* eslint-enable no-bitwise */
 
   const imageToDataUri = async (image: any) => {
     if (typeof image.toEncodedImageDataAsync !== "function") {
@@ -89,23 +91,20 @@ const ScanVerifyModal: React.FC<Props> = ({
     if (visible) {
       requestPermission();
     }
-  }, [visible]);
+  }, [requestPermission, visible]);
   useEffect(() => {
     if (device && hasPermission && visible && step === "scan") {
       const timer = setTimeout(() => {
         console.log("Camera is ready");
-        setCameraReady(true);
       }, 500);
       return () => clearTimeout(timer);
-    } else {
-      setCameraReady(false);
     }
-  }, [device, hasPermission, visible]);
+    return undefined;
+  }, [device, hasPermission, step, visible]);
   useEffect(() => {
     if (!visible) {
       setCapturedImage(null);
       setStep("scan");
-      setCameraReady(false);
     }
   }, [visible]);
 
@@ -128,7 +127,7 @@ const ScanVerifyModal: React.FC<Props> = ({
       animation.start();
       return () => animation.stop();
     }
-  }, [visible, step]);
+  }, [scanAnim, step, visible]);
 
   const handleScanPress = async () => {
     if (!cameraRef.current) {
@@ -205,8 +204,11 @@ const ScanVerifyModal: React.FC<Props> = ({
   };
 
   const handleBackToTour = () => {
+    if (!capturedImage?.uri) {
+      return;
+    }
     setStep("scan");
-    onScanSuccess();
+    onScanSuccess(capturedImage.uri);
     onClose();
     showSuccess("Visit confirmed successfully");
   };
@@ -231,7 +233,7 @@ const ScanVerifyModal: React.FC<Props> = ({
             </TouchableOpacity>
             <Text style={styles.title}>Scan to Verify Your Visit</Text>
             <Text style={styles.description}>
-              Scan a specific landmark or image to verify your visit to Skyline Restaurant.
+              Scan a specific landmark or image to verify your visit to {title || "this location"}.
             </Text>
             <View style={styles.scanContainer}>
               <View style={styles.innerFrame}>

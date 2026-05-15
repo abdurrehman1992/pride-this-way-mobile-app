@@ -8,18 +8,26 @@ export type AuthStackParamList = {
 
 export type MyTourStackParamList = {
   AddLocations: {
-    tourId?: number;
-    selectedLocation?: string;
+    routeId?: string;
+    cityLabel?: string;
+    fromScreen?: 'MyTour' | 'MyTourStart';
   };
   MyTour: {
-    selectedLocation?: string;
-    tourId?: number;
+    addedPlaceId?: string;
+    routeId?: string;
     timestamp?: number;
-    pendingLocation?: string;
   } | undefined,
   MyTourStart: {
-    tourId?: number;
-    addedStop?: { id: string; title: string; coordinate: [number, number] };
+    routeId?: string;
+    routeName?: string;
+    tourName?: string;
+    cityLabel?: string;
+    selectedTagIds?: string[];
+    addedPlaceId?: string;
+    extraPlaceIds?: string[];
+    removedPlaceIds?: string[];
+    tourId?: string;
+    isEdited?: boolean;
   } | undefined,
   RecommendationDetials: undefined
 };

@@ -4,7 +4,8 @@ import {
     StyleSheet,
     ScrollView,
     KeyboardAvoidingView,
-    Platform
+    Platform,
+    ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
@@ -16,12 +17,14 @@ import {
     validatePassword,
     validateConfirmPassword
 } from '../../utils/validation';
-import { showSuccess } from '../../components/common/AppToast';
+import { showError, showSuccess } from '../../components/common/AppToast';
+import { changeCurrentUserPassword } from '../../services/authService';
 
 const ChangePassword = ({ navigation }: any) => {
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState({
         current: '',
         new: '',
@@ -65,7 +68,7 @@ const ChangePassword = ({ navigation }: any) => {
         );
     }, [currentPassword, newPassword, confirmPassword, errors]);
 
-    const handleChangePassword = () => {
+    const handleChangePassword = async () => {
         const currentErr = currentPassword.trim() ? '' : 'Current password is required';
         const newErr = validatePassword(newPassword).join(',');
         const confirmErr = validateConfirmPassword(newPassword, confirmPassword);
@@ -76,19 +79,36 @@ const ChangePassword = ({ navigation }: any) => {
             confirm: confirmErr
         });
 
-        if (!currentErr && !newErr && !confirmErr) {
+        if (currentErr || newErr || confirmErr || loading) {
+            return;
+        }
+
+        setLoading(true);
+
+        try {
+            await changeCurrentUserPassword({
+                currentPassword,
+                newPassword,
+            });
+
             showSuccess("Password changed successfully");
             navigation.reset({
                 index: 0,
                 routes: [{ name: 'Profile' }],
             });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unable to change password.";
+            showError("Change Password Failed", message);
+        } finally {
+            setLoading(false);
         }
     };
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <KeyboardAvoidingView
-                style={{ flex: 1 }}
+                style={styles.keyboardAvoidingView}
                 behavior={Platform.OS === "ios" ? "padding" : "height"}
                 keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
             >
@@ -128,12 +148,20 @@ const ChangePassword = ({ navigation }: any) => {
                             />
                         </View>
                     </View>
+                    {loading ? (
+                        <ActivityIndicator
+                            size="large"
+                            color={COLORS.BUTTON_COLOR}
+                            style={styles.loader}
+                        />
+                    ) : (
                         <CustomButton
                             title="Update Password"
                             Icon={SinupIcon}
                             onPress={handleChangePassword}
                             disabled={!isFormValid}
                         />
+                    )}
                     {/* </View> */}
                 </ScrollView>
             </KeyboardAvoidingView>
@@ -148,6 +176,9 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: COLORS.BACKGROUND,
     },
+    keyboardAvoidingView: {
+        flex: 1,
+    },
     content: {
         flexGrow: 1,
         paddingHorizontal: 24,
@@ -161,5 +192,8 @@ const styles = StyleSheet.create({
     inputs: {
         marginTop: 40,
         gap: 15,
+    },
+    loader: {
+        marginVertical: 20,
     },
 });

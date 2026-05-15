@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,172 +8,77 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Keyboard
+  ActivityIndicator,
 } from 'react-native';
-import { useEffect } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
 import CustomSearchInput from '../../components/Home/CustomSearchInput';
 import PlacesArroundCard from '../../components/Home/PlacesArroundCard';
-import LocationModal from '../../components/modals/LocationModal';
-import PreferenceModal from '../../components/modals/PreferenceModal';
-
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { FilterIcon } from '../../constants/images';
+import { fetchPlacesForLocation, FirebasePlace } from '../../services/myTourService';
+import { showInfo } from '../../components/common/AppToast';
 
 type RouteParams = {
-  tourId?: number;
+  routeId?: string;
+  cityLabel?: string;
+  fromScreen?: 'MyTour' | 'MyTourStart';
+  routeName?: string;
+  tourName?: string;
+  extraPlaceIds?: string[];
+  removedPlaceIds?: string[];
+  tourId?: string;
+  isEdited?: boolean;
 };
-
-const locationsData = [
-  {
-    id: '1',
-    title: 'Beach Party',
-    description: 'Fun night at beach',
-    rating: '4.5',
-    image: 'https://picsum.photos/200',
-    category: 'Event',
-    location: 'California',
-  },
-  {
-    id: '2',
-    title: 'Music Night',
-    description: 'Live band show',
-    rating: '4.7',
-    image: 'https://picsum.photos/201',
-    category: 'Music',
-    location: 'New York',
-  },
-  {
-    id: '3',
-    title: 'Food Festival',
-    description: 'Street food event',
-    rating: '4.8',
-    image: 'https://picsum.photos/202',
-    category: 'Food',
-    location: 'California',
-  },
-  {
-    id: '4',
-    title: 'Mountain Adventure',
-    description: 'Hiking & camping trip',
-    rating: '4.9',
-    image: 'https://picsum.photos/203',
-    category: 'Adventure',
-    location: 'Switzerland',
-  },
-  {
-    id: '5',
-    title: 'Mall Shopping Day',
-    description: 'Brand shopping deals',
-    rating: '4.3',
-    image: 'https://picsum.photos/204',
-    category: 'Shopping',
-    location: 'Dubai',
-  },
-];
 
 const AddLocations = () => {
   const navigation = useNavigation<any>();
   const route = useRoute();
-
-  const { tourId } = (route.params || {}) as RouteParams;
+  const {
+    routeId,
+    cityLabel = '',
+    fromScreen = 'MyTour',
+    routeName,
+    tourName,
+    extraPlaceIds = [],
+    removedPlaceIds = [],
+    tourId,
+  } = (route.params || {}) as RouteParams;
 
   const [searchText, setSearchText] = useState('');
-  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
-  const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
-// Source - https://stackoverflow.com/a/79665003
-// Posted by Iulian T, modified by community. See post 'Timeline' for change history
-// Retrieved 2026-05-14, License - CC BY-SA 4.0
+  const [places, setPlaces] = useState<FirebasePlace[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [cityOnly, setCityOnly] = useState(false);
 
-const [flexToggle, setFlexToggle] = useState(false);
+  useEffect(() => {
+    setLoading(true);
 
-  const [modals, setModals] = useState({
-    location: false,
-    preference: false,
-  });
-  
-  // Source - https://stackoverflow.com/a/79665003
-// Posted by Iulian T, modified by community. See post 'Timeline' for change history
-// Retrieved 2026-05-14, License - CC BY-SA 4.0
+    const timeout = setTimeout(() => {
+      fetchPlacesForLocation(cityLabel, searchText, { cityOnly })
+        .then(setPlaces)
+        .finally(() => setLoading(false));
+    }, 300);
 
-useEffect(() => {
-  const keyboardShowListener = Keyboard.addListener("keyboardDidShow", () => {
-    setFlexToggle(false);
-  });
+    return () => clearTimeout(timeout);
+  }, [cityLabel, cityOnly, searchText]);
 
-  const keyboardHideListener = Keyboard.addListener("keyboardDidHide", () => {
-    setFlexToggle(true);
-  });
+  const title = useMemo(() => {
+    if (!cityLabel) {
+      return 'Recommendations';
+    }
 
-  return () => {
-    keyboardShowListener.remove();
-    keyboardHideListener.remove();
-  };
-}, []);
-
-
-  const openLocationModal = () =>
-    setModals({ location: true, preference: false });
-
-  const closeModals = () => setModals({ location: false, preference: false });
-
-  const handleLocationSelect = (locations: string[]) => {
-    const primary = locations[0] ?? null;
-    setSelectedLocation(primary);
-
-    setModals({
-      location: false,
-      preference: true,
-    });
-  };
-
-  const filteredData = useMemo(() => {
-    return locationsData.filter(item => {
-      const matchSearch =
-        item.title.toLowerCase().includes(searchText.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchText.toLowerCase());
-
-      const matchPrefs =
-        selectedPrefs.length === 0 || selectedPrefs.includes(item.category);
-
-      const matchLocation =
-        !selectedLocation || item.location === selectedLocation;
-
-      return matchSearch && matchPrefs && matchLocation;
-    });
-  }, [searchText, selectedPrefs, selectedLocation]);
-
-  const togglePref = (item: string) => {
-    setSelectedPrefs(prev =>
-      prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item],
-    );
-  };
-
-  const removePref = (item: string) => {
-    setSelectedPrefs(prev => prev.filter(i => i !== item));
-  };
+    return `Recommendations in ${cityLabel}`;
+  }, [cityLabel]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      // Source - https://stackoverflow.com/a/79665003
-// Posted by Iulian T, modified by community. See post 'Timeline' for change history
-// Retrieved 2026-05-14, License - CC BY-SA 4.0
-
-<KeyboardAvoidingView
-  behavior={Platform.OS === "ios" ? "padding" : "height"}
-  keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
-  style={
-    flexToggle
-      ? [{ flexGrow: 1 }, styles.container]
-      : [{ flex: 1 }, styles.container]
-  }
-  enabled={!flexToggle}
->
-
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardAvoidingView}
+      >
         <View style={styles.content}>
           <ForgeTopHeader title="Add Locations" />
           <View style={styles.searchSection}>
@@ -181,84 +86,97 @@ useEffect(() => {
               value={searchText}
               onChangeText={(text: string) => setSearchText(text)}
               rightIcon={
-                <TouchableOpacity onPress={openLocationModal}>
+                <TouchableOpacity
+                  onPress={() => {
+                    const nextValue = !cityOnly;
+                    setCityOnly(nextValue);
+                    showInfo(
+                      nextValue
+                        ? 'Showing selected city places only'
+                        : 'Showing all places'
+                    );
+                  }}
+                  style={styles.filterBtn}
+                >
                   <Image source={FilterIcon} style={styles.filterIcon} />
                 </TouchableOpacity>
               }
             />
 
-            <View style={styles.pillWrapper}>
-              {selectedLocation && (
-                <View style={styles.pill}>
-                  {/* <Text style={styles.pillText}>{selectedLocation}</Text> */}
-                  <Text style={styles.pillText}>Picked Location</Text>
+            {cityLabel ? (
+              <View style={styles.pill}>
+                <Text style={styles.pillText}>{cityLabel}</Text>
+              </View>
+            ) : null}
 
-                  <TouchableOpacity onPress={() => setSelectedLocation(null)}>
-                    <Text style={styles.remove}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {selectedPrefs.map(item => (
-                <View key={item} style={styles.pill}>
-                  <Text style={styles.pillText}>{item}</Text>
-
-                  <TouchableOpacity onPress={() => removePref(item)}>
-                    <Text style={styles.remove}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
+            <View style={[styles.pill, styles.filterModePill]}>
+              <Text style={styles.pillText}>
+                {cityOnly ? 'Selected City Only' : 'All Places'}
+              </Text>
             </View>
 
-            <Text style={styles.title}>Recommendations</Text>
+            <Text style={styles.title}>{title}</Text>
           </View>
 
-          <FlatList
-            data={filteredData}
-            keyExtractor={item => item.id}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.listContainer}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={() => {
-                  navigation.goBack();
+          {loading ? (
+            <View style={styles.loaderWrap}>
+              <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
+            </View>
+          ) : (
+            <FlatList
+              data={places}
+              keyExtractor={(item) => item.id}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.listContainer}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() => {
+                    navigation.goBack();
 
-                  setTimeout(() => {
-                    navigation.navigate('MyTour', {
-                      selectedLocation: item.title,
-                      tourId,
-                      timestamp: Date.now(),
-                    });
-                  }, 100);
-                }}
-              >
-                <PlacesArroundCard
-                  id={item.id}
-                  title={item.title}
-                  description={item.description}
-                  rating={item.rating}
-                  image={item.image}
-                />
-              </TouchableOpacity>
-            )}
-          />
+                    setTimeout(() => {
+                      if (fromScreen === 'MyTourStart') {
+                        navigation.navigate('MyTourStart', {
+                          routeId,
+                          routeName,
+                          tourName,
+                          cityLabel,
+                          addedPlaceId: item.id,
+                          extraPlaceIds,
+                          removedPlaceIds,
+                          tourId,
+                          isEdited: true,
+                        });
+                        return;
+                      }
 
-          <LocationModal
-            visible={modals.location}
-            onClose={closeModals}
-            onNext={handleLocationSelect}
-          />
-
-          <PreferenceModal
-            visible={modals.preference}
-            selectedPrefs={selectedPrefs}
-            togglePreference={togglePref}
-            clearAll={() => setSelectedPrefs([])}
-            onClose={closeModals}
-            onPrimary={closeModals}
-          />
+                      navigation.navigate('MyTour', {
+                        routeId,
+                        addedPlaceId: item.id,
+                        timestamp: Date.now(),
+                      });
+                    }, 100);
+                  }}
+                >
+                  <PlacesArroundCard
+                    id={item.id}
+                    title={item.name}
+                    description={item.description || item.address || 'Location'}
+                    rating={String(item.rating || 0)}
+                    image={item.imageUrl || 'https://picsum.photos/200'}
+                    location={[item.city_name, item.country].filter(Boolean).join(', ')}
+                    category="Event"
+                  />
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyText}>No places found for this search.</Text>
+                </View>
+              }
+            />
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -272,63 +190,64 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.SCREENS_BG,
   },
-
   keyboardAvoidingView: {
     flex: 1,
   },
-
   content: {
     flex: 1,
     marginTop: 24,
     marginHorizontal: 24,
-
   },
-
   searchSection: {
     marginTop: 10,
   },
-
   filterIcon: {
     width: 20,
     height: 20,
   },
-
+  filterBtn: {
+    height: 40,
+    width: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pill: {
+    alignSelf: 'flex-start',
+    backgroundColor: COLORS.BUTTON_COLOR,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    marginBottom: 10,
+  },
+  pillText: {
+    color: COLORS.WHITE,
+    fontSize: FONT_SIZE.CARD_TEXT,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  filterModePill: {
+    marginTop: -2,
+  },
   title: {
     fontSize: FONT_SIZE.LARGE_TEXT,
     fontFamily: FONT_FAMILY.Poppins_SemiBold,
-    // marginTop: 10,
   },
-
   listContainer: {
     paddingTop: 16,
     paddingBottom: 10,
     gap: 14,
   },
-
-  pillWrapper: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    // marginTop: 10,
-    gap: 8,
-  },
-
-  pill: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.BUTTON_COLOR,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
+  loaderWrap: {
+    flex: 1,
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
   },
-
-  pillText: {
-    color: COLORS.WHITE,
-    fontSize: FONT_SIZE.CARD_TEXT,
+  emptyState: {
+    paddingTop: 40,
+    alignItems: 'center',
   },
-
-  remove: {
-    color: COLORS.WHITE,
-    fontSize: FONT_SIZE.CARD_TEXT,
+  emptyText: {
+    color: COLORS.TEXT_SECONDARY,
+    fontSize: FONT_SIZE.TEXT,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
   },
 });

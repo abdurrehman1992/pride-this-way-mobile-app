@@ -20,7 +20,11 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { AuthStackParamList } from "../../types/types";
 import { useDispatch } from "react-redux";
-import { loginSuccess } from "../../Redux/slices/authSlice";
+import {
+  loginFailure,
+  loginStart,
+  loginSuccess,
+} from "../../Redux/slices/authSlice";
 import {
   validateLoginEmail,
   validateLoginPassword,
@@ -31,7 +35,8 @@ import {
   getRememberEmail,
 } from "../../utils/rememberMe";
 import { BackGroundImage } from "../../constants/images";
-import { showSuccess } from "../../components/common/AppToast";
+import { showError, showSuccess } from "../../components/common/AppToast";
+import { loginUser } from "../../services/authService";
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, "Login">;
 
@@ -94,28 +99,29 @@ const Login: React.FC = () => {
     }
 
     setLoading(true);
+    dispatch(loginStart());
 
     try {
+      const session = await loginUser({
+        email,
+        password,
+      });
+
       if (rememberMe) {
         await saveRememberEmail(email.trim());
       } else {
         await clearRememberEmail();
       }
 
-      dispatch(
-        loginSuccess({
-          user: {
-            id: 1 as any,
-            name: "Test User",
-            email: email,
-          },
-          token: "dummy-token",
-        })
-      );
+      dispatch(loginSuccess(session));
 
       showSuccess("Login Successful", "Welcome back!");
     } catch (error) {
       console.log("LOGIN ERROR:", error);
+      const message =
+        error instanceof Error ? error.message : "Unable to sign in.";
+      dispatch(loginFailure(message));
+      showError("Login Failed", message);
     } finally {
       setLoading(false);
     }
@@ -199,7 +205,7 @@ const Login: React.FC = () => {
               <ActivityIndicator
                 size="large"
                 color={COLORS.BUTTON_COLOR}
-                style={{ marginVertical: 20 }}
+                style={styles.loader}
               />
             ) : (
               <CustomButton
@@ -258,6 +264,9 @@ const styles = StyleSheet.create({
   },
   form: {
     paddingHorizontal: 24,
+  },
+  loader: {
+    marginVertical: 20,
   },
   row: {
     flexDirection: "row",

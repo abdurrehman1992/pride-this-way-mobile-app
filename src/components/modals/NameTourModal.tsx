@@ -1,5 +1,13 @@
 import React from "react";
-import { Modal, View, Text, TouchableOpacity, TextInput, Image, StyleSheet } from "react-native";
+import {
+  Modal,
+  View,
+  Text,
+  TouchableOpacity,
+  TextInput,
+  Image,
+  StyleSheet,
+} from "react-native";
 import { CrossIcon } from "../../constants/icons";
 import { NameTourIcon } from "../../constants/images";
 import { COLORS } from "../../constants/colors";
@@ -33,6 +41,12 @@ const NameTourModal: React.FC<Props> = ({ visible, tourName, setTourName, onClos
             placeholderTextColor={COLORS.TEXT_PRIMARY}
             value={tourName}
             onChangeText={setTourName}
+            numberOfLines={1}
+            multiline={false}
+            textAlignVertical="center"
+            ellipsizeMode="tail"
+            adjustsFontSizeToFit
+            minimumFontScale={0.85}
           />
 
           <View style={styles.nameModalButtonRow}>
@@ -59,7 +73,8 @@ const styles = StyleSheet.create({
         backgroundColor: "rgba(0,0,0,0.4)", // optional but recommended for modal UX
     },
     nameModalPopup: {
-        width: "85%",
+        width: "88%",
+        maxWidth: 360,
         backgroundColor: COLORS.WHITE,
         borderRadius: 19,
         padding: 24,
@@ -106,12 +121,14 @@ const styles = StyleSheet.create({
         width: "100%",
         height: 47,
         marginBottom: 24,
-        paddingHorizontal: 16,
+        paddingHorizontal: 14,
         borderWidth: 1,
         borderRadius: 12,
         borderColor: COLORS.MODAL_INPUT_COLOR,
-        fontSize: FONT_SIZE.TEXT,
+        fontSize: 15,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
         color: COLORS.TEXT_PRIMARY,
+        includeFontPadding: false,
     },
     nameModalButtonRow: {
         flexDirection: "row",

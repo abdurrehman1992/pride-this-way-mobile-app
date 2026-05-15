@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { useSelector } from 'react-redux';
 
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
 import { COLORS } from '../../constants/colors';
@@ -24,52 +26,33 @@ import {
 } from '../../constants/icons';
 
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
+import { fetchRewardsSummary } from '../../services/myTourService';
+import { RootState } from '../../Redux/store';
 
 const Rewards = () => {
+  const userId = useSelector((state: RootState) => state.auth.user?.id);
   const [showAll, setShowAll] = useState(false);
+  const [totalPoints, setTotalPoints] = useState(0);
+  const [rewards, setRewards] = useState<any[]>([]);
 
-  const [rewards, setRewards] = useState([
-    {
-      id: 1,
-      name: 'City Explorer Tour',
-      points: 75,
-      totalLocations: 5,
-      date: 'Apr 15, 2026',
-      isOpen: true,
-    },
-    {
-      id: 2,
-      name: 'Food Adventure Tour is now working',
-      points: 120,
-      totalLocations: 8,
-      date: 'Apr 18, 2026',
-      isOpen: false,
-    },
-    {
-      id: 3,
-      name: 'Historical Walk',
-      points: 90,
-      totalLocations: 6,
-      date: 'Apr 20, 2026',
-      isOpen: false,
-    },
-    {
-      id: 4,
-      name: 'Beach Explorer',
-      points: 60,
-      totalLocations: 4,
-      date: 'Apr 22, 2026',
-      isOpen: false,
-    },
-    {
-      id: 5,
-      name: 'Mountain Adventure',
-      points: 150,
-      totalLocations: 10,
-      date: 'Apr 25, 2026',
-      isOpen: false,
-    },
-  ]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchRewardsSummary(userId).then((summary) => {
+        setTotalPoints(summary.totalPoints);
+        setRewards(
+          summary.tours.map((tour, index) => ({
+            id: tour.id,
+            name: tour.title,
+            points: tour.points,
+            totalLocations: tour.totalLocations,
+            date: tour.date ? new Date(tour.date).toDateString().slice(4) : 'Active',
+            isOpen: index === 0,
+            places: tour.places,
+          }))
+        );
+      });
+    }, [userId])
+  );
 
   const toggleCard = (id: number) => {
     setRewards(prev =>
@@ -90,7 +73,7 @@ const Rewards = () => {
         <ImageBackground source={RewardsBackground} style={styles.bg}>
           <View style={styles.contentTop}>
             <RewardIcon width={33} height={33} />
-            <Text style={styles.cardTitle}>1,250 Points</Text>
+            <Text style={styles.cardTitle}>{totalPoints.toLocaleString()} Points</Text>
           </View>
 
           <Text style={styles.textCongrats}>
@@ -102,7 +85,7 @@ const Rewards = () => {
           </View>
 
           <Text style={styles.textCongrats}>
-            Next Reward Unlock at 1,500 Points.
+            Next Reward Unlock at {Math.max(1500, totalPoints + 250).toLocaleString()} Points.
           </Text>
         </ImageBackground>
         <View style={styles.pointsTitleCont}>
@@ -176,16 +159,14 @@ const Rewards = () => {
                 <View style={styles.cardBottom}>
                   <Text style={styles.breakDownTitle}>Points Breakdown</Text>
 
-                  {[1, 2, 3, 4, 5].map((_, i) => (
-                    <View key={i} style={styles.locationCont}>
+                  {(item.places || []).map((place: any) => (
+                    <View key={place.id} style={styles.locationCont}>
                       <View style={styles.locationRow}>
                         <CreatedTourLocationIcon width={18} height={18} />
-                        <Text style={styles.locationText}>
-                          Location {i + 1}
-                        </Text>
+                        <Text style={styles.locationText}>{place.name}</Text>
                       </View>
                       <Text style={styles.arrow}>{`---->`}</Text>
-                      <Text style={styles.pointsText}>+10 Points</Text>
+                      <Text style={styles.pointsText}>+{place.points} Points</Text>
                     </View>
                   ))}
 

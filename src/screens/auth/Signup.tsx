@@ -6,6 +6,7 @@ import {
   Text,
   ScrollView,
   Keyboard,
+  ActivityIndicator,
 } from "react-native";
 
 import { COLORS } from "../../constants/colors";
@@ -16,6 +17,14 @@ import AuthBottomNavigation from "../../components/common/AuthBottomNavigation";
 import { useNavigation } from "@react-navigation/native";
 import { BackGroundImage } from "../../constants/images";
 import { SinupIcon } from "../../constants/icons";
+import { useDispatch } from "react-redux";
+import {
+  loginFailure,
+  loginStart,
+  loginSuccess,
+} from "../../Redux/slices/authSlice";
+import { showError, showSuccess } from "../../components/common/AppToast";
+import { signupUser } from "../../services/authService";
 
 import {
   validateName,
@@ -27,6 +36,7 @@ import {
 
 const Signup: React.FC = () => {
   const navigation = useNavigation<any>();
+  const dispatch = useDispatch();
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -34,6 +44,7 @@ const Signup: React.FC = () => {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", (e) => {
@@ -69,7 +80,49 @@ const Signup: React.FC = () => {
   }, [fullName, email, phone, password, confirmPassword]);
 
   const handleSignup = async () => {
-    navigation.navigate("Login");
+    if (loading) return;
+
+    const nextErrors = {
+      name: validateName(fullName),
+      email: validateEmail(email),
+      phone: validatePhone(phone),
+      password: validatePassword(password),
+      confirmPassword: validateConfirmPassword(password, confirmPassword),
+    };
+
+    setErrors(nextErrors);
+
+    if (
+      nextErrors.name ||
+      nextErrors.email ||
+      nextErrors.phone ||
+      nextErrors.password.length > 0 ||
+      nextErrors.confirmPassword
+    ) {
+      return;
+    }
+
+    setLoading(true);
+    dispatch(loginStart());
+
+    try {
+      const session = await signupUser({
+        fullName,
+        email,
+        phone,
+        password,
+      });
+
+      dispatch(loginSuccess(session));
+      showSuccess("Account Created", "Welcome to Pride This Way!");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to create account.";
+      dispatch(loginFailure(message));
+      showError("Signup Failed", message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -174,12 +227,20 @@ const Signup: React.FC = () => {
               error={errors.confirmPassword}
             />
 
-            <CustomButton
-              title="Sign Up"
-              Icon={SinupIcon}
-              onPress={handleSignup}
-              disabled={!isFormValid}
-            />
+            {loading ? (
+              <ActivityIndicator
+                size="large"
+                color={COLORS.BUTTON_COLOR}
+                style={styles.loader}
+              />
+            ) : (
+              <CustomButton
+                title="Sign Up"
+                Icon={SinupIcon}
+                onPress={handleSignup}
+                disabled={!isFormValid}
+              />
+            )}
 
             <AuthBottomNavigation
               text="Already have an account?"
@@ -232,6 +293,9 @@ const styles = StyleSheet.create({
   },
   form: {
     paddingHorizontal: 24,
+  },
+  loader: {
+    marginVertical: 20,
   },
   signInText: {
     fontSize: FONT_SIZE.TEXT,

@@ -7,15 +7,30 @@ import { PROFILE_IMAGE } from '../../constants/images'
 import { Arrow, ChangePasswordIcon, EditProfileIcon, LogoutIcon } from '../../constants/icons'
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts'
 import { logout } from "../../Redux/slices/authSlice";
-import { useDispatch } from "react-redux";
+import { RootState } from "../../Redux/store";
+import { useDispatch, useSelector } from "react-redux";
 import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { ProfileStackParamList } from '../../types/types'
+import { logoutUser } from '../../services/authService';
+import { showError } from '../../components/common/AppToast';
 type NavigationProp = NativeStackNavigationProp<ProfileStackParamList, "EditProfile">;
 
 const Profile = () => {
   const navigation = useNavigation<NavigationProp>();
   const dispatch = useDispatch();
+  const user = useSelector((state: RootState) => state.auth.user);
+
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+      dispatch(logout());
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to logout.";
+      showError("Logout Failed", message);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -29,8 +44,8 @@ const Profile = () => {
           }}
           style={styles.profileImage}
         />
-        <Text style={styles.name}>Michael Smith</Text>
-        <Text style={styles.email}>michaelsmith@gmail.com</Text>
+        <Text style={styles.name}>{user?.name || "Guest User"}</Text>
+        <Text style={styles.email}>{user?.email || "guest@example.com"}</Text>
       </View>
       <View style={styles.buttonContainer}>
         <TouchableOpacity style={styles.button}
@@ -53,9 +68,7 @@ const Profile = () => {
         </TouchableOpacity>
       </View>
       <TouchableOpacity style={styles.logoutBtn}
-        onPress={() => dispatch(
-          logout()
-        )}
+        onPress={handleLogout}
       >
         <LogoutIcon width={36} height={36} />
         <Text style={styles.logoutText}>Logout</Text>

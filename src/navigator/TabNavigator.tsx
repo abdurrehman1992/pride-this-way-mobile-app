@@ -112,10 +112,10 @@ const TabNavigator: React.FC = () => {
         };
       }}
     >
-      <Tab.Screen name="Favorites" component={FovoritesNavigator} />
-      <Tab.Screen name="ForYou" component={ForYouNavigator} />
       <Tab.Screen name="MyTour" component={MyTourNavigator} />
       <Tab.Screen name="Map" component={MapNavigator} />
+      <Tab.Screen name="ForYou" component={ForYouNavigator} />
+      <Tab.Screen name="Favorites" component={FovoritesNavigator} />
     </Tab.Navigator>
   );
 };
