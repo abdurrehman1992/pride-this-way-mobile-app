@@ -10,16 +10,16 @@ import { FavoritesProvider } from "./context/FavoritesContext";
 const App = () => {
   return (
     <SafeAreaProvider>
-      <FavoritesProvider>
-        <Provider store={store}>
-          <PersistGate loading={null} persistor={persistor}>
+      <Provider store={store}>
+        <PersistGate loading={null} persistor={persistor}>
+          <FavoritesProvider>
             <SafeAreaProvider>
               <RootNavigator />
               <Toast config={toastConfig} />
             </SafeAreaProvider>
-          </PersistGate>
-        </Provider>
-      </FavoritesProvider>
+          </FavoritesProvider>
+        </PersistGate>
+      </Provider>
     </SafeAreaProvider>
   );
 };

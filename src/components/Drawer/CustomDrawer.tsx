@@ -30,13 +30,18 @@ import {
 } from '../../constants/icons';
 
 import { useDispatch } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { logout } from '../../Redux/slices/authSlice';
+import { RootState } from '../../Redux/store';
+import { logoutUser } from '../../services/authService';
+import { showError } from '../common/AppToast';
 
 import TabsButtons from '../common/TabsButtons';
 
 const CustomDrawer = ({ navigation }: any) => {
   const dispatch = useDispatch();
   const insets = useSafeAreaInsets();
+  const user = useSelector((state: RootState) => state.auth.user);
   const navigateTo = useCallback(
     (screen: string, params?: any) => {
       navigation.navigate(screen, params);
@@ -48,8 +53,15 @@ const CustomDrawer = ({ navigation }: any) => {
     [navigation],
   );
 
-  const handleLogout = useCallback(() => {
-    dispatch(logout());
+  const handleLogout = useCallback(async () => {
+    try {
+      await logoutUser();
+      dispatch(logout());
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to logout.';
+      showError('Logout Failed', message);
+    }
   }, [dispatch]);
 
   return (
@@ -80,11 +92,11 @@ const CustomDrawer = ({ navigation }: any) => {
               onPress={() => navigateTo('Profile')}
             >
               <Text style={styles.name} numberOfLines={1}>
-                Michael Smith
+                {user?.name || 'Guest User'}
               </Text>
 
               <Text style={styles.email} numberOfLines={1}>
-                michaelsmith@gmail.com
+                {user?.email || 'guest@example.com'}
               </Text>
             </TouchableOpacity>
           </View>
