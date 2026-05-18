@@ -203,8 +203,8 @@ const styles = StyleSheet.create({
   },
 
   headerImage: {
-    borderBottomLeftRadius: 16,
-    borderBottomRightRadius: 16,
+    // borderBottomLeftRadius: 16,
+    // borderBottomRightRadius: 16,
   },
 
   headerRow: {

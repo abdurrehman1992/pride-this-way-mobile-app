@@ -181,7 +181,7 @@ const Rewards = () => {
 
                     <View style={styles.expandIcon}>
                       {item.isOpen ? (
-                        <IconUp width={10.95} height={6.31} />
+                        <IconUp width={16} height={16} />
                       ) : (
                         <DownArrow width={16} height={16} />
                       )}

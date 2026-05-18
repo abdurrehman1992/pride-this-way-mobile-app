@@ -917,7 +917,8 @@ const styles = StyleSheet.create({
   },
   legendText: {
     flex: 1,
-    color: '#56616C',
+    // color: '#56616C',
+    color: COLORS.TEXT_PRIMARY,
     fontSize: 14,
     lineHeight: 20,
     fontFamily: FONT_FAMILY.InterTight_Regular,

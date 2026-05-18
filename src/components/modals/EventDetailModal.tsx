@@ -7,8 +7,9 @@ import {
   TouchableOpacity,
   Image,
   ScrollView,
+  ImageBackground,
 } from 'react-native';
-import { CrossIcon, EventIcon, LocationIcon, TimeIcon } from '../../constants/icons';
+import { CrossIcon, EventIcon, LocationIcon, RoundedCross, TimeIcon } from '../../constants/icons';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 
@@ -49,24 +50,41 @@ const EventDetailModal: React.FC<Props> = ({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={[styles.card, isCompact && styles.cardCompact]}>
-          <View style={styles.headerRow}>
-            <View />
-            <TouchableOpacity
-              style={[styles.closeButton, isCompact && styles.closeButtonCompact]}
-              onPress={onClose}
-            >
-              <CrossIcon width={12} height={12} />
-            </TouchableOpacity>
+          <View>
+
+            {event.coverImage ? (
+              <ImageBackground
+                source={{ uri: event.coverImage }}
+                style={[styles.image, isCompact && styles.imageCompact]}
+              >
+                <View style={styles.headerRow}>
+                  <View />
+                  <TouchableOpacity
+                    style={[styles.closeButton, isCompact && styles.closeButtonCompact]}
+                    onPress={onClose}
+                  >
+                    <RoundedCross width={28} height={32} />
+                  </TouchableOpacity>
+                </View>
+              </ImageBackground>
+            ) : null}
           </View>
 
-          {event.coverImage ? (
-            <Image
-              source={{ uri: event.coverImage }}
-              style={[styles.image, isCompact && styles.imageCompact]}
-            />
-          ) : null}
-
           <ScrollView showsVerticalScrollIndicator={false}>
+            {!event.coverImage ?
+              <View style={styles.headerRow}>
+                <View />
+
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={onClose}
+                  style={styles.closeBtn}
+                >
+                  <CrossIcon width={16} height={16} />
+                </TouchableOpacity>
+              </View> :
+              null
+            }
             <View style={styles.pill}>
               <EventIcon width={12} height={14} />
               <Text style={styles.pillText}>{event.category || 'Event'}</Text>
@@ -110,13 +128,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    // paddingHorizontal: 24,
+    alignItems: 'center'
   },
   card: {
-    maxHeight: '78%',
+    width: '80%',
+    maxHeight: '70%',
     backgroundColor: COLORS.WHITE,
     borderRadius: 20,
-    padding: 18,
+    padding: 12,
   },
   cardCompact: {
     maxHeight: '56%',
@@ -124,10 +144,20 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   headerRow: {
-    marginBottom: 10,
+    // marginBottom: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: 5,
+    marginRight: 5
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.06)",
   },
   closeButton: {
     width: 28,
@@ -135,7 +165,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.96)',
   },
   closeButtonCompact: {
     width: 26,
@@ -144,14 +173,16 @@ const styles = StyleSheet.create({
   },
   image: {
     width: '100%',
-    height: 160,
+    height: 120,
     borderRadius: 14,
-    marginBottom: 16,
+    marginBottom: 8,
+    overflow: 'hidden'
   },
   imageCompact: {
     height: 120,
     borderRadius: 12,
-    marginBottom: 12,
+    // marginBottom: 12,
+    overflow: 'hidden'
   },
   pill: {
     flexDirection: 'row',
@@ -159,8 +190,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     backgroundColor: COLORS.PILL_COLOR,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
     gap: 6,
   },
   pillText: {
@@ -169,20 +200,20 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
   },
   title: {
-    marginTop: 12,
+    marginTop: 5,
     fontSize: FONT_SIZE.LARGE_TEXT,
     fontFamily: FONT_FAMILY.Poppins_SemiBold,
     color: COLORS.TEXT_PRIMARY,
   },
   titleCompact: {
-    marginTop: 10,
+    marginTop: 5,
     fontSize: 18,
   },
   infoRow: {
-    marginTop: 10,
+    // marginTop: 5,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 5,
   },
   infoText: {
     flex: 1,
@@ -191,20 +222,20 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_SECONDARY,
   },
   address: {
-    marginTop: 12,
+    marginTop: 5,
     fontSize: FONT_SIZE.TEXT,
     fontFamily: FONT_FAMILY.InterTight_Medium,
     color: COLORS.TEXT_PRIMARY,
   },
   description: {
-    marginTop: 14,
+    marginTop: 5,
     fontSize: FONT_SIZE.TEXT,
     lineHeight: 22,
     fontFamily: FONT_FAMILY.InterTight_Regular,
     color: COLORS.TEXT_SECONDARY,
   },
   descriptionCompact: {
-    marginTop: 12,
+    marginTop: 5,
     fontSize: 14,
     lineHeight: 20,
   },

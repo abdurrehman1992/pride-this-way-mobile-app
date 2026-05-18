@@ -79,3 +79,5 @@ export { default as DownArrow } from '../assets/icons/arrowDown.svg';
 export {default as BlueMapIcon} from '../assets/icons/blueMapIcon.svg'
 export {default as GrayMapIcon} from '../assets/icons/grayMapIcon.svg'
 export {default as AppLogo} from '../assets/icons/appLogo.svg'
+export {default as WhiteFork} from '../assets/icons/whiteFork.svg'
+export {default as RoundedCross} from '../assets/icons/roundedCross.svg'

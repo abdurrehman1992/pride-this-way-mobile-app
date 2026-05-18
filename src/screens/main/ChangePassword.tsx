@@ -183,11 +183,11 @@ const styles = StyleSheet.create({
         flexGrow: 1,
         paddingHorizontal: 24,
         paddingTop: 16,
-        paddingBottom: 24,
+        paddingBottom: 60,
         justifyContent: 'space-between',
     },
     upperContent: {
-        flex: 1, 
+        flex: 1,
     },
     inputs: {
         marginTop: 40,

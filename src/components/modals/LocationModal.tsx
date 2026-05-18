@@ -381,7 +381,7 @@ const styles = StyleSheet.create({
     },
     scrollContentBottom: {
         flexGrow: 1,
-        justifyContent: "flex-end",
+        justifyContent: "flex-start",
     },
     locationItem: {
         flexDirection: "row",

@@ -11,6 +11,7 @@ import {
   PermissionsAndroid,
   ActivityIndicator,
   Dimensions,
+  ImageBackground,
 } from 'react-native';
 import Mapbox, {
   type LineLayerStyle,
@@ -33,6 +34,8 @@ import {
   RedHeartIcon,
   BlueMapIcon,
   GrayMapIcon,
+  WhiteHeart,
+  WhiteFork,
 } from '../../constants/icons';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
@@ -136,9 +139,9 @@ const distanceInMeters = (
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRadians(from[1])) *
-      Math.cos(toRadians(to[1])) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+    Math.cos(toRadians(to[1])) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadius * c;
 };
@@ -164,7 +167,7 @@ const greatCircleArc = (
   const toRad = (d: number) => (d * Math.PI) / 180;
   const toDeg = (r: number) => (r * 180) / Math.PI;
   const lat1 = toRad(from[1]); const lon1 = toRad(from[0]);
-  const lat2 = toRad(to[1]);   const lon2 = toRad(to[0]);
+  const lat2 = toRad(to[1]); const lon2 = toRad(to[0]);
   const d = 2 * Math.asin(Math.sqrt(
     Math.sin((lat1 - lat2) / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin((lon1 - lon2) / 2) ** 2
@@ -300,6 +303,7 @@ const MyTourStart = () => {
   const cameraRef = useRef<Mapbox.Camera>(null);
   const mapRef = useRef<Mapbox.MapView>(null);
   const user = useSelector((state: RootState) => state.auth.user);
+  const [expanded, setExpanded] = useState(false);
 
   const [scanVisible, setScanVisible] = useState(false);
   const [tourStarted, setTourStarted] = useState(false);
@@ -351,12 +355,9 @@ const MyTourStart = () => {
   const [isPausedTour, setIsPausedTour] = useState(false);
   const pendingEditSaveRef = useRef(false);
   const introPlayedRef = useRef(false);
-
   const fetchRoadSegment = useCallback(
     async (from: [number, number], to: [number, number]): Promise<[number, number][]> => {
       const dist = distanceInMeters(from, to);
-
-      // Long distance — skip road routing and use a smooth great circle arc (airplane path)
       if (dist > ROAD_ROUTE_MAX_METERS) {
         return greatCircleArc(from, to);
       }
@@ -651,8 +652,8 @@ const MyTourStart = () => {
       completedAt: null,
     })
       .then((savedId) => { if (savedId !== tourId) setTourId(savedId); })
-      .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      .catch(() => { });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourStops]);
 
   const placeStops = useMemo(() => tourStops, [tourStops]);
@@ -750,7 +751,7 @@ const MyTourStart = () => {
     return (
       nearestPendingStop.id === selectedStop.id ||
       distanceInMeters(nearestPendingStop.coordinate, selectedStop.coordinate) <=
-        NEAREST_STOP_TOLERANCE_METERS
+      NEAREST_STOP_TOLERANCE_METERS
     );
   }, [nearestPendingStop, placeProgress, selectedStop]);
 
@@ -1136,9 +1137,9 @@ const MyTourStart = () => {
     setRouteDetails((prev) =>
       prev
         ? {
-            ...prev,
-            places: prev.places.filter((place) => place.id !== stopId),
-          }
+          ...prev,
+          places: prev.places.filter((place) => place.id !== stopId),
+        }
         : prev
     );
     setSelectedStop(null);
@@ -1194,7 +1195,6 @@ const MyTourStart = () => {
     },
     [isEdited, route.params?.tourName, routeDetails, tourId, tourStops, user?.email, user?.id, user?.name]
   );
-
   // Intercept back navigation when tour is active — offer pause & leave
   useEffect(() => {
     if (!tourStarted) return;
@@ -1214,7 +1214,7 @@ const MyTourStart = () => {
               setIsPausedTour(true);
               setSelectedStop(null);
               setSelectedEvent(null);
-              await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => {});
+              await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => { });
               navigation.dispatch(e.data.action);
             },
           },
@@ -1228,7 +1228,7 @@ const MyTourStart = () => {
   const handleStopFavorite = async (place: FirebasePlace) => {
     if (isFavorite(place.id)) {
       await removeFromFavorites(place.id);
-      showInfo('Removed', 'Removed from favorites');
+      showInfo('Removed from Favorites', 'You have Removed from favorites successfully');
       return;
     }
 
@@ -1244,7 +1244,7 @@ const MyTourStart = () => {
       city_name: place.city_name,
       country: place.country,
     });
-    showSuccess('Added', 'Added to favorites');
+    showSuccess('Added to Favorites', 'You have Added to favorites successfully');
   };
 
   const handleCurrentLocation = useCallback((shouldFocus = true) => {
@@ -1267,7 +1267,7 @@ const MyTourStart = () => {
             });
           }
         },
-        () => {},
+        () => { },
         { enableHighAccuracy: true, timeout: 10000 },
       );
     };
@@ -1319,7 +1319,7 @@ const MyTourStart = () => {
     setSelectedStop(null);
     setSelectedEvent(null);
     setTourActionVisible(false);
-    await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => {});
+    await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => { });
     showInfo('Tour Paused', 'You can resume this tour anytime.');
   };
 
@@ -1487,7 +1487,7 @@ const MyTourStart = () => {
               surfaceView={false}
               onCameraChanged={() => {
                 if (selectedStop) {
-                  updateSelectedStopPosition(selectedStop).catch(() => {});
+                  updateSelectedStopPosition(selectedStop).catch(() => { });
                 }
               }}
               onPress={() => {
@@ -1616,41 +1616,55 @@ const MyTourStart = () => {
         {selectedStop && (
           <TouchableOpacity
             activeOpacity={1}
-            onPress={() => {}}
+            onPress={() => { }}
             style={[
               styles.detailCard,
               styles.detailCardPosition,
               { left: cardPosition.x, top: cardPosition.y },
             ]}
           >
-            <Image
+            {/* <Image
               source={{ uri: selectedStop.place?.imageUrl || currentRoute.image }}
               style={styles.cardImage}
-            />
+            /> */}
 
             <View style={styles.topRow}>
-              <View style={styles.pill}>
-                <ForkIcon width={8} height={8} />
-                <Text style={styles.pillText}>Location</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() =>
-                  selectedStop.place && handleStopFavorite(selectedStop.place)
-                }
+              <ImageBackground
+                source={{ uri: selectedStop.place?.imageUrl || currentRoute.image }}
+                style={styles.cardImage}
               >
-                {selectedStop.place && isFavorite(selectedStop.place.id) ? (
-                  <RedHeartIcon width={13} height={11} />
-                ) : (
-                  <HeartIcon width={13} height={11} />
-                )}
-              </TouchableOpacity>
+
+                <View style={styles.pill}>
+                  <WhiteFork width={10} height={10} />
+                  <Text style={styles.pillText}>Location</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() =>
+                    selectedStop.place && handleStopFavorite(selectedStop.place)
+                  }
+                  style={{ marginTop: 8, marginRight: 8 }}
+                >
+                  {selectedStop.place && isFavorite(selectedStop.place.id) ? (
+                    <RedHeartIcon width={16} height={16} />
+                  ) : (
+                    <WhiteHeart width={16} height={16} />
+                  )}
+                </TouchableOpacity>
+              </ImageBackground>
             </View>
 
             <View style={styles.textBlock}>
               <Text style={styles.cardTitle}>{selectedStop.title}</Text>
-              <Text style={styles.cardSubtitle}>
+              <Text style={styles.cardSubtitle}
+                numberOfLines={expanded ? undefined : 3}
+              >
                 {selectedStop.place?.description || selectedStop.place?.address || 'Favorite place'}
               </Text>
+              <TouchableOpacity onPress={() => setExpanded(!expanded)}>
+                <Text style={styles.readMore}>
+                  {expanded ? "Show Less" : "Read More"}
+                </Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.divider} />
@@ -1677,7 +1691,7 @@ const MyTourStart = () => {
                     styles.confirmBtn,
                     (!selectedStopIsNearestPending ||
                       Boolean(placeProgress[selectedStop.id]?.visited)) &&
-                      styles.confirmBtnDisabled,
+                    styles.confirmBtnDisabled,
                   ]}
                   onPress={() => {
                     if (!selectedStopIsNearestPending) {
@@ -1772,7 +1786,7 @@ const MyTourStart = () => {
             />
             <View style={styles.actionSheet}>
               <Text style={styles.actionTitle}>Tour Actions</Text>
-             
+
               <TouchableOpacity
                 style={styles.actionPrimaryBtn}
                 onPress={handlePauseTour}
@@ -1954,13 +1968,14 @@ const styles = StyleSheet.create({
   },
   detailCard: {
     padding: 8,
-    width: 260,
+    width: 192,
     backgroundColor: COLORS.WHITE,
-    borderWidth: 3,
-    borderColor: COLORS.BUTTON_COLOR,
+    // borderWidth: 3,
+    // borderColor: COLORS.BUTTON_COLOR,
+    // height:192,
     borderRadius: 10,
     overflow: 'hidden',
-    elevation: 10,
+    // elevation: 10,
     zIndex: 100,
   },
   detailCardPosition: {
@@ -1969,27 +1984,40 @@ const styles = StyleSheet.create({
   },
   cardImage: {
     width: '100%',
-    height: 108,
+    height: 90,
     borderRadius: 6,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    // paddingHorizontal:8
+
   },
   topRow: {
-    marginTop: 8,
+    // marginTop: 8,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   pill: {
+    paddingVertical: 2,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    marginTop: 8,
+    marginLeft: 8,
+    // backgroundColor:'#00000060'
+    backgroundColor: "rgba(0, 0, 0, 0.32)"
   },
   pillText: {
-    fontSize: 10,
-    fontFamily: FONT_FAMILY.InterTight_Regular,
-    color: COLORS.TEXT_SECONDARY,
+    fontSize: 9,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    color: COLORS.WHITE,
   },
   textBlock: {
-    marginTop: 6,
+    marginTop: 4,
   },
   cardTitle: {
     fontSize: 16,
@@ -1997,9 +2025,8 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
   },
   cardSubtitle: {
-    marginTop: 3,
     fontSize: 12,
-    lineHeight: 17,
+    // lineHeight: 17,
     fontFamily: FONT_FAMILY.InterTight_Regular,
     color: COLORS.TEXT_SECONDARY,
   },
@@ -2245,5 +2272,12 @@ const styles = StyleSheet.create({
     color: COLORS.BUTTON_COLOR,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
     fontSize: 16,
+  },
+
+  readMore: {
+    // marginTop: 8,
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.BUTTON_COLOR,
   },
 });
