@@ -19,10 +19,10 @@ export const showToast = ({
     type,
     text1: title,
     text2: message || "",
-    position: "top",
+    position: "bottom",
     visibilityTime: duration,
     autoHide: true,
-    topOffset: 60,
+    bottomOffset: 110,
   });
 };
 

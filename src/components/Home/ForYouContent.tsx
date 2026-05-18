@@ -15,7 +15,12 @@ import LocationModal from '../../components/modals/LocationModal';
 import PreferenceModal from '../../components/modals/PreferenceModal';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
-import { FilterIcon } from '../../constants/images';
+import {
+  DetailBackground,
+  FilterIcon,
+  PLACES_ARROUND,
+  RECOMMENDED_IMAGE,
+} from '../../constants/images';
 
 const horizontalData = [
   {
@@ -23,7 +28,7 @@ const horizontalData = [
     title: 'Beach Party',
     description: 'Fun night at beach',
     rating: '4.5',
-    image: 'https://picsum.photos/200',
+    image: DetailBackground,
     category: 'Event',
   },
   {
@@ -31,7 +36,7 @@ const horizontalData = [
     title: 'Music Night',
     description: 'Live band show',
     rating: '4.7',
-    image: 'https://picsum.photos/201',
+    image: RECOMMENDED_IMAGE,
     category: 'Music',
   },
   {
@@ -39,7 +44,7 @@ const horizontalData = [
     title: 'Food Festival',
     description: 'Street food event',
     rating: '4.8',
-    image: 'https://picsum.photos/202',
+    image: DetailBackground,
     category: 'Food',
   },
 ];
@@ -50,7 +55,7 @@ const recommendedData = [
     title: 'Skyline Rooftop Dining',
     description: 'Enjoy food with stunning city views',
     rating: '4.7',
-    image: 'https://picsum.photos/210',
+    image: RECOMMENDED_IMAGE,
     category: 'Restaurant',
   },
   {
@@ -58,7 +63,7 @@ const recommendedData = [
     title: 'Jazz Night',
     description: 'Live jazz experience',
     rating: '4.6',
-    image: 'https://picsum.photos/211',
+    image: DetailBackground,
     category: 'Music',
   },
   {
@@ -66,7 +71,7 @@ const recommendedData = [
     title: 'Mountain Hiking',
     description: 'Adventure in the hills',
     rating: '4.8',
-    image: 'https://picsum.photos/212',
+    image: PLACES_ARROUND,
     category: 'Adventure',
   },
   {
@@ -74,7 +79,7 @@ const recommendedData = [
     title: 'City Museum Tour',
     description: 'Explore history & culture',
     rating: '4.5',
-    image: 'https://picsum.photos/213',
+    image: DetailBackground,
     category: 'History',
   },
   {
@@ -82,7 +87,7 @@ const recommendedData = [
     title: 'Shopping Mall',
     description: 'Best brands & deals',
     rating: '4.4',
-    image: 'https://picsum.photos/214',
+    image: RECOMMENDED_IMAGE,
     category: 'Shopping',
   },
 ];

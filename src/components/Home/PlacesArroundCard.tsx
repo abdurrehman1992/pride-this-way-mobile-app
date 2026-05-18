@@ -15,7 +15,7 @@ import {
   RedHeartIcon,
   StarIcon,
   TimeIcon,
-  RouteIcon, 
+  RouteIcon,
 } from "../../constants/icons";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 import { PLACES_ARROUND } from "../../constants/images";
@@ -78,11 +78,13 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
           <View style={styles.badge}>
             {category === "Route" ? (
               <RouteIcon width={12} height={12} />
+            ) : category === "Place" ? (
+              <LocationIcon width={10} height={12} />
             ) : (
               <EventIcon width={12} height={14} />
             )}
             <Text style={styles.badgeText}>
-              {category === "Route" ? "Route" : "Event"}
+              {category === "Route" ? "Route" : category === "Place" ? "Place" : "Event"}
             </Text>
           </View>
 

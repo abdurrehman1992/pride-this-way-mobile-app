@@ -166,7 +166,7 @@ const AddLocations = () => {
                     rating={String(item.rating || 0)}
                     image={item.imageUrl || 'https://picsum.photos/200'}
                     location={[item.city_name, item.country].filter(Boolean).join(', ')}
-                    category="Event"
+                    category="Place"
                   />
                 </TouchableOpacity>
               )}

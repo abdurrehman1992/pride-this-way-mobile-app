@@ -7,6 +7,7 @@ import {
   ScrollView,
   Image,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
@@ -31,13 +32,15 @@ import PreferenceModal from '../../components/modals/PreferenceModal';
 import NameTourModal from '../../components/modals/NameTourModal';
 import { MyTourStackParamList } from '../../types/types';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { showInfo } from '../../components/common/AppToast';
+import { showError, showInfo } from '../../components/common/AppToast';
 import {
+  deleteUserTour,
   fetchUserTours,
   fetchPlacesByIds,
   fetchRecommendedRoutes,
   fetchRouteDetails,
   fetchTourTags,
+  saveUserTour,
   FirebasePlace,
   FirebaseTag,
   RecommendedRoute,
@@ -59,22 +62,25 @@ type RouteCardState = RecommendedRoute & {
   removedPlaceIds: string[];
   tourId?: string;
   status?: string;
+  scheduledDate?: string | null;
   isSavedTour?: boolean;
 };
 
-type TourFilter = 'All' | 'Scheduled' | 'Favourite' | 'Completed';
+type TourFilter = 'All' | 'Current' | 'Paused' | 'Scheduled' | 'Favourite' | 'Completed';
 
 const MyTour = () => {
   const route = useRoute<any>();
   const navigation = useNavigation<NavigationProp>();
   const bottomHeight = useBottomTabBarHeight();
-  const userId = useSelector((state: RootState) => state.auth.user?.id);
+  const authUser = useSelector((state: RootState) => state.auth.user);
+  const userId = authUser?.id;
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
   const [modals, setModals] = useState({
     location: false,
     preference: false,
     name: false,
   });
+  const [pendingRecommendations, setPendingRecommendations] = useState<RecommendedRoute[]>([]);
   const [tags, setTags] = useState<FirebaseTag[]>([]);
   const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
   const [tourName, setTourName] = useState('');
@@ -84,6 +90,7 @@ const MyTour = () => {
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [savedTourCards, setSavedTourCards] = useState<RouteCardState[]>([]);
   const [activeFilter, setActiveFilter] = useState<TourFilter>('All');
   const addedRouteId = route.params?.routeId;
@@ -116,68 +123,77 @@ const MyTour = () => {
     );
   }, []);
 
-  useEffect(() => {
-    fetchTourTags().then(setTags).catch(() => setTags([]));
+  const loadTags = useCallback(async () => {
+    try {
+      const fetchedTags = await fetchTourTags();
+      setTags(fetchedTags);
+    } catch {
+      setTags([]);
+    }
   }, []);
 
-  useEffect(() => {
+  const loadSavedTours = useCallback(async () => {
     if (!userId) {
       setSavedTourCards([]);
       return;
     }
 
-    let isMounted = true;
+    try {
+      const tours = await fetchUserTours(userId);
+      const cards = await Promise.all(
+        tours.map(async (tour: SavedTour) => {
+          const [places, details] = await Promise.all([
+            fetchPlacesByIds(tour.all_places.map((item) => item.place_id)),
+            fetchRouteDetails({ routeId: tour.route_id, userId }),
+          ]);
 
-    const loadSavedTours = async () => {
-      try {
-        const tours = await fetchUserTours(userId);
-        const cards = await Promise.all(
-          tours.map(async (tour: SavedTour) => {
-            const [places, details] = await Promise.all([
-              fetchPlacesByIds(tour.all_places.map((item) => item.place_id)),
-              fetchRouteDetails({ routeId: tour.route_id, userId }),
-            ]);
+          const extraPlaces = places.filter((place) =>
+            tour.all_places.some(
+              (item) => item.place_id === place.id && item.addedByUser
+            )
+          );
 
-            const extraPlaces = places.filter((place) =>
-              tour.all_places.some(
-                (item) => item.place_id === place.id && item.addedByUser
-              )
-            );
+          return {
+            ...details,
+            cardId: `saved-${tour.id}`,
+            isOpen: true,
+            displayName: tour.title,
+            cityLabel:
+              [tour.city_name, tour.country].filter(Boolean).join(', ') ||
+              [details.route.city_name, details.route.country].filter(Boolean).join(', '),
+            extraPlaces,
+            removedPlaceIds: [],
+            tourId: tour.id,
+            status: tour.status,
+            scheduledDate: tour.scheduledDate || null,
+            isSavedTour: true,
+            places,
+          } satisfies RouteCardState;
+        })
+      );
 
-            return {
-              ...details,
-              cardId: `saved-${tour.id}`,
-              isOpen: true,
-              displayName: tour.title,
-              cityLabel:
-                [tour.city_name, tour.country].filter(Boolean).join(', ') ||
-                [details.route.city_name, details.route.country].filter(Boolean).join(', '),
-              extraPlaces,
-              removedPlaceIds: [],
-              tourId: tour.id,
-              status: tour.status,
-              isSavedTour: true,
-              places,
-            } satisfies RouteCardState;
-          })
-        );
-
-        if (isMounted) {
-          setSavedTourCards(cards);
-        }
-      } catch {
-        if (isMounted) {
-          setSavedTourCards([]);
-        }
-      }
-    };
-
-    loadSavedTours();
-
-    return () => {
-      isMounted = false;
-    };
+      setSavedTourCards(cards);
+    } catch {
+      setSavedTourCards([]);
+    }
   }, [userId]);
+
+  useEffect(() => {
+    loadTags();
+  }, [loadTags]);
+
+  useEffect(() => {
+    loadSavedTours();
+  }, [loadSavedTours]);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([loadTags(), loadSavedTours()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadSavedTours, loadTags]);
 
   useEffect(() => {
     if (!addedRouteId || !addedPlaceId) {
@@ -191,27 +207,29 @@ const MyTour = () => {
         return;
       }
 
-      setRouteCards((prev) =>
-        prev.map((item) => {
-          if (item.route.id !== addedRouteId) {
-            return item;
-          }
+      const applyAdd = (item: RouteCardState): RouteCardState => {
+        if (item.route.id !== addedRouteId) {
+          return item;
+        }
 
-          if (
-            item.places.some((place) => place.id === addedPlace.id) ||
-            item.extraPlaces.some((place) => place.id === addedPlace.id)
-          ) {
-            showInfo('Location already exists in this route');
-            return item;
-          }
+        if (
+          item.places.some((place) => place.id === addedPlace.id) ||
+          item.extraPlaces.some((place) => place.id === addedPlace.id)
+        ) {
+          showInfo('Location already exists in this route');
+          return item;
+        }
 
-          return {
-            ...item,
-            extraPlaces: [...item.extraPlaces, addedPlace],
-            isOpen: true,
-          };
-        })
-      );
+        return {
+          ...item,
+          extraPlaces: [...item.extraPlaces, addedPlace],
+          isOpen: true,
+        };
+      };
+
+      // Update both new (unsaved) cards AND saved tour cards
+      setRouteCards((prev) => prev.map(applyAdd));
+      setSavedTourCards((prev) => prev.map(applyAdd));
     });
   }, [addedPlaceId, addedRouteId, route.params?.timestamp]);
 
@@ -247,39 +265,6 @@ const MyTour = () => {
     setLocationSuggestions([]);
   };
 
-  const handleConfirmTour = async () => {
-    setLoadingRoutes(true);
-
-    try {
-      const recommendations = await fetchRecommendedRoutes({
-        locationLabel: selectedLocation || locationSearch,
-        selectedTagIds,
-        userId,
-      });
-
-      setRouteCards(
-        recommendations.map((item) => ({
-          ...item,
-          cardId: `route-${item.route.id}`,
-          isOpen: true,
-          displayName: tourName.trim() || item.route.name,
-          cityLabel:
-            [item.route.city_name, item.route.country].filter(Boolean).join(', ') ||
-            selectedLocation ||
-            locationSearch,
-          extraPlaces: [],
-          removedPlaceIds: [],
-          status: item.route.isScheduled ? 'scheduled' : 'active',
-          isSavedTour: false,
-        }))
-      );
-      closeModal('name');
-      clearFlow();
-    } finally {
-      setLoadingRoutes(false);
-    }
-  };
-
   const handleOpenNameModal = async () => {
     setLoadingRoutes(true);
 
@@ -290,10 +275,76 @@ const MyTour = () => {
         userId,
       });
 
+      setPendingRecommendations(recommendations);
       const suggestedName = recommendations[0]?.route?.name?.trim();
       setTourName(suggestedName || '');
       closeModal('preference');
       openModal('name');
+    } finally {
+      setLoadingRoutes(false);
+    }
+  };
+
+  const handleNameConfirm = () => {
+    closeModal('name');
+    handleFinalConfirm();
+  };
+
+  // Final step: create the tour card (and persist to Firestore if scheduled)
+  const handleFinalConfirm = async (scheduledDate?: string) => {
+    if (pendingRecommendations.length === 0) return;
+    setLoadingRoutes(true);
+
+    try {
+      const cards: RouteCardState[] = await Promise.all(
+        pendingRecommendations.map(async (item) => {
+          const status = scheduledDate ? 'scheduled' : 'active';
+          let savedTourId: string | undefined;
+
+          if (scheduledDate && userId) {
+            savedTourId = await saveUserTour({
+              tourId: null,
+              userId,
+              userName: authUser?.name || '',
+              userEmail: authUser?.email || '',
+              route: item.route,
+              title: tourName.trim() || item.route.name,
+              places: item.places,
+              events: item.events,
+              placeProgress: {},
+              currentStopIndex: 0,
+              isEdited: false,
+              status: 'scheduled',
+              scheduledDate,
+            });
+          }
+
+          return {
+            ...item,
+            cardId: savedTourId ? `saved-${savedTourId}` : `route-${item.route.id}`,
+            isOpen: true,
+            displayName: tourName.trim() || item.route.name,
+            cityLabel:
+              [item.route.city_name, item.route.country].filter(Boolean).join(', ') ||
+              selectedLocation ||
+              locationSearch,
+            extraPlaces: [],
+            removedPlaceIds: [],
+            status,
+            scheduledDate: scheduledDate || null,
+            tourId: savedTourId,
+            isSavedTour: Boolean(scheduledDate),
+          };
+        })
+      );
+
+      if (scheduledDate) {
+        setSavedTourCards((prev) => [...prev, ...cards]);
+      } else {
+        setRouteCards(cards);
+      }
+      clearFlow();
+      setPendingRecommendations([]);
     } finally {
       setLoadingRoutes(false);
     }
@@ -322,10 +373,21 @@ const MyTour = () => {
     );
   };
 
-  const deleteTour = (routeId: string) => {
-    setRouteCards((prev) => prev.filter((routeCard) => routeCard.cardId !== routeId));
-    setSavedTourCards((prev) => prev.filter((routeCard) => routeCard.cardId !== routeId));
-  };
+  const deleteTour = useCallback(async (tour: RouteCardState) => {
+    try {
+      if (tour.tourId) {
+        await deleteUserTour(tour.tourId);
+      }
+
+      setRouteCards((prev) => prev.filter((routeCard) => routeCard.cardId !== tour.cardId));
+      setSavedTourCards((prev) => prev.filter((routeCard) => routeCard.cardId !== tour.cardId));
+      showInfo('Tour Removed', 'This tour has been removed.');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to remove this tour right now.';
+      showError('Delete Failed', message);
+    }
+  }, []);
 
   const handleStartTour = (tour: RouteCardState) => {
     navigation.navigate('MyTourStart', {
@@ -387,8 +449,12 @@ const MyTour = () => {
 
   const visibleCards = useMemo(() => {
     switch (activeFilter) {
+      case 'Current':
+        return allCards.filter((tour) => tour.status === 'active');
+      case 'Paused':
+        return allCards.filter((tour) => tour.status === 'paused');
       case 'Scheduled':
-        return allCards.filter((tour) => tour.status === 'active' || tour.route.isScheduled);
+        return allCards.filter((tour) => tour.status === 'scheduled');
       case 'Favourite':
         return allCards.filter((tour) => isFavorite(tour.tourId || tour.route.id));
       case 'Completed':
@@ -419,28 +485,38 @@ const MyTour = () => {
   };
 
   const renderEmptyState = () => (
-    <View style={[styles.content, { paddingBottom: bottomHeight + 40 }]}>
-      <MapIconMain width={190} height={121.32} />
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.emptyScrollContent}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.BUTTON_COLOR} />
+      }
+    >
+      <View style={[styles.content, { paddingBottom: bottomHeight + 40 }]}>
+        <MapIconMain width={190} height={121.32} />
 
-      <Text style={styles.noTours}>No Tours Yet</Text>
+        <Text style={styles.noTours}>No Tours Yet</Text>
 
-      <Text style={styles.desc}>
-        You haven&apos;t planned any adventures. Create your first tour to start
-        exploring the city.
-      </Text>
+        <Text style={styles.desc}>
+          You haven&apos;t planned any adventures. Create your first tour to start
+          exploring the city.
+        </Text>
 
-      <TouchableOpacity style={styles.btnContainer} onPress={() => openModal('location')}>
-        <Text style={styles.btn}>Create A Tour</Text>
-      </TouchableOpacity>
-    </View>
+        <TouchableOpacity style={styles.btnContainer} onPress={() => openModal('location')}>
+          <Text style={styles.btn}>Start A Tour</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
   );
 
   const renderFilteredEmptyState = () => {
     const messageMap: Record<TourFilter, string> = {
       All: 'No tours found right now.',
-      Scheduled: 'There are no scheduled tours yet.',
-      Favourite: 'There are no favourite tours yet.',
-      Completed: 'There are no completed tours yet.',
+      Current: 'No active tours right now.',
+      Paused: 'No paused tours right now.',
+      Scheduled: 'No scheduled tours yet.',
+      Favourite: 'No favourite tours yet.',
+      Completed: 'No completed tours yet.',
     };
 
     return (
@@ -450,6 +526,25 @@ const MyTour = () => {
     );
   };
 
+  const getTourStatusBadge = (tour: RouteCardState): { label: string; color: string } | null => {
+    if (tour.status === 'paused') return { label: 'Paused', color: '#F59E0B' };
+    if (tour.status === 'scheduled') {
+      const dateStr = tour.scheduledDate
+        ? new Date(tour.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : 'Scheduled';
+      return { label: dateStr, color: COLORS.BUTTON_COLOR };
+    }
+    if (tour.status === 'completed') return { label: 'Completed', color: COLORS.TEXT_GREEN };
+    return null;
+  };
+
+  const getStartBtnLabel = (tour: RouteCardState): string => {
+    if (tour.status === 'paused') return 'Resume Tour';
+    if (tour.status === 'completed') return 'View Tour';
+    if (tour.status === 'scheduled') return 'Start Tour';
+    return 'Start Tour';
+  };
+
   const renderTourCard = (tour: RouteCardState) => {
     const locations = allRoutePlaces(tour);
     const previewImage =
@@ -457,6 +552,7 @@ const MyTour = () => {
       tour.favoritePlace?.imageUrl ||
       tour.events[0]?.coverImage ||
       '';
+    const badge = getTourStatusBadge(tour);
 
     return (
       <View
@@ -470,7 +566,12 @@ const MyTour = () => {
               <Text style={styles.tourTitle}>{tour.displayName}</Text>
 
               <View style={styles.iconRow}>
-                <TouchableOpacity style={styles.topIcons} onPress={() => deleteTour(tour.cardId)}>
+                {badge ? (
+                  <View style={[styles.statusBadge, { backgroundColor: badge.color + '20', borderColor: badge.color }]}>
+                    <Text style={[styles.statusBadgeText, { color: badge.color }]}>{badge.label}</Text>
+                  </View>
+                ) : null}
+                <TouchableOpacity style={styles.topIcons} onPress={() => deleteTour(tour)}>
                   <IconDelete width={15} height={15} />
                 </TouchableOpacity>
 
@@ -514,12 +615,7 @@ const MyTour = () => {
                   <HeartIcon width={14} height={12} />
                 )}
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cardStartBtn}
-                onPress={() => handleStartTour(tour)}
-              >
-                <Text style={styles.cardStartBtnText}>Start Tour</Text>
-              </TouchableOpacity>
+             
             </View>
           </View>
         </View>
@@ -573,6 +669,14 @@ const MyTour = () => {
                 ))}
               </>
             ) : null}
+              <TouchableOpacity
+                style={styles.cardStartBtn}
+                onPress={() => handleStartTour(tour)}
+              >
+                <Text style={styles.cardStartBtnText}>
+                  {getStartBtnLabel(tour)}
+                </Text>
+              </TouchableOpacity>
           </View>
         )}
       </View>
@@ -590,46 +694,63 @@ const MyTour = () => {
       ) : allCards.length <= 0 ? (
         renderEmptyState()
       ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollGrow}
-        >
+        <View style={styles.mainContent}>
           <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterRow}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={[
+              styles.scrollGrow,
+              { paddingBottom: bottomHeight + 110 },
+            ]}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={handleRefresh}
+                tintColor={COLORS.BUTTON_COLOR}
+              />
+            }
           >
-            {(['All', 'Scheduled', 'Favourite', 'Completed'] as TourFilter[]).map((item) => (
-              <TouchableOpacity
-                key={item}
-                style={[
-                  styles.filterChip,
-                  activeFilter === item && styles.filterChipActive,
-                ]}
-                onPress={() => setActiveFilter(item)}
-              >
-                <Text
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterRow}
+            >
+              {(['All', 'Current', 'Paused', 'Scheduled', 'Favourite', 'Completed'] as TourFilter[]).map((item) => (
+                <TouchableOpacity
+                  key={item}
                   style={[
-                    styles.filterChipText,
-                    activeFilter === item && styles.filterChipTextActive,
+                    styles.filterChip,
+                    activeFilter === item && styles.filterChipActive,
                   ]}
+                  onPress={() => setActiveFilter(item)}
                 >
-                  {item}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={[
+                      styles.filterChipText,
+                      activeFilter === item && styles.filterChipTextActive,
+                    ]}
+                  >
+                    {item}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            {visibleCards.length > 0 ? (
+              <View style={styles.tourList}>{visibleCards.map(renderTourCard)}</View>
+            ) : (
+              renderFilteredEmptyState()
+            )}
           </ScrollView>
 
-          {visibleCards.length > 0 ? (
-            <View style={styles.tourList}>{visibleCards.map(renderTourCard)}</View>
-          ) : (
-            renderFilteredEmptyState()
-          )}
-
-          <View style={styles.bottomBtn}>
-            <CustomButton title="Create Another Tour" onPress={() => openModal('location')} />
+          <View
+            style={[
+              styles.bottomBtn,
+              { bottom:  10 },
+            ]}
+          >
+            <CustomButton title="Create New Tour" onPress={() => openModal('location')} />
           </View>
-        </ScrollView>
+        </View>
       )}
 
       <LocationModal
@@ -670,8 +791,9 @@ const MyTour = () => {
         tourName={tourName}
         setTourName={setTourName}
         onClose={() => closeModal('name')}
-        onConfirm={handleConfirmTour}
+        onConfirm={handleNameConfirm}
       />
+
     </View>
   );
 };
@@ -687,6 +809,12 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  emptyScrollContent: {
+    flexGrow: 1,
+  },
+  mainContent: {
+    flex: 1,
   },
   content: {
     flex: 1,
@@ -729,7 +857,9 @@ const styles = StyleSheet.create({
   bottomBtn: {
     width: '100%',
     paddingHorizontal: 23,
-    paddingBottom: 26,
+    position: 'absolute',
+    left: 0,
+    right: 0,
   },
   scrollGrow: {
     paddingBottom: 12,
@@ -874,10 +1004,11 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.BUTTON_COLOR,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop:10
   },
   cardStartBtnText: {
     color: COLORS.WHITE,
-    fontSize: FONT_SIZE.PILL_TEXT,
+    fontSize: FONT_SIZE.TEXT,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },
   cardBottom: {
@@ -931,5 +1062,15 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.TEXT,
     fontFamily: FONT_FAMILY.Poppins_SemiBold,
     color: COLORS.TEXT_PRIMARY,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  statusBadgeText: {
+    fontSize: 10,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },
 });

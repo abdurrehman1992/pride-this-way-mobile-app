@@ -13,7 +13,6 @@ import {
 } from "react-native";
 
 import {
-    ModalCloseIcon,
     AddPreferenceIcon,
     PreferenceIcon,
 } from "../../constants/icons";
@@ -108,9 +107,7 @@ const PreferenceModal: React.FC<Props> = ({
 
                     {/* DRAG HANDLE */}
                     <View {...panResponder.panHandlers} style={styles.dragHandle}>
-                        <TouchableOpacity onPress={onClose}>
-                            <ModalCloseIcon width={38} height={12} />
-                        </TouchableOpacity>
+                        <View style={styles.handleBar} />
                     </View>
 
                     {/* HEADER */}
@@ -206,6 +203,13 @@ const styles = StyleSheet.create({
     dragHandle: {
         alignItems: "center",
         paddingTop: 12,
+    },
+
+    handleBar: {
+        width: 52,
+        height: 6,
+        borderRadius: 999,
+        backgroundColor: "#D0D0D0",
     },
 
     header: {

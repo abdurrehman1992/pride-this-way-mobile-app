@@ -11,6 +11,7 @@ interface Props {
   secureTextEntry?: boolean;
   keyboardType?: any;
   error?: string | string[];
+  editable?: boolean;
 }
 const CustomInput: React.FC<Props> = ({
   placeholder,
@@ -19,7 +20,8 @@ const CustomInput: React.FC<Props> = ({
   secureTextEntry = false,
   label,
   keyboardType,
-  error
+  error,
+  editable = true,
 }) => {
   const [isHidden, setIsHidden] = useState(secureTextEntry);
   return (
@@ -32,9 +34,10 @@ const CustomInput: React.FC<Props> = ({
           value={value}
           onChangeText={onChangeText}
           secureTextEntry={isHidden}
-          style={styles.input}
+          style={[styles.input, !editable && styles.inputDisabled]}
           autoCapitalize="none"
           keyboardType={keyboardType}
+          editable={editable}
         />
         {secureTextEntry && (
           <TouchableOpacity
@@ -87,6 +90,9 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
     fontSize: FONT_SIZE.SMALL_TEXT,
     fontFamily: FONT_FAMILY.InterTight_Light,
+  },
+  inputDisabled: {
+    color: COLORS.TEXT_SECONDARY,
   },
   icon: {
     paddingLeft: 10,

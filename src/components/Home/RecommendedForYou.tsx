@@ -61,10 +61,11 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
     <TouchableOpacity activeOpacity={0.8} onPress={onPress}>
       <View style={styles.container}>
         <ImageBackground
-          source={{ uri: image }}
+          source={typeof image === "string" ? { uri: image } : image}
           style={styles.image}
           imageStyle={styles.imageRadius}
         >
+          <View style={styles.overlay} />
           <View style={styles.topRow}>
             <View style={styles.pill}>
               <ForkIcon width={9.92} height={12.05} />
@@ -110,9 +111,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 21,
     paddingBottom: 18,
-    paddingTop: 15
+    paddingTop: 15,
+    overflow: "hidden",
   },
   imageRadius: {
+    borderRadius: 20,
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.22)",
     borderRadius: 20,
   },
   topRow: {

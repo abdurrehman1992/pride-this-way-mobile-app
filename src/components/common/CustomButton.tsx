@@ -1,5 +1,11 @@
 import React from "react";
-import { TouchableOpacity, Text, StyleSheet, ViewStyle } from "react-native";
+import {
+  TouchableOpacity,
+  Text,
+  StyleSheet,
+  ViewStyle,
+  ActivityIndicator,
+} from "react-native";
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 
@@ -8,6 +14,7 @@ interface Props {
   onPress?: () => void;
   Icon?: React.ComponentType<{ height: number; width: number }>; // ⭐ OPTIONAL
   disabled?: boolean;
+  loading?: boolean;
   style?: ViewStyle;
 }
 const CustomButton: React.FC<Props> = ({
@@ -15,22 +22,29 @@ const CustomButton: React.FC<Props> = ({
   onPress,
   Icon,
   disabled,
+  loading,
   style,
 }) => {
+  const isDisabled = Boolean(disabled || loading);
+
   return (
     <TouchableOpacity
-      disabled={disabled}
+      disabled={isDisabled}
       onPress={onPress}
       activeOpacity={0.7}
       style={[
         styles.button,
-        disabled ? styles.buttonDisabled : styles.buttonActive,
+        isDisabled ? styles.buttonDisabled : styles.buttonActive,
         style,
       ]}
     >
-      {Icon && <Icon height={16} width={18.1} />}
+      {loading ? (
+        <ActivityIndicator size="small" color={COLORS.WHITE} />
+      ) : (
+        Icon && <Icon height={16} width={18.1} />
+      )}
 
-      <Text style={[styles.text, disabled && styles.textDisabled]}>
+      <Text style={[styles.text, isDisabled && styles.textDisabled]}>
         {title}
       </Text>
     </TouchableOpacity>

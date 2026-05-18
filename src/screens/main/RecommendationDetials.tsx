@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import {
     View,
     Text,
@@ -18,7 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
-import { DetailBackground, MAP_IMAGE } from "../../constants/images";
+import { DetailBackground } from "../../constants/images";
 
 import CustomButton from "../../components/common/CustomButton";
 
@@ -32,7 +32,6 @@ import {
     TimeIcon,
     MiniMapIcon,
     RoofTopIcon,
-    GetDirectionIcon,
 } from "../../constants/icons";
 
 import { useFavorites } from "../../context/FavoritesContext";
@@ -41,6 +40,18 @@ import { showInfo, showSuccess } from "../../components/common/AppToast";
 const FALLBACK_IMAGE =
     "https://fastly.picsum.photos/id/1/800/600.jpg?hmac=jH5bDkLr6Tgy3oAg5khKCHeunZMHq0ehBZr6vGifPLY";
 
+const resolveImageSource = (image: any) => {
+    if (!image) {
+        return DetailBackground;
+    }
+
+    if (typeof image === "string") {
+        return { uri: image };
+    }
+
+    return image;
+};
+
 const RecommendationDetials = () => {
 
     const route = useRoute<any>();
@@ -48,7 +59,7 @@ const RecommendationDetials = () => {
 
     const item = route?.params?.item;
 
-    const { addToFavorites, removeFromFavorites, isFavorite, favorites } = useFavorites();
+    const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
 
     if (!item) {
         return (
@@ -67,9 +78,7 @@ const RecommendationDetials = () => {
         category = "Restaurant",
     } = item;
 
-    const favorite = useMemo(() => {
-        return id ? isFavorite(id) : false;
-    }, [id, favorites]);
+    const favorite = id ? isFavorite(id) : false;
 
     const handleFavorite = () => {
         if (!id) return;
@@ -112,7 +121,7 @@ const RecommendationDetials = () => {
 
             {/* ================= HEADER ================= */}
             <ImageBackground
-                source={image ? { uri: image } : DetailBackground}
+                source={resolveImageSource(image)}
                 style={styles.background}
                 imageStyle={styles.bgImage}
             >
@@ -225,15 +234,15 @@ const RecommendationDetials = () => {
                     </View>
                 </View>
             </View>
-            <View style={[styles.section]}>
-                <Text style={[styles.titleText, { marginBottom: 16 }]}>Gallery</Text>
+            <View style={styles.section}>
+                <Text style={styles.galleryTitle}>Gallery</Text>
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     {gallery.map((i) => (
                         <ImageBackground
                             // source={}
                             key={i.id}
-                            source={{ uri: image || FALLBACK_IMAGE }}
+                            source={resolveImageSource(image || FALLBACK_IMAGE)}
                             style={styles.galleryImage}
                         >
                             <Text style={{ color: COLORS.WHITE, fontFamily: FONT_FAMILY.InterTight_Medium, fontSize: FONT_SIZE.SMALL_TEXT }}>
@@ -244,24 +253,6 @@ const RecommendationDetials = () => {
                 </ScrollView>
             </View>
 
-            {/* ================= LOCATION ================= */}
-            <View style={styles.locationContainer}>
-                <Text style={styles.titleText}>Location & Distance</Text>
-
-                <View style={styles.locationBox}>
-                    <Image style={styles.map} source={{ uri: MAP_IMAGE }} />
-                    <View style={styles.locationFooter}>
-                        <Text style={styles.distanceText}>
-                            2.3 km from your current location
-                        </Text>
-
-                        <TouchableOpacity style={styles.getDirection}>
-                            <GetDirectionIcon width={12.97} height={12.97} />
-                            <Text style={styles.getDirectionText}>Get Direction</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
             <View style={styles.section}>
                 <Text style={styles.titleText}>Reviews</Text>
 
@@ -462,6 +453,12 @@ const styles = StyleSheet.create({
     },
 
     titleText: {
+        fontSize: FONT_SIZE.LARGE_TEXT,
+        color: COLORS.TEXT_PRIMARY,
+        fontFamily: FONT_FAMILY.Poppins_SemiBold,
+    },
+    galleryTitle: {
+        marginBottom: 16,
         fontSize: FONT_SIZE.LARGE_TEXT,
         color: COLORS.TEXT_PRIMARY,
         fontFamily: FONT_FAMILY.Poppins_SemiBold,

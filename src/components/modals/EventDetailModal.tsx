@@ -28,26 +28,42 @@ type Props = {
     category?: string;
   } | null;
   onClose: () => void;
+  variant?: 'default' | 'compact';
 };
 
-const EventDetailModal: React.FC<Props> = ({ visible, event, onClose }) => {
+const EventDetailModal: React.FC<Props> = ({
+  visible,
+  event,
+  onClose,
+  variant = 'default',
+}) => {
   if (!event) {
     return null;
   }
 
   const location = [event.city_name, event.country].filter(Boolean).join(', ');
   const timeLabel = [event.startDate, event.startTime].filter(Boolean).join(' • ');
+  const isCompact = variant === 'compact';
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.card}>
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <CrossIcon width={12} height={12} />
-          </TouchableOpacity>
+        <View style={[styles.card, isCompact && styles.cardCompact]}>
+          <View style={styles.headerRow}>
+            <View />
+            <TouchableOpacity
+              style={[styles.closeButton, isCompact && styles.closeButtonCompact]}
+              onPress={onClose}
+            >
+              <CrossIcon width={12} height={12} />
+            </TouchableOpacity>
+          </View>
 
           {event.coverImage ? (
-            <Image source={{ uri: event.coverImage }} style={styles.image} />
+            <Image
+              source={{ uri: event.coverImage }}
+              style={[styles.image, isCompact && styles.imageCompact]}
+            />
           ) : null}
 
           <ScrollView showsVerticalScrollIndicator={false}>
@@ -56,7 +72,7 @@ const EventDetailModal: React.FC<Props> = ({ visible, event, onClose }) => {
               <Text style={styles.pillText}>{event.category || 'Event'}</Text>
             </View>
 
-            <Text style={styles.title}>{event.title}</Text>
+            <Text style={[styles.title, isCompact && styles.titleCompact]}>{event.title}</Text>
 
             {location ? (
               <View style={styles.infoRow}>
@@ -74,7 +90,10 @@ const EventDetailModal: React.FC<Props> = ({ visible, event, onClose }) => {
 
             {event.address ? <Text style={styles.address}>{event.address}</Text> : null}
 
-            <Text style={styles.description}>
+            <Text
+              style={[styles.description, isCompact && styles.descriptionCompact]}
+              numberOfLines={isCompact ? 4 : undefined}
+            >
               {event.description || 'No event description available.'}
             </Text>
           </ScrollView>
@@ -99,17 +118,40 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 18,
   },
+  cardCompact: {
+    maxHeight: '56%',
+    borderRadius: 18,
+    padding: 16,
+  },
+  headerRow: {
+    marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   closeButton: {
-    position: 'absolute',
-    top: 18,
-    right: 18,
-    zIndex: 5,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.96)',
+  },
+  closeButtonCompact: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
   },
   image: {
     width: '100%',
     height: 160,
     borderRadius: 14,
     marginBottom: 16,
+  },
+  imageCompact: {
+    height: 120,
+    borderRadius: 12,
+    marginBottom: 12,
   },
   pill: {
     flexDirection: 'row',
@@ -131,6 +173,10 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.LARGE_TEXT,
     fontFamily: FONT_FAMILY.Poppins_SemiBold,
     color: COLORS.TEXT_PRIMARY,
+  },
+  titleCompact: {
+    marginTop: 10,
+    fontSize: 18,
   },
   infoRow: {
     marginTop: 10,
@@ -156,5 +202,10 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontFamily: FONT_FAMILY.InterTight_Regular,
     color: COLORS.TEXT_SECONDARY,
+  },
+  descriptionCompact: {
+    marginTop: 12,
+    fontSize: 14,
+    lineHeight: 20,
   },
 });

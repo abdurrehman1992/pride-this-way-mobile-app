@@ -20,11 +20,8 @@ import { BgFrame, PROFILE_IMAGE } from '../../constants/images';
 import {
   BottomProfileIcon,
   CloseIcon,
-  FavoriteIcon,
   HelpIcon,
-  HomeIcon,
   LogoutIcon,
-  MapIcon,
   RewardsIcon,
   TermsIcon,
 } from '../../constants/icons';
@@ -140,35 +137,9 @@ const CustomDrawer = ({ navigation }: any) => {
 
         <View style={styles.menuContainer}>
           <TabsButtons
-            title="Home"
-            Icon={HomeIcon}
-            onPress={() =>
-              navigateTo('Tabs', {
-                screen: 'MyTour',
-              })
-            }
-          />
-
-          <TabsButtons
             title="Rewards"
             Icon={RewardsIcon}
             onPress={() => navigateTo('Rewards')}
-          />
-
-          <TabsButtons
-            title="Places"
-            Icon={MapIcon}
-            onPress={() =>
-              navigateTo('Tabs', {
-                screen: 'MyTour',
-              })
-            }
-          />
-
-          <TabsButtons
-            title="Favorites"
-            Icon={FavoriteIcon}
-            onPress={() => navigateTo('Favorites')}
           />
 
           <TabsButtons

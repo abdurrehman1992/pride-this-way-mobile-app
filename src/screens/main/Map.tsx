@@ -1,249 +1,132 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  Image,
-  TouchableOpacity,
+  Keyboard,
   ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import Mapbox, { type FillLayerStyle, type LineLayerStyle } from '@rnmapbox/maps';
 import Config from 'react-native-config';
-import type { FeatureCollection, LineString, Polygon } from 'geojson';
+import type { FeatureCollection, Polygon } from 'geojson';
+import EventDetailModal from '../../components/modals/EventDetailModal';
 import TopHeader from '../../components/Home/TopHeader';
-import CustomSearchInput from '../../components/Home/CustomSearchInput';
-import LocationModal from '../../components/modals/LocationModal';
 import { COLORS } from '../../constants/colors';
-import { FilterIcon } from '../../constants/images';
-import {
-  BlueMapIcon,
-  DropdownIcon,
-} from '../../constants/icons';
 import { FONT_FAMILY } from '../../constants/fonts';
+import { DropdownIcon, SearchIcon } from '../../constants/icons';
+import {
+  fetchMapEvents,
+  searchLocationSuggestions,
+  type FirebaseEvent,
+  type LocationSuggestion,
+} from '../../services/myTourService';
 
 const BG_MATCH = '#7AB4DC';
 const INITIAL_CAMERA_CENTER: [number, number] = [-18, 18];
 const INITIAL_CAMERA_ZOOM = 0.8;
+const SEARCH_DEBOUNCE_MS = 350;
 
-type MapStop = {
-  id: string;
-  title: string;
-  subtitle: string;
-  coordinate: [number, number];
-};
-
-type MapRegion = {
+type QuickCity = {
   id: string;
   label: string;
-  centerCoordinate: [number, number];
-  zoomLevel: number;
-  stops: MapStop[];
+  coordinates: [number, number];
 };
 
-const MAP_REGIONS: MapRegion[] = [
+type EventMarker = FirebaseEvent & {
+  markerType: 'pride' | 'podcast';
+  markerCoordinate: [number, number];
+};
+
+const STATIC_PODCAST_MARKERS: Array<{
+  id: string;
+  title: string;
+  city_name: string;
+  country: string;
+  address: string;
+  description: string;
+  category: string;
+  startDate: string;
+  startTime: string;
+  coverImage?: string;
+  coordinates: [number, number];
+}> = [
   {
-    id: 'california',
-    label: 'California, USA',
-    centerCoordinate: [-118.2437, 34.0522],
-    zoomLevel: 7.4,
-    stops: [
-      {
-        id: 'santa-monica',
-        title: 'Santa Monica Pier',
-        subtitle: 'Beach food and sunset spots',
-        coordinate: [-118.4965, 34.0094],
-      },
-      {
-        id: 'griffith',
-        title: 'Griffith Observatory',
-        subtitle: 'City views and skyline photos',
-        coordinate: [-118.3004, 34.1184],
-      },
-      {
-        id: 'arts-district',
-        title: 'Arts District',
-        subtitle: 'Coffee, murals, and galleries',
-        coordinate: [-118.235, 34.0447],
-      },
-    ],
+    id: 'podcast-static-1',
+    title: 'Voices of Pride Live',
+    city_name: 'Toronto',
+    country: 'Canada',
+    address: 'Downtown Toronto, ON, Canada',
+    description: 'A live community podcast recording featuring creators and local voices.',
+    category: 'Podcast Event',
+    startDate: '2026-06-15',
+    startTime: '17:30',
+    coordinates: [-79.3832, 43.6532],
   },
+  {
+    id: 'podcast-static-2',
+    title: 'City Stories Podcast Meetup',
+    city_name: 'Dubai',
+    country: 'UAE',
+    address: 'Downtown Dubai, UAE',
+    description: 'A podcast meetup focused on travel, stories, and identity across cities.',
+    category: 'Podcast Event',
+    startDate: '2026-06-21',
+    startTime: '18:00',
+    coordinates: [55.2708, 25.2048],
+  },
+  {
+    id: 'podcast-static-3',
+    title: 'Rainbow Talks Studio Session',
+    city_name: 'London',
+    country: 'United Kingdom',
+    address: 'Camden, London, UK',
+    description: 'A hosted podcast session with interviews, music, and community highlights.',
+    category: 'Podcast Event',
+    startDate: '2026-06-29',
+    startTime: '19:00',
+    coordinates: [-0.1425, 51.5416],
+  },
+];
+
+const QUICK_CITIES: QuickCity[] = [
   {
     id: 'new-york',
     label: 'New York, USA',
-    centerCoordinate: [-74.006, 40.7128],
-    zoomLevel: 8.2,
-    stops: [
-      {
-        id: 'times-square',
-        title: 'Times Square',
-        subtitle: 'Lights, shows, and street energy',
-        coordinate: [-73.9851, 40.758],
-      },
-      {
-        id: 'brooklyn-bridge',
-        title: 'Brooklyn Bridge',
-        subtitle: 'Walkable route with skyline views',
-        coordinate: [-73.9969, 40.7061],
-      },
-      {
-        id: 'central-park',
-        title: 'Central Park',
-        subtitle: 'Open green space in the city',
-        coordinate: [-73.9654, 40.7829],
-      },
-    ],
+    coordinates: [-74.006, 40.7128],
+  },
+  {
+    id: 'los-angeles',
+    label: 'Los Angeles, USA',
+    coordinates: [-118.2437, 34.0522],
   },
   {
     id: 'london',
     label: 'London, UK',
-    centerCoordinate: [-0.1276, 51.5072],
-    zoomLevel: 8.6,
-    stops: [
-      {
-        id: 'camden',
-        title: 'Camden Market',
-        subtitle: 'Food stalls and creative shops',
-        coordinate: [-0.1425, 51.5416],
-      },
-      {
-        id: 'tower-bridge',
-        title: 'Tower Bridge',
-        subtitle: 'River walk and iconic views',
-        coordinate: [-0.0754, 51.5055],
-      },
-      {
-        id: 'soho',
-        title: 'Soho',
-        subtitle: 'Nightlife, cafes, and culture',
-        coordinate: [-0.1337, 51.5136],
-      },
-    ],
+    coordinates: [-0.1276, 51.5072],
   },
   {
     id: 'dubai',
     label: 'Dubai, UAE',
-    centerCoordinate: [55.2708, 25.2048],
-    zoomLevel: 8.4,
-    stops: [
-      {
-        id: 'burj-khalifa',
-        title: 'Burj Khalifa',
-        subtitle: 'Skyline views and downtown vibe',
-        coordinate: [55.2744, 25.1972],
-      },
-      {
-        id: 'bluewaters',
-        title: 'Bluewaters Island',
-        subtitle: 'Waterfront dining and walks',
-        coordinate: [55.1181, 25.0804],
-      },
-      {
-        id: 'al-seef',
-        title: 'Al Seef',
-        subtitle: 'Old Dubai style and creek views',
-        coordinate: [55.2946, 25.2632],
-      },
-    ],
+    coordinates: [55.2708, 25.2048],
   },
   {
-    id: 'chicago',
-    label: 'Chicago, USA',
-    centerCoordinate: [-87.6298, 41.8781],
-    zoomLevel: 8.4,
-    stops: [
-      {
-        id: 'millennium-park',
-        title: 'Millennium Park',
-        subtitle: 'Public art and downtown energy',
-        coordinate: [-87.6226, 41.8826],
-      },
-      {
-        id: 'navy-pier',
-        title: 'Navy Pier',
-        subtitle: 'Lakefront views and attractions',
-        coordinate: [-87.6079, 41.8917],
-      },
-      {
-        id: 'west-loop',
-        title: 'West Loop',
-        subtitle: 'Restaurants and city nightlife',
-        coordinate: [-87.6477, 41.8827],
-      },
-    ],
-  },
-  {
-    id: 'austin',
-    label: 'Austin, USA',
-    centerCoordinate: [-97.7431, 30.2672],
-    zoomLevel: 8.6,
-    stops: [
-      {
-        id: 'south-congress',
-        title: 'South Congress',
-        subtitle: 'Shops, music, and local food',
-        coordinate: [-97.7494, 30.2493],
-      },
-      {
-        id: 'zilker-park',
-        title: 'Zilker Park',
-        subtitle: 'Green space and outdoor hangouts',
-        coordinate: [-97.7729, 30.2669],
-      },
-      {
-        id: 'rainey-street',
-        title: 'Rainey Street',
-        subtitle: 'Bars, patios, and live music',
-        coordinate: [-97.7388, 30.2584],
-      },
-    ],
+    id: 'toronto',
+    label: 'Toronto, Canada',
+    coordinates: [-79.3832, 43.6532],
   },
 ];
 
-const LOCATION_REGION_MAP: Record<string, string> = {
-  'San Diego, CA': 'california',
-  'San Jose, CA': 'california',
-  'Fresno, CA': 'california',
-  'Los Angeles, CA': 'california',
-  'San Francisco, CA': 'california',
-  'New York, NY': 'new-york',
-  'Chicago, IL': 'chicago',
-  'Austin, TX': 'austin',
-};
-
-const routeLineLayerStyle: LineLayerStyle = {
-  lineColor: COLORS.WHITE,
-  lineWidth: 3,
-  lineOpacity: 0.9,
-  lineDasharray: [2, 1.4],
-  lineCap: 'round',
-  lineJoin: 'round',
-};
-
-const roadCasingStyle: LineLayerStyle = {
-  lineColor: '#FFFFFF',
-  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.5, 12, 2, 16, 6],
-  lineOpacity: 0.9,
-  lineCap: 'round',
-  lineJoin: 'round',
-};
-
-const roadFillStyle: LineLayerStyle = {
-  lineColor: '#0000FF',
-  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.3, 12, 1.4, 16, 4],
-  lineOpacity: 1,
-  lineCap: 'round',
-  lineJoin: 'round',
-};
-
 const PRIDE_BANDS: { color: string; minLon: number; maxLon: number }[] = [
-  { color: '#D85B2B', minLon: -180, maxLon: -120 },
-  { color: '#E8772E', minLon: -120, maxLon: -60 },
-  { color: '#F0A93C', minLon: -60, maxLon: -20 },
-  { color: '#F0DC4A', minLon: -20, maxLon: 20 },
-  { color: '#9CC73C', minLon: 20, maxLon: 60 },
-  { color: '#4FA85E', minLon: 60, maxLon: 100 },
-  { color: '#3F8FA3', minLon: 100, maxLon: 140 },
-  { color: '#3F6CA7', minLon: 140, maxLon: 180 },
+{ color: '#FF5C0A', minLon: -180, maxLon: -120 },
+    { color: '#F39A22', minLon: -120, maxLon: -60 },
+    { color: '#FFE100', minLon: -60, maxLon: -20 },
+    { color: '#95D600', minLon: -20, maxLon: 20 },
+    { color: '#31C93A', minLon: 20, maxLon: 60 },
+    { color: '#249D78', minLon: 60, maxLon: 100 },
+    { color: '#3367CC', minLon: 100, maxLon: 140 },
+    { color: '#A11FD6', minLon: 140, maxLon: 180 },
 ];
 
 const prideStripes: FeatureCollection<Polygon> = {
@@ -270,8 +153,24 @@ const prideFillStyle: FillLayerStyle = {
 };
 
 const waterFillStyle: FillLayerStyle = {
-  fillColor: '#1E88E5',
+  fillColor: '#066ac1',
   fillOpacity: 1,
+};
+
+const roadCasingStyle: LineLayerStyle = {
+  lineColor: '#FFFFFF',
+  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.5, 12, 2, 16, 6],
+  lineOpacity: 0.9,
+  lineCap: 'round',
+  lineJoin: 'round',
+};
+
+const roadFillStyle: LineLayerStyle = {
+  lineColor: '#0000FF',
+  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.3, 12, 1.4, 16, 4],
+  lineOpacity: 1,
+  lineCap: 'round',
+  lineJoin: 'round',
 };
 
 const atmosphereStyle = {
@@ -282,14 +181,49 @@ const atmosphereStyle = {
   starIntensity: 0,
 };
 
+const normalizeText = (value?: string | null) => (value || '').trim().toLowerCase();
+
+const buildLocationLabel = (city?: string, country?: string) =>
+  [city, country].filter(Boolean).join(', ');
+
+const eventMatchesFilter = (event: FirebaseEvent, filterLabel: string) => {
+  const normalizedFilter = normalizeText(filterLabel);
+  if (!normalizedFilter) {
+    return true;
+  }
+
+  const haystack = [
+    event.city_name,
+    event.country,
+    buildLocationLabel(event.city_name, event.country),
+    event.address,
+    event.title,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes(normalizedFilter);
+};
+
+const buildPodcastCoordinate = (event: FirebaseEvent, index: number): [number, number] => {
+  const longitude = Number(event.coordinates?.longitude || 0);
+  const latitude = Number(event.coordinates?.latitude || 0);
+  const offset = index % 2 === 0 ? 0.32 : -0.32;
+
+  return [longitude + offset, latitude + 0.18];
+};
+
 const Map = () => {
   const cameraRef = useRef<Mapbox.Camera>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(INITIAL_CAMERA_ZOOM);
+  const [events, setEvents] = useState<FirebaseEvent[]>([]);
   const [searchText, setSearchText] = useState('');
-  const [selectedRegionId, setSelectedRegionId] = useState(MAP_REGIONS[0].id);
-  const [, setSelectedStopId] = useState<string | null>(null);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [isLocationModalVisible, setIsLocationModalVisible] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<LocationSuggestion | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<FirebaseEvent | null>(null);
+  const [searchSuggestions, setSearchSuggestions] = useState<LocationSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -297,10 +231,15 @@ const Map = () => {
 
     Mapbox.setAccessToken(Config.MAPBOX_TOKEN)
       .then(() => {
-        if (isMounted) setMapReady(true);
+        if (isMounted) {
+          setMapReady(true);
+          setZoomLevel(INITIAL_CAMERA_ZOOM);
+        }
       })
       .catch(() => {
-        if (isMounted) setMapReady(false);
+        if (isMounted) {
+          setMapReady(false);
+        }
       });
 
     return () => {
@@ -308,98 +247,151 @@ const Map = () => {
     };
   }, []);
 
-  const selectedRegion =
-    MAP_REGIONS.find((region) => region.id === selectedRegionId) ?? MAP_REGIONS[0];
+  useEffect(() => {
+    let isMounted = true;
 
-  const filteredStops = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
+    fetchMapEvents()
+      .then((response) => {
+        if (isMounted) {
+          setEvents(response);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setEvents([]);
+        }
+      });
 
-    if (!query) {
-      return selectedRegion.stops;
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedLocation || searchText.trim().length < 2) {
+      setSearchSuggestions([]);
+      return undefined;
     }
 
-    return selectedRegion.stops.filter(
-      (stop) =>
-        stop.title.toLowerCase().includes(query) ||
-        stop.subtitle.toLowerCase().includes(query)
-    );
-  }, [searchText, selectedRegion]);
+    const timeoutId = setTimeout(() => {
+      searchLocationSuggestions(searchText)
+        .then((results) => {
+          setSearchSuggestions(results);
+          setShowSuggestions(true);
+        })
+        .catch(() => {
+          setSearchSuggestions([]);
+        });
+    }, SEARCH_DEBOUNCE_MS);
 
-  const routeLine = useMemo<FeatureCollection<LineString>>(
-    () => ({
-      type: 'FeatureCollection',
-      features:
-        filteredStops.length >= 2
-          ? [
-              {
-                type: 'Feature',
-                properties: {},
-                geometry: {
-                  type: 'LineString',
-                  coordinates: filteredStops.map((stop) => [...stop.coordinate]),
-                },
-              },
-            ]
-          : [],
-    }),
-    [filteredStops]
+    return () => clearTimeout(timeoutId);
+  }, [searchText, selectedLocation]);
+
+  const filteredEvents = useMemo(() => {
+    const filterLabel = selectedLocation?.label || '';
+    return events.filter((event) => eventMatchesFilter(event, filterLabel));
+  }, [events, selectedLocation]);
+
+  const prideMarkers = useMemo<EventMarker[]>(
+    () =>
+      filteredEvents.map((event) => ({
+        ...event,
+        markerType: 'pride',
+        markerCoordinate: [
+          Number(event.coordinates?.longitude || 0),
+          Number(event.coordinates?.latitude || 0),
+        ],
+      })),
+    [filteredEvents]
   );
 
-  const focusRegion = useCallback((region: MapRegion) => {
+  const podcastMarkers = useMemo<EventMarker[]>(
+    () =>
+      STATIC_PODCAST_MARKERS.filter((event) =>
+        eventMatchesFilter(
+          {
+            ...event,
+            coordinates: {
+              longitude: event.coordinates[0],
+              latitude: event.coordinates[1],
+            },
+          },
+          selectedLocation?.label || ''
+        )
+      ).map((event, index) => ({
+        ...event,
+        markerType: 'podcast',
+        coordinates: {
+          longitude: event.coordinates[0],
+          latitude: event.coordinates[1],
+        },
+        markerCoordinate: buildPodcastCoordinate(
+          {
+            ...event,
+            coordinates: {
+              longitude: event.coordinates[0],
+              latitude: event.coordinates[1],
+            },
+          },
+          index
+        ),
+      })),
+    [selectedLocation]
+  );
+
+  const focusLocation = useCallback((location: LocationSuggestion) => {
+    if (!location.coordinates) {
+      return;
+    }
+
     cameraRef.current?.setCamera({
-      centerCoordinate: region.centerCoordinate,
-      zoomLevel: region.zoomLevel,
+      centerCoordinate: location.coordinates,
+      zoomLevel: 4.4,
       pitch: 0,
       heading: 0,
       animationDuration: 1400,
       animationMode: 'flyTo',
     });
+    setZoomLevel(4.4);
   }, []);
 
-  const handleSelectRegion = useCallback(
-    (region: MapRegion) => {
-      setSelectedRegionId(region.id);
-      setSelectedStopId(null);
-      setSearchText('');
-      setIsDropdownOpen(false);
-      focusRegion(region);
+  const handleQuickCityPress = useCallback(
+    (city: QuickCity) => {
+      const nextSelection: LocationSuggestion = {
+        id: city.id,
+        label: city.label,
+        city: city.label.split(',')[0]?.trim(),
+        country: city.label.split(',').slice(1).join(',').trim(),
+        coordinates: city.coordinates,
+      };
+
+      setSelectedLocation(nextSelection);
+      setSearchText(city.label);
+      setShowSuggestions(false);
+      setSearchSuggestions([]);
+      Keyboard.dismiss();
+      focusLocation(nextSelection);
     },
-    [focusRegion]
+    [focusLocation]
   );
 
-  const handleMarkerPress = useCallback((stop: MapStop) => {
-    setSelectedStopId(stop.id);
-    setIsDropdownOpen(false);
-    cameraRef.current?.setCamera({
-      centerCoordinate: stop.coordinate,
-      zoomLevel: 15.2,
-      pitch: 0,
-      heading: 0,
-      animationDuration: 1400,
-      animationMode: 'flyTo',
-    });
-  }, []);
-
-  const handleLocationSelect = useCallback(
-    (location: string) => {
-      const regionId = LOCATION_REGION_MAP[location];
-      const mappedRegion =
-        MAP_REGIONS.find((region) => region.id === regionId) ?? selectedRegion;
-
-      setIsLocationModalVisible(false);
-      setSelectedRegionId(mappedRegion.id);
-      setSelectedStopId(null);
-      setSearchText('');
-      setIsDropdownOpen(false);
-      focusRegion(mappedRegion);
+  const handleSuggestionPress = useCallback(
+    (suggestion: LocationSuggestion) => {
+      setSelectedLocation(suggestion);
+      setSearchText(suggestion.label);
+      setShowSuggestions(false);
+      setSearchSuggestions([]);
+      Keyboard.dismiss();
+      focusLocation(suggestion);
     },
-    [focusRegion, selectedRegion]
+    [focusLocation]
   );
 
-  const handleResetView = useCallback(() => {
-    setSelectedStopId(null);
+  const handleClearFilter = useCallback(() => {
+    setSelectedLocation(null);
     setSearchText('');
-    setIsDropdownOpen(false);
+    setSearchSuggestions([]);
+    setShowSuggestions(false);
     cameraRef.current?.setCamera({
       centerCoordinate: INITIAL_CAMERA_CENTER,
       zoomLevel: INITIAL_CAMERA_ZOOM,
@@ -408,140 +400,244 @@ const Map = () => {
       animationDuration: 1400,
       animationMode: 'flyTo',
     });
+    setZoomLevel(INITIAL_CAMERA_ZOOM);
   }, []);
+
+  const handleSearchTextChange = useCallback((text: string) => {
+    setSearchText(text);
+    setSelectedLocation(null);
+    setShowSuggestions(true);
+  }, []);
+
+  const handleMarkerPress = useCallback((marker: EventMarker) => {
+    setSelectedEvent(marker);
+    cameraRef.current?.setCamera({
+      centerCoordinate: marker.markerCoordinate,
+      zoomLevel: 5.2,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 1200,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(5.2);
+  }, []);
+
+  const handleZoom = useCallback((direction: 'in' | 'out') => {
+    const nextZoom =
+      direction === 'in'
+        ? Math.min(zoomLevel + 0.8, 18)
+        : Math.max(zoomLevel - 0.8, 0.8);
+
+    cameraRef.current?.setCamera({
+      zoomLevel: nextZoom,
+      animationDuration: 450,
+    });
+    setZoomLevel(nextZoom);
+  }, [zoomLevel]);
 
   return (
     <View style={styles.container}>
       <TopHeader title="Map" />
+      <View style={styles.controlsWrap}>
+        <View style={styles.inlineFilterHeader}>
+          <Text style={styles.controlsTitle}>Explore By City</Text>
+          {selectedLocation ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleClearFilter}
+              style={styles.resetPill}
+            >
+              <Text style={styles.resetPillText}>Clear</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
 
-      <View style={styles.search}>
-        <CustomSearchInput
-          value={searchText}
-          onChangeText={setSearchText}
-          rightIcon={<Image source={FilterIcon} />}
-          onPressRightIcon={() => setIsLocationModalVisible(true)}
-        />
-      </View>
-
-      <View style={styles.globe}>
-        <View style={styles.topSection}>
-          <TouchableOpacity
-            style={styles.dropdown}
-            activeOpacity={0.85}
-            onPress={() => setIsDropdownOpen((prev) => !prev)}
-          >
-            <Text style={styles.dropdownText}>{selectedRegion.label}</Text>
-            <DropdownIcon width={11} height={6} />
-          </TouchableOpacity>
-
-          {isDropdownOpen ? (
-            <View style={styles.dropdownMenu}>
-              <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.dropdownMenuContent}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.quickCitiesContent}
+        >
+          {QUICK_CITIES.map((city) => {
+            const isActive = selectedLocation?.id === city.id;
+            return (
+              <TouchableOpacity
+                key={city.id}
+                activeOpacity={0.85}
+                style={[styles.quickCityChip, isActive && styles.quickCityChipActive]}
+                onPress={() => handleQuickCityPress(city)}
               >
-                {MAP_REGIONS.map((region) => (
+                <Text
+                  style={[
+                    styles.quickCityChipText,
+                    isActive && styles.quickCityChipTextActive,
+                  ]}
+                >
+                  {city.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        <View style={styles.searchBlock}>
+          <View style={styles.citySearchWrap}>
+            <View style={styles.citySearchInputWrap}>
+              <SearchIcon width={18} height={18} />
+              <TextInput
+                value={searchText}
+                onChangeText={handleSearchTextChange}
+                placeholder="Search any city in the world"
+                placeholderTextColor="#66717B"
+                style={styles.citySearchInput}
+                onFocus={() => setShowSuggestions(true)}
+              />
+            </View>
+            <DropdownIcon width={11} height={6} />
+          </View>
+
+          {showSuggestions && searchSuggestions.length > 0 ? (
+            <View style={styles.suggestionsCard}>
+              <ScrollView
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                style={styles.suggestionsScroll}
+              >
+                {searchSuggestions.map((suggestion) => (
                   <TouchableOpacity
-                    key={region.id}
+                    key={suggestion.id}
                     activeOpacity={0.85}
-                    style={[
-                      styles.dropdownItem,
-                      region.id === selectedRegionId && styles.dropdownItemActive,
-                    ]}
-                    onPress={() => handleSelectRegion(region)}
+                    style={styles.suggestionRow}
+                    onPress={() => handleSuggestionPress(suggestion)}
                   >
-                    <Text
-                      style={[
-                        styles.dropdownItemText,
-                        region.id === selectedRegionId && styles.dropdownItemTextActive,
-                      ]}
-                    >
-                      {region.label}
-                    </Text>
+                    <Text style={styles.suggestionTitle}>{suggestion.label}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
             </View>
           ) : null}
         </View>
+      </View>
 
+      <View style={styles.mapSection}>
         <View style={styles.globeContainer}>
           {Config.MAPBOX_TOKEN && mapReady ? (
-            <Mapbox.MapView
-              style={styles.map}
-              styleURL={Mapbox.StyleURL.Light}
-              projection="globe"
-              logoEnabled={false}
-              attributionEnabled={false}
-              compassEnabled={false}
-              scaleBarEnabled={false}
-              rotateEnabled
-              pitchEnabled={false}
-              scrollEnabled
-              zoomEnabled
-              surfaceView={false}
-              onPress={() => setSelectedStopId(null)}
-            >
-              <Mapbox.Camera
-                ref={cameraRef}
-                centerCoordinate={INITIAL_CAMERA_CENTER}
-                zoomLevel={INITIAL_CAMERA_ZOOM}
-                pitch={0}
-                heading={0}
-              />
-              <Mapbox.Atmosphere style={atmosphereStyle} />
-              <Mapbox.ShapeSource id="prideStripes" shape={prideStripes}>
-                <Mapbox.FillLayer
-                  id="prideStripesFill"
-                  style={prideFillStyle}
-                  belowLayerID="water"
-                />
-              </Mapbox.ShapeSource>
-              <Mapbox.VectorSource
-                id="composite"
-                url="mapbox://mapbox.mapbox-streets-v8"
-                existing
+            <View style={styles.mapShell}>
+              <Mapbox.MapView
+                style={styles.map}
+                styleURL={Mapbox.StyleURL.Light}
+                projection="globe"
+                logoEnabled={false}
+                attributionEnabled={false}
+                compassEnabled={false}
+                scaleBarEnabled={false}
+                rotateEnabled
+                pitchEnabled={false}
+                scrollEnabled
+                zoomEnabled
+                surfaceView={false}
+                onPress={() => {
+                  setShowSuggestions(false);
+                  setSelectedEvent(null);
+                }}
               >
-                <Mapbox.FillLayer
-                  id="customWaterFill"
-                  sourceID="composite"
-                  sourceLayerID="water"
-                  style={waterFillStyle}
+                <Mapbox.Camera
+                  ref={cameraRef}
+                  centerCoordinate={INITIAL_CAMERA_CENTER}
+                  zoomLevel={INITIAL_CAMERA_ZOOM}
+                  pitch={0}
+                  heading={0}
                 />
-                <Mapbox.LineLayer
-                  id="customRoadCasing"
-                  sourceID="composite"
-                  sourceLayerID="road"
-                  style={roadCasingStyle}
-                />
-                <Mapbox.LineLayer
-                  id="customRoadFill"
-                  sourceID="composite"
-                  sourceLayerID="road"
-                  style={roadFillStyle}
-                  aboveLayerID="customRoadCasing"
-                />
-              </Mapbox.VectorSource>
-              <Mapbox.ShapeSource id="mapRouteLine" shape={routeLine}>
-                <Mapbox.LineLayer id="mapRouteLineLayer" style={routeLineLayerStyle} />
-              </Mapbox.ShapeSource>
-              {filteredStops.map((stop) => (
-                <Mapbox.MarkerView
-                  key={stop.id}
-                  id={stop.id}
-                  coordinate={[...stop.coordinate]}
-                  anchor={{ x: 0.5, y: 1 }}
+                <Mapbox.Atmosphere style={atmosphereStyle} />
+                <Mapbox.ShapeSource id="prideStripes" shape={prideStripes}>
+                  <Mapbox.FillLayer
+                    id="prideStripesFill"
+                    style={prideFillStyle}
+                    belowLayerID="water"
+                  />
+                </Mapbox.ShapeSource>
+                <Mapbox.VectorSource
+                  id="composite"
+                  url="mapbox://mapbox.mapbox-streets-v8"
+                  existing
                 >
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => handleMarkerPress(stop)}
-                    style={styles.markerTapArea}
+                  <Mapbox.FillLayer
+                    id="customWaterFill"
+                    sourceID="composite"
+                    sourceLayerID="water"
+                    style={waterFillStyle}
+                  />
+                  <Mapbox.LineLayer
+                    id="customRoadCasing"
+                    sourceID="composite"
+                    sourceLayerID="road"
+                    style={roadCasingStyle}
+                  />
+                  <Mapbox.LineLayer
+                    id="customRoadFill"
+                    sourceID="composite"
+                    sourceLayerID="road"
+                    style={roadFillStyle}
+                    aboveLayerID="customRoadCasing"
+                  />
+                </Mapbox.VectorSource>
+
+                {prideMarkers.map((event) => (
+                  <Mapbox.MarkerView
+                    key={`pride-${event.id}`}
+                    id={`pride-${event.id}`}
+                    coordinate={event.markerCoordinate}
+                    anchor={{ x: 0.5, y: 0.5 }}
                   >
-                    <BlueMapIcon width={42} height={42} />
-                  </TouchableOpacity>
-                </Mapbox.MarkerView>
-              ))}
-            </Mapbox.MapView>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => handleMarkerPress(event)}
+                      style={styles.markerTapArea}
+                    >
+                      <View style={[styles.markerBubble, styles.redMarkerBubble]}>
+                        <View style={styles.markerInnerDot} />
+                      </View>
+                    </TouchableOpacity>
+                  </Mapbox.MarkerView>
+                ))}
+
+                {podcastMarkers.map((event) => (
+                  <Mapbox.MarkerView
+                    key={`podcast-${event.id}`}
+                    id={`podcast-${event.id}`}
+                    coordinate={event.markerCoordinate}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => handleMarkerPress(event)}
+                      style={styles.markerTapArea}
+                    >
+                      <View style={[styles.markerBubble, styles.blueMarkerBubble]}>
+                        <View style={styles.markerInnerDot} />
+                      </View>
+                    </TouchableOpacity>
+                  </Mapbox.MarkerView>
+                ))}
+              </Mapbox.MapView>
+
+              <View style={[styles.zoomControls]}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[styles.zoomButton, styles.zoomButtonTop]}
+                  onPress={() => handleZoom('in')}
+                >
+                  <Text style={styles.zoomButtonText}>+</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.zoomButton}
+                  onPress={() => handleZoom('out')}
+                >
+                  <Text style={styles.zoomButtonText}>-</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           ) : (
             <View style={styles.mapFallback}>
               <Text style={styles.mapFallbackText}>
@@ -550,38 +646,27 @@ const Map = () => {
             </View>
           )}
         </View>
+      </View>
 
-        <View style={styles.bottomPanel}>
-          <View style={styles.hintCard}>
-            <Text style={styles.hintTitle}>Explore {selectedRegion.label}</Text>
-            <Text style={styles.hintSubtitle}>
-              Tap a pin to zoom into that place. Use the dropdown to switch cities.
-            </Text>
-          </View>
-
-          <View style={styles.bottomActions}>
-            <TouchableOpacity
-              style={styles.secondaryButton}
-              activeOpacity={0.85}
-              onPress={() => focusRegion(selectedRegion)}
-            >
-              <Text style={styles.secondaryButtonText}>Focus Region</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.primaryButton}
-              activeOpacity={0.85}
-              onPress={handleResetView}
-            >
-              <Text style={styles.primaryButtonText}>Back to Globe</Text>
-            </TouchableOpacity>
-          </View>
+      <View style={[styles.legendCard]}>
+        {/* <Text style={styles.legendTitle}>Map Legend</Text> */}
+        <View style={styles.legendRow}>
+          <View style={[styles.legendDot, styles.legendDotRed]} />
+          <Text style={styles.legendText}>Red markers show Pride events.</Text>
+        </View>
+        <View style={styles.legendRow}>
+          <View style={[styles.legendDot, styles.legendDotBlue]} />
+          <Text style={styles.legendText}>
+            Blue markers show Podcast events. 
+          </Text>
         </View>
       </View>
 
-      <LocationModal
-        visible={isLocationModalVisible}
-        onClose={() => setIsLocationModalVisible(false)}
-        onNext={handleLocationSelect}
+      <EventDetailModal
+        visible={Boolean(selectedEvent)}
+        event={selectedEvent}
+        onClose={() => setSelectedEvent(null)}
+        variant="compact"
       />
     </View>
   );
@@ -594,153 +679,247 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: BG_MATCH,
   },
-  search: {
-    marginHorizontal: 24,
-  },
-  globe: {
+  mapSection: {
     flex: 1,
   },
-  topSection: {
-    marginTop: 20,
-    paddingHorizontal: 24,
-    alignItems: 'flex-start',
-    zIndex: 10,
+  controlsWrap: {
+    marginHorizontal: 20,
+    marginTop: 10,
+    zIndex: 50,
+    elevation: 20,
   },
-  dropdown: {
+  inlineFilterHeader: {
     flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 16,
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.WHITE,
-    height: 32,
-    minWidth: 150,
-    borderRadius: 16,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
-  dropdownText: {
-    fontSize: 12,
-    color: COLORS.TEXT_PRIMARY,
+  controlsTitle: {
+    color: COLORS.WHITE,
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  resetPill: {
+    height: 32,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  resetPillText: {
+    color: COLORS.WHITE,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  quickCitiesContent: {
+    paddingRight: 8,
+    gap: 10,
+  },
+  quickCityChip: {
+    height: 38,
+    paddingHorizontal: 16,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickCityChipActive: {
+    backgroundColor: COLORS.WHITE,
+    borderColor: COLORS.WHITE,
+  },
+  quickCityChipText: {
+    color: COLORS.WHITE,
+    fontSize: 13,
     fontFamily: FONT_FAMILY.InterTight_Medium,
   },
-  dropdownMenu: {
-    marginTop: 10,
-    width: 184,
-    maxHeight: 176,
+  quickCityChipTextActive: {
+    color: COLORS.PRIMARY || '#1888E7',
+  },
+  citySearchWrap: {
+    height: 52,
+    borderRadius: 26,
     backgroundColor: COLORS.WHITE,
-    borderRadius: 18,
-    paddingVertical: 8,
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#0B2A45',
     shadowOpacity: 0.12,
-    shadowRadius: 10,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
   },
-  dropdownMenuContent: {
-    paddingHorizontal: 8,
+  searchBlock: {
+    marginTop: 14,
+    position: 'relative',
+    zIndex: 60,
   },
-  dropdownItem: {
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  citySearchInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
-  dropdownItemActive: {
-    backgroundColor: '#E7F4FF',
-  },
-  dropdownItemText: {
+  citySearchInput: {
+    flex: 1,
     color: COLORS.TEXT_PRIMARY,
+    fontSize: 15,
     fontFamily: FONT_FAMILY.InterTight_Regular,
-    fontSize: 13,
+    paddingVertical: 0,
   },
-  dropdownItemTextActive: {
-    color: COLORS.BUTTON_COLOR,
+  suggestionsCard: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    borderRadius: 22,
+    backgroundColor: COLORS.WHITE,
+    paddingVertical: 8,
+    shadowColor: '#0B2A45',
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 7,
+    maxHeight: 220,
+    zIndex: 70,
+  },
+  suggestionsScroll: {
+    maxHeight: 220,
+  },
+  suggestionRow: {
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EFF3F7',
+  },
+  suggestionTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 15,
     fontFamily: FONT_FAMILY.InterTight_Medium,
   },
   globeContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
     overflow: 'hidden',
-    backgroundColor: BG_MATCH,
+  },
+  mapShell: {
+    flex: 1,
   },
   map: {
-    width: '120%',
-    height: '100%',
+    flex: 1,
+  },
+  zoomControls: {
+    position: 'absolute',
+    right: 18,
+    bottom: 40,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    shadowColor: '#0A1B2A',
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  zoomButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  zoomButtonTop: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E6EDF3',
+  },
+  zoomButtonText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 24,
+    lineHeight: 28,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  markerTapArea: {
+    width: 34,
+    height: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  markerBubble: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 3,
+    borderColor: COLORS.WHITE,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#0A1B2A',
+    shadowOpacity: 0.24,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 7,
+  },
+  redMarkerBubble: {
+    backgroundColor: '#F04452',
+  },
+  blueMarkerBubble: {
+    backgroundColor: '#1B84FF',
+  },
+  markerInnerDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: COLORS.WHITE,
   },
   mapFallback: {
     flex: 1,
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   mapFallbackText: {
-    color: COLORS.TEXT_PRIMARY,
-    fontFamily: FONT_FAMILY.InterTight_Medium,
-    fontSize: 13,
-  },
-  markerTapArea: {
-    width: 52,
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bottomPanel: {
-    paddingHorizontal: 24,
-    paddingBottom: 22,
-    gap: 14,
-  },
-  hintCard: {
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    borderRadius: 24,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-  },
-  hintTitle: {
-    color: COLORS.TEXT_PRIMARY,
-    fontFamily: FONT_FAMILY.Poppins_SemiBold,
-    fontSize: 18,
-  },
-  hintSubtitle: {
-    marginTop: 4,
-    color: COLORS.TEXT_SECONDARY,
-    fontFamily: FONT_FAMILY.InterTight_Regular,
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  bottomActions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  secondaryButton: {
-    flex: 1,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  secondaryButtonText: {
-    color: COLORS.TEXT_PRIMARY,
-    fontFamily: FONT_FAMILY.InterTight_Medium,
-    fontSize: 14,
-  },
-  primaryButton: {
-    flex: 1,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: COLORS.BUTTON_COLOR,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonText: {
     color: COLORS.WHITE,
+    fontSize: 16,
     fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  legendCard: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    bottom: -10,
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    borderRadius: 24,
+    backgroundColor: 'transparent',
+  },
+  legendTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 18,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    marginBottom: 12,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  legendDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginTop: 3,
+    marginRight: 10,
+  },
+  legendDotRed: {
+    backgroundColor: '#F04452',
+  },
+  legendDotBlue: {
+    backgroundColor: '#1B84FF',
+  },
+  legendText: {
+    flex: 1,
+    color: '#56616C',
     fontSize: 14,
+    lineHeight: 20,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
   },
 });

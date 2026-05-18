@@ -18,13 +18,12 @@ import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 import { CrossIcon } from "../../constants/icons";
 import { CameraIcon, DoneModalIcon } from "../../constants/images";
-import { showSuccess } from "../common/AppToast";
-
 type Props = {
   visible: boolean;
   title?: string;
+  successPoints?: number;
   onClose: () => void;
-  onScanSuccess: (imageUri: string) => void | Promise<void>;
+  onScanSuccess: (imageUri: string) => boolean | Promise<boolean>;
 };
 
 type StepType = "scan" | "confirm" | "success";
@@ -32,6 +31,7 @@ type StepType = "scan" | "confirm" | "success";
 const ScanVerifyModal: React.FC<Props> = ({
   visible,
   title,
+  successPoints = 10,
   onClose,
   onScanSuccess,
 }) => {
@@ -197,20 +197,30 @@ const ScanVerifyModal: React.FC<Props> = ({
       setIsCapturing(false);
     }
   };
-  const handleConfirmYes = () => setStep("success");
+  const handleConfirmYes = async () => {
+    if (!capturedImage?.uri) {
+      return;
+    }
+
+    try {
+      setIsCapturing(true);
+      const isVerified = await onScanSuccess(capturedImage.uri);
+      if (!isVerified) {
+        return;
+      }
+      setStep("success");
+    } finally {
+      setIsCapturing(false);
+    }
+  };
   const handleConfirmNo = () => {
     setCapturedImage(null);
     setStep("scan");
   };
 
   const handleBackToTour = () => {
-    if (!capturedImage?.uri) {
-      return;
-    }
     setStep("scan");
-    onScanSuccess(capturedImage.uri);
     onClose();
-    showSuccess("Visit confirmed successfully");
   };
 
   return (
@@ -314,7 +324,9 @@ const ScanVerifyModal: React.FC<Props> = ({
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.scanBtn, isCapturing && styles.disabledBtn]}
-                onPress={handleConfirmYes}
+                onPress={() => {
+                  handleConfirmYes().catch(() => {});
+                }}
                 disabled={isCapturing}
               >
                 {isCapturing ? (
@@ -340,7 +352,7 @@ const ScanVerifyModal: React.FC<Props> = ({
             </TouchableOpacity>
             <Text style={styles.title}>Visit Confirmed!</Text>
             <Text style={styles.description}>
-              You earned +10 points for this location! Keep exploring to unlock more rewards and badges.
+              You earned +{successPoints} points for this location! Keep exploring to unlock more rewards and badges.
             </Text>
             <TouchableOpacity style={styles.fullWidthBtn} onPress={handleBackToTour}>
               <Text style={styles.scanText}>Back to Tour</Text>

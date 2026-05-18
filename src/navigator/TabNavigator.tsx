@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { View, StyleSheet, Text, Keyboard } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { TabParamList } from "../types/types";
 import { COLORS } from "../constants/colors";
 
@@ -43,23 +43,6 @@ const TAB_ICONS = {
 };
 
 const TabNavigator: React.FC = () => {
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", () => {
-      setKeyboardVisible(true);
-    });
-
-    const hide = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardVisible(false);
-    });
-
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
-
   return (
     <Tab.Navigator
       initialRouteName="MyTour"
@@ -69,16 +52,8 @@ const TabNavigator: React.FC = () => {
 
         return {
           headerShown: false,
-          tabBarBackground: () => (
-            <View style={{backgroundColor:'red'}} />
-          ),
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              display: keyboardVisible ? "none" : "flex",
-            },
-          ],
-
+          tabBarHideOnKeyboard: false,
+          tabBarStyle: styles.tabBar,
           tabBarActiveTintColor: COLORS.BUTTON_COLOR,
           tabBarInactiveTintColor: COLORS.INACTIVE_COLOR,
           tabBarRippleColor: "transparent",

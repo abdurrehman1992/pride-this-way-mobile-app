@@ -1,5 +1,6 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import Geolocation from "@react-native-community/geolocation";
+import Config from "react-native-config";
 
 export const requestLocationPermission = async (): Promise<boolean> => {
     try {
@@ -59,6 +60,32 @@ export const getAddressFromCoords = async (
 
     const getFallbackAddress = async () => {
         try {
+            if (Config.MAPBOX_TOKEN) {
+                const mapboxUrl = `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lon}&latitude=${lat}&access_token=${Config.MAPBOX_TOKEN}&language=en&limit=1`;
+                const mapboxResponse = await fetch(mapboxUrl);
+                if (mapboxResponse.ok) {
+                    const mapboxData = await mapboxResponse.json();
+                    const feature = mapboxData?.features?.[0];
+                    const context = feature?.properties?.context || {};
+                    const street = [
+                        feature?.properties?.address,
+                        feature?.properties?.street,
+                    ]
+                        .filter(Boolean)
+                        .join(" ");
+                    const parts = [
+                        street || feature?.properties?.name,
+                        context?.place?.name,
+                        context?.region?.name,
+                        context?.country?.name,
+                    ].filter(Boolean);
+
+                    if (parts.length) {
+                        return parts.join(", ");
+                    }
+                }
+            }
+
             const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`;
 
             const response = await fetch(url);

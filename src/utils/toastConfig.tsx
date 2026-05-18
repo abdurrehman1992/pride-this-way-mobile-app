@@ -32,8 +32,9 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 12,
     alignSelf: "center",
-    marginTop: 10,
+    marginBottom: 8,
     elevation: 3,
+    borderWidth: 1,
   },
 
   title: {
@@ -50,14 +51,17 @@ const styles = StyleSheet.create({
   },
 
   success: {
-    backgroundColor: COLORS.BUTTON_COLOR,
+    backgroundColor: "rgba(24, 116, 233, 0.68)",
+    borderColor: "rgba(255,255,255,0.24)",
   },
 
   error: {
-    backgroundColor: COLORS.LOGOUT_TEXT,
+    backgroundColor: "rgba(240, 68, 56, 0.68)",
+    borderColor: "rgba(255,255,255,0.24)",
   },
 
   info: {
-    backgroundColor: COLORS.PILL_COLOR,
+    backgroundColor: "rgba(15, 23, 42, 0.62)",
+    borderColor: "rgba(255,255,255,0.18)",
   },
 });

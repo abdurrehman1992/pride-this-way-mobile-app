@@ -22,7 +22,6 @@ import CustomInput from "../../components/common/CustomInput";
 import CustomButton from "../../components/common/CustomButton";
 import {
     validateName,
-    validateEmail,
     validatePhone
 } from "../../utils/validation";
 import { useNavigation } from "@react-navigation/native";
@@ -42,7 +41,6 @@ const EditProfile = () => {
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState({
         name: "",
-        email: "",
         phone: ""
     });
 
@@ -66,14 +64,6 @@ const EditProfile = () => {
         }));
     };
 
-    const handleEmailChange = (text: string) => {
-        setEmail(text);
-        setErrors(prev => ({
-            ...prev,
-            email: validateEmail(text)
-        }));
-    };
-
     const handlePhoneChange = (text: string) => {
         setPhone(text);
         setErrors(prev => ({
@@ -87,7 +77,6 @@ const EditProfile = () => {
             email.trim() !== "" &&
             phone.trim() !== "" &&
             errors.name === "" &&
-            errors.email === "" &&
             errors.phone === ""
         );
     }, [fullName, email, phone, errors]);
@@ -166,11 +155,11 @@ const EditProfile = () => {
 
                         <CustomInput
                             label="Email Address"
-                            placeholder="Enter Email Address"
+                            placeholder="Email Address"
                             value={email}
-                            onChangeText={handleEmailChange}
+                            onChangeText={() => {}}
                             keyboardType="email-address"
-                            error={errors.email}
+                            editable={false}
                         />
 
                         <CustomInput

@@ -232,20 +232,13 @@ const Signup: React.FC = () => {
               error={errors.confirmPassword}
             />
 
-            {loading ? (
-              <ActivityIndicator
-                size="large"
-                color={COLORS.BUTTON_COLOR}
-                style={styles.loader}
-              />
-            ) : (
-              <CustomButton
-                title="Sign Up"
-                Icon={SinupIcon}
-                onPress={handleSignup}
-                disabled={!isFormValid}
-              />
-            )}
+            <CustomButton
+              title="Sign Up"
+              Icon={SinupIcon}
+              onPress={handleSignup}
+              disabled={!isFormValid}
+              loading={loading}
+            />
 
             <AuthBottomNavigation
               text="Already have an account?"
@@ -300,9 +293,6 @@ const styles = StyleSheet.create({
   },
   form: {
     paddingHorizontal: 24,
-  },
-  loader: {
-    marginVertical: 20,
   },
   signInText: {
     fontSize: FONT_SIZE.TEXT,

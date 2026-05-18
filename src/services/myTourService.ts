@@ -107,7 +107,8 @@ export type SavedTour = {
   route_id: string;
   city_name?: string;
   country?: string;
-  status: string;
+  status: 'active' | 'completed' | 'paused' | 'scheduled';
+  scheduledDate?: string | null;
   isEdited: boolean;
   currentStopIndex: number;
   totalPoints: number;
@@ -143,6 +144,7 @@ const EVENTS_COLLECTION = 'events';
 const TOURS_COLLECTION = 'tours';
 const USERS_COLLECTION = 'users';
 const FAVORITES_SUBCOLLECTION = 'favorites';
+const USER_ROUTES_COLLECTION = 'users_routes';
 
 const toArray = <T,>(value: unknown): T[] => {
   if (!Array.isArray(value)) {
@@ -228,7 +230,8 @@ const parseSavedTour = (
   route_id: data?.route_id || '',
   city_name: data?.city_name || '',
   country: data?.country || '',
-  status: data?.status || 'active',
+  status: (data?.status as SavedTour['status']) || 'active',
+  scheduledDate: data?.scheduledDate || null,
   isEdited: Boolean(data?.isEdited),
   currentStopIndex: Number(data?.currentStopIndex || 0),
   totalPoints: Number(data?.totalPoints || 0),
@@ -339,6 +342,19 @@ export const fetchTourTags = async (): Promise<FirebaseTag[]> => {
     }))
     .filter((tag) => tag.name)
     .sort((a, b) => a.name.localeCompare(b.name));
+};
+
+export const fetchMapEvents = async (): Promise<FirebaseEvent[]> => {
+  const snapshot = await firestore().collection(EVENTS_COLLECTION).get();
+
+  return snapshot.docs
+    .map((doc) => parseEvent(doc.id, doc.data()))
+    .filter((event) => event.isActive !== false)
+    .filter(
+      (event) =>
+        typeof event.coordinates?.latitude === 'number' &&
+        typeof event.coordinates?.longitude === 'number'
+    );
 };
 
 export const searchLocationSuggestions = async (
@@ -644,6 +660,8 @@ export const fetchPlacesByIds = async (placeIds: string[]) => {
 export const saveUserTour = async ({
   tourId,
   userId,
+  userName,
+  userEmail,
   route,
   title,
   places,
@@ -654,9 +672,12 @@ export const saveUserTour = async ({
   status,
   startedAt,
   completedAt,
+  scheduledDate,
 }: {
   tourId?: string | null;
   userId: string;
+  userName?: string;
+  userEmail?: string;
   route: FirebaseRoute;
   title: string;
   places: FirebasePlace[];
@@ -673,9 +694,10 @@ export const saveUserTour = async ({
   >;
   currentStopIndex: number;
   isEdited: boolean;
-  status: 'active' | 'completed';
+  status: 'active' | 'completed' | 'paused' | 'scheduled';
   startedAt?: string;
   completedAt?: string | null;
+  scheduledDate?: string | null;
 }) => {
   const now = new Date().toISOString();
   const allPlaces = places.map((place, index) => {
@@ -694,6 +716,13 @@ export const saveUserTour = async ({
     (sum, item) => sum + Number(item.pointsEarned || 0),
     0
   );
+  const visitedStops = allPlaces.filter((item) => item.visited).length;
+  const visitedPlaceIds = allPlaces
+    .filter((item) => item.visited)
+    .map((item) => item.place_id);
+  const pendingPlaceIds = allPlaces
+    .filter((item) => !item.visited)
+    .map((item) => item.place_id);
 
   const payload = {
     title: title.trim() || route.name,
@@ -707,22 +736,54 @@ export const saveUserTour = async ({
     totalPoints,
     startedAt: startedAt || now,
     completedAt: completedAt || null,
+    scheduledDate: scheduledDate || null,
     all_places: allPlaces,
     event_ids: events.map((event) => event.id),
     updatedAt: now,
     createdAt: now,
   };
 
+  let savedId: string;
   if (tourId) {
     await firestore()
       .collection(TOURS_COLLECTION)
       .doc(tourId)
       .set(payload, { merge: true });
-    return tourId;
+    savedId = tourId;
+  } else {
+    const docRef = await firestore().collection(TOURS_COLLECTION).add(payload);
+    savedId = docRef.id;
   }
 
-  const docRef = await firestore().collection(TOURS_COLLECTION).add(payload);
-  return docRef.id;
+  // Sync to users_routes collection (admin/analytics view of all user tours)
+  await firestore()
+    .collection(USER_ROUTES_COLLECTION)
+    .doc(savedId)
+    .set({
+      user_id: userId,
+      user_name: userName || '',
+      user_email: userEmail || '',
+      tour_id: savedId,
+      route_id: route.id,
+      tour_title: title.trim() || route.name,
+      city_name: route.city_name || '',
+      country: route.country || '',
+      status,
+      total_stops: places.length,
+      visited_stops: visitedStops,
+      completed: status === 'completed',
+      all_places: allPlaces,
+      visited_place_ids: visitedPlaceIds,
+      pending_place_ids: pendingPlaceIds,
+      totalPoints,
+      startedAt: startedAt || now,
+      completedAt: completedAt || null,
+      scheduledDate: scheduledDate || null,
+      updatedAt: now,
+      createdAt: now,
+    }, { merge: true });
+
+  return savedId;
 };
 
 export const fetchLatestUserTourForRoute = async ({
@@ -788,7 +849,10 @@ export const deleteUserTour = async (tourId?: string | null) => {
     return;
   }
 
-  await firestore().collection(TOURS_COLLECTION).doc(tourId).delete();
+  await Promise.all([
+    firestore().collection(TOURS_COLLECTION).doc(tourId).delete(),
+    firestore().collection(USER_ROUTES_COLLECTION).doc(tourId).delete(),
+  ]);
 };
 
 export const fetchRewardsSummary = async (

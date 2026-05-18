@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Image,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -29,30 +30,78 @@ import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { fetchRewardsSummary } from '../../services/myTourService';
 import { RootState } from '../../Redux/store';
 
+const STATIC_REWARDS = {
+  totalPoints: 1250,
+  tours: [
+    {
+      id: 'static-tour-1',
+      title: 'Kansas City Explorer',
+      date: 'May 06, 2026',
+      points: 75,
+      totalLocations: 5,
+      places: [
+        { id: 's1', name: 'Clifton Beach', points: 15, visited: true },
+        { id: 's2', name: 'Boat Basin', points: 15, visited: true },
+        { id: 's3', name: 'Frere Hall', points: 15, visited: true },
+        { id: 's4', name: 'Dolmen Mall', points: 15, visited: true },
+        { id: 's5', name: 'Defense Block H', points: 15, visited: true },
+      ],
+    },
+    {
+      id: 'static-tour-2',
+      title: 'Austin City Explorer',
+      date: 'May 02, 2026',
+      points: 45,
+      totalLocations: 3,
+      places: [
+        { id: 's6', name: 'Lost Road', points: 15, visited: true },
+        { id: 's7', name: 'Bryant Park', points: 15, visited: true },
+        { id: 's8', name: 'Country Crossing', points: 15, visited: true },
+      ],
+    },
+  ],
+};
+
 const Rewards = () => {
   const userId = useSelector((state: RootState) => state.auth.user?.id);
   const [showAll, setShowAll] = useState(false);
   const [totalPoints, setTotalPoints] = useState(0);
   const [rewards, setRewards] = useState<any[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadRewards = useCallback(async () => {
+    const summary = await fetchRewardsSummary(userId);
+    const source =
+      summary.tours.length > 0 ? summary : STATIC_REWARDS;
+
+    setTotalPoints(source.totalPoints);
+    setRewards(
+      source.tours.map((tour, index) => ({
+        id: tour.id,
+        name: tour.title,
+        points: tour.points,
+        totalLocations: tour.totalLocations,
+        date: tour.date ? new Date(tour.date).toDateString().slice(4) : 'Active',
+        isOpen: index === 0,
+        places: tour.places,
+      }))
+    );
+  }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchRewardsSummary(userId).then((summary) => {
-        setTotalPoints(summary.totalPoints);
-        setRewards(
-          summary.tours.map((tour, index) => ({
-            id: tour.id,
-            name: tour.title,
-            points: tour.points,
-            totalLocations: tour.totalLocations,
-            date: tour.date ? new Date(tour.date).toDateString().slice(4) : 'Active',
-            isOpen: index === 0,
-            places: tour.places,
-          }))
-        );
-      });
-    }, [userId])
+      loadRewards().catch(() => {});
+    }, [loadRewards])
   );
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadRewards();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadRewards]);
 
   const toggleCard = (id: number) => {
     setRewards(prev =>
@@ -66,7 +115,16 @@ const Rewards = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={COLORS.BUTTON_COLOR}
+          />
+        }
+      >
         <View style={styles.up}>
           <ForgeTopHeader title="Rewards" />
         </View>

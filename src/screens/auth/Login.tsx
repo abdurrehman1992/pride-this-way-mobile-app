@@ -6,7 +6,6 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  ActivityIndicator,
   Keyboard,
 } from "react-native";
 
@@ -204,20 +203,13 @@ const Login: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            {loading ? (
-              <ActivityIndicator
-                size="large"
-                color={COLORS.BUTTON_COLOR}
-                style={styles.loader}
-              />
-            ) : (
-              <CustomButton
-                title="Sign In"
-                Icon={LoginIcon}
-                onPress={handleLogin}
-                disabled={!isFormValid}
-              />
-            )}
+            <CustomButton
+              title="Sign In"
+              Icon={LoginIcon}
+              onPress={handleLogin}
+              disabled={!isFormValid}
+              loading={loading}
+            />
 
             <AuthBottomNavigation
               text={"Don't have an account?"}
@@ -268,9 +260,6 @@ const styles = StyleSheet.create({
   },
   form: {
     paddingHorizontal: 24,
-  },
-  loader: {
-    marginVertical: 20,
   },
   row: {
     flexDirection: "row",

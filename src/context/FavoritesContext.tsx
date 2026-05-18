@@ -44,6 +44,26 @@ const FavoritesContext = createContext<FavoritesContextType | null>(null);
 const USERS_COLLECTION = "users";
 const FAVORITES_SUBCOLLECTION = "favorites";
 
+const removeUndefinedDeep = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => removeUndefinedDeep(item))
+      .filter((item) => item !== undefined);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.entries(value).reduce<Record<string, any>>((acc, [key, item]) => {
+      const cleaned = removeUndefinedDeep(item);
+      if (cleaned !== undefined) {
+        acc[key] = cleaned;
+      }
+      return acc;
+    }, {});
+  }
+
+  return value === undefined ? undefined : value;
+};
+
 export const FavoritesProvider = ({ children }: any) => {
   const userId = useSelector((state: RootState) => state.auth.user?.id);
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
@@ -94,19 +114,18 @@ export const FavoritesProvider = ({ children }: any) => {
         return;
       }
 
+      const payload = removeUndefinedDeep({
+        ...item,
+        createdAt: item.createdAt || new Date().toISOString(),
+        user_id: userId,
+      });
+
       await firestore()
         .collection(USERS_COLLECTION)
         .doc(userId)
         .collection(FAVORITES_SUBCOLLECTION)
         .doc(item.id)
-        .set(
-          {
-            ...item,
-            createdAt: item.createdAt || new Date().toISOString(),
-            user_id: userId,
-          },
-          { merge: true }
-        );
+        .set(payload, { merge: true });
     },
     [userId]
   );

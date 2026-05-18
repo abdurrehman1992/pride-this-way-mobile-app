@@ -23,7 +23,6 @@ import {
 } from "../../utils/location";
 
 import {
-    ModalCloseIcon,
     SelectLocationInput,
     SelectedLocationIcon,
     CurrentLocationIcon,
@@ -228,9 +227,7 @@ const LocationModal: React.FC<Props> = ({
                     ]}
                 >
                     <View {...panResponder.panHandlers} style={styles.dragHandle}>
-                        <TouchableOpacity onPress={closeWithAnimation}>
-                            <ModalCloseIcon width={38} height={12} />
-                        </TouchableOpacity>
+                        <View style={styles.handleBar} />
                     </View>
 
                     <Text style={[styles.title, isKeyboardVisible && styles.titleKeyboard]}>
@@ -265,6 +262,22 @@ const LocationModal: React.FC<Props> = ({
                             styles.scrollContentBottom,
                         ]}
                     >
+                        <TouchableOpacity
+                            style={styles.currentLocation}
+                            onPress={getCurrentLocation}
+                            disabled={loadingLocation}
+                        >
+                            {loadingLocation ? (
+                                <ActivityIndicator color={COLORS.BUTTON_COLOR} />
+                            ) : (
+                                <CurrentLocationIcon width={36} height={36} />
+                            )}
+
+                            <Text style={styles.secondaryText}>
+                                Use My Current Location
+                            </Text>
+                        </TouchableOpacity>
+
                         {loadingSuggestions ? (
                             <View style={styles.emptyState}>
                                 <ActivityIndicator color={COLORS.BUTTON_COLOR} />
@@ -281,44 +294,12 @@ const LocationModal: React.FC<Props> = ({
                                         <Text style={styles.locationText}>{item}</Text>
                                     </TouchableOpacity>
                                 ))}
-
-                                <TouchableOpacity
-                                    style={styles.currentLocation}
-                                    onPress={getCurrentLocation}
-                                    disabled={loadingLocation}
-                                >
-                                    {loadingLocation ? (
-                                        <ActivityIndicator color={COLORS.BUTTON_COLOR} />
-                                    ) : (
-                                        <CurrentLocationIcon width={36} height={36} />
-                                    )}
-
-                                    <Text style={styles.secondaryText}>
-                                        Use My Current Location
-                                    </Text>
-                                </TouchableOpacity>
                             </>
                         ) : (
                             <View style={styles.emptyState}>
                                 <Text style={styles.emptyText}>
                                     No location found
                                 </Text>
-
-                                <TouchableOpacity
-                                    style={styles.currentLocation}
-                                    onPress={getCurrentLocation}
-                                    disabled={loadingLocation}
-                                >
-                                    {loadingLocation ? (
-                                        <ActivityIndicator color={COLORS.BUTTON_COLOR} />
-                                    ) : (
-                                        <CurrentLocationIcon width={36} height={36} />
-                                    )}
-
-                                    <Text style={styles.secondaryText}>
-                                        Use My Current Location
-                                    </Text>
-                                </TouchableOpacity>
                             </View>
                         )}
                     </ScrollView>
@@ -384,11 +365,19 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         paddingHorizontal: 10,
         gap: 10,
-        marginTop: 10,
+        marginTop: 8,
+        marginBottom: 14,
     },
     dragHandle: {
         alignItems: "center",
         paddingTop: 12,
+        paddingBottom: 6,
+    },
+    handleBar: {
+        width: 48,
+        height: 6,
+        borderRadius: 999,
+        backgroundColor: "#C9C9C9",
     },
     title: {
         fontSize: FONT_SIZE.LARGE_TEXT,
@@ -445,7 +434,7 @@ const styles = StyleSheet.create({
     },
     emptyState: {
         flex: 1,
-        justifyContent: 'space-between',
+        justifyContent: 'center',
         paddingVertical: 20,
     },
     emptyText: {
