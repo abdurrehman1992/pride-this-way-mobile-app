@@ -9,23 +9,74 @@ export const validateName = (name: string) => {
     return "";
 };
 export const validateEmail = (email: string) => {
-    const trimmedEmail = email.trim();
-    if (!trimmedEmail) return "Email is required";
-    const regex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
-    if (!regex.test(trimmedEmail)) return "Enter a valid email address";
-    const [localPart, domain] = trimmedEmail.toLowerCase().split('@');
-    const isRepeated = /^(.)\1{2,}$/.test(localPart); 
-    const commonFakes = ['abc', '123', 'test', 'user', 'admin', 'qwerty'];
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!trimmedEmail) {
+        return "Email is required";
+    }
+
+    const regex =
+        /^[a-z0-9]+([._%+-]?[a-z0-9]+)*@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/;
+
+    if (!regex.test(trimmedEmail)) {
+        return "Enter a valid email address";
+    }
+    if (trimmedEmail.includes("..")) {
+        return "Email cannot contain consecutive dots";
+    }
+    const [localPart, domain] = trimmedEmail.split("@");
+    const isRepeated = /^(.)\1{2,}$/.test(localPart);
+
+    const commonFakes = [
+        "abc",
+        "123",
+        "test",
+        "user",
+        "admin",
+        "qwerty",
+    ];
+
     if (isRepeated || commonFakes.includes(localPart)) {
-        return "Please enter a proper email, not a random sequence";
+        return "Please enter a proper email address";
     }
     const forbiddenDomains = [
-        'test.com', 'example.com', 'mailinator.com', 'tempmail.org', 
-        'abc.com', 'aaa.com', 'xyz.com'
+        "test.com",
+        "example.com",
+        "mailinator.com",
+        "tempmail.org",
+        "abc.com",
+        "aaa.com",
+        "xyz.com",
     ];
+
     if (forbiddenDomains.includes(domain)) {
         return "Please use a permanent email address";
     }
+    const validTlds = [
+        "com",
+        "org",
+        "net",
+        "edu",
+        "gov",
+        "io",
+        "co",
+        "pk",
+        "uk",
+        "us",
+        "ca",
+        "au",
+        "de",
+        "fr",
+        "jp",
+        "in",
+    ];
+
+    const tld = domain.split(".").pop();
+
+    if (!tld || !validTlds.includes(tld)) {
+        return "Enter a valid email domain";
+    }
+
     return "";
 };
 export const validateLoginEmail = (email: string) => {
@@ -79,7 +130,7 @@ export const validateConfirmPassword = (
     return "";
 };
 export const validateLoginPassword = (password: string): string => {
-  if (!password) return "Password is required";
-//   if (password.length < 6) return "Password must be at least 6 characters";
-  return "";
+    if (!password) return "Password is required";
+    //   if (password.length < 6) return "Password must be at least 6 characters";
+    return "";
 };

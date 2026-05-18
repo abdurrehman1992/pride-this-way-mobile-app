@@ -23,6 +23,7 @@ import {
 } from "../../utils/location";
 
 import {
+    ModalCloseIcon,
     SelectLocationInput,
     SelectedLocationIcon,
     CurrentLocationIcon,
@@ -227,7 +228,9 @@ const LocationModal: React.FC<Props> = ({
                     ]}
                 >
                     <View {...panResponder.panHandlers} style={styles.dragHandle}>
-                        <View style={styles.handleBar} />
+                        <TouchableOpacity onPress={closeWithAnimation}>
+                            <ModalCloseIcon width={38} height={12} />
+                        </TouchableOpacity>
                     </View>
 
                     <Text style={[styles.title, isKeyboardVisible && styles.titleKeyboard]}>
@@ -249,7 +252,40 @@ const LocationModal: React.FC<Props> = ({
                             }}
                             placeholder="Search location..."
                         />
+                        {!!search && (
+                            <TouchableOpacity
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                    if (onSearchChange) {
+                                        onSearchChange("");
+                                    } else {
+                                        setInternalSearch("");
+                                    }
+
+                                    setSelected("");
+                                }}
+                            >
+                                <View style={styles.clearButton}>
+                                    <Text style={styles.clearText}>✕</Text>
+                                </View>
+                            </TouchableOpacity>
+                        )}
                     </View>
+                    <TouchableOpacity
+                        style={styles.currentLocation}
+                        onPress={getCurrentLocation}
+                        disabled={loadingLocation}
+                    >
+                        {loadingLocation ? (
+                            <ActivityIndicator color={COLORS.BUTTON_COLOR} />
+                        ) : (
+                            <CurrentLocationIcon width={36} height={36} />
+                        )}
+
+                        <Text style={styles.secondaryText}>
+                            Use My Current Location
+                        </Text>
+                    </TouchableOpacity>
 
                     <ScrollView
                         style={styles.locationList}
@@ -262,22 +298,6 @@ const LocationModal: React.FC<Props> = ({
                             styles.scrollContentBottom,
                         ]}
                     >
-                        <TouchableOpacity
-                            style={styles.currentLocation}
-                            onPress={getCurrentLocation}
-                            disabled={loadingLocation}
-                        >
-                            {loadingLocation ? (
-                                <ActivityIndicator color={COLORS.BUTTON_COLOR} />
-                            ) : (
-                                <CurrentLocationIcon width={36} height={36} />
-                            )}
-
-                            <Text style={styles.secondaryText}>
-                                Use My Current Location
-                            </Text>
-                        </TouchableOpacity>
-
                         {loadingSuggestions ? (
                             <View style={styles.emptyState}>
                                 <ActivityIndicator color={COLORS.BUTTON_COLOR} />
@@ -304,7 +324,6 @@ const LocationModal: React.FC<Props> = ({
                         )}
                     </ScrollView>
 
-                    {/* BUTTON */}
                     <TouchableOpacity
                         style={[
                             styles.primaryBtnFull,
@@ -336,6 +355,20 @@ const styles = StyleSheet.create({
         borderTopRightRadius: 20,
         paddingBottom: Platform.OS === "ios" ? 40 : 20,
     },
+    clearButton: {
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: "#E5E5E5",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+
+    clearText: {
+        fontSize: 11,
+        color: "#666",
+        fontWeight: "700",
+    },
     bottomSheetKeyboard: {
         paddingBottom: Platform.OS === "ios" ? 16 : 14,
     },
@@ -365,19 +398,11 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         paddingHorizontal: 10,
         gap: 10,
-        marginTop: 8,
-        marginBottom: 14,
+        marginTop: 10,
     },
     dragHandle: {
         alignItems: "center",
         paddingTop: 12,
-        paddingBottom: 6,
-    },
-    handleBar: {
-        width: 48,
-        height: 6,
-        borderRadius: 999,
-        backgroundColor: "#C9C9C9",
     },
     title: {
         fontSize: FONT_SIZE.LARGE_TEXT,
@@ -434,7 +459,7 @@ const styles = StyleSheet.create({
     },
     emptyState: {
         flex: 1,
-        justifyContent: 'center',
+        justifyContent: 'space-between',
         paddingVertical: 20,
     },
     emptyText: {

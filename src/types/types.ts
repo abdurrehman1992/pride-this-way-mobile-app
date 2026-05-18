@@ -61,7 +61,7 @@ export type AppStackParamList = {
 
 export type TabParamList = {
   Favorites: undefined;
-  MyTour: undefined;
+  MyTours: undefined;
   ForYou: undefined;
   Map: undefined;
   Profile: undefined;

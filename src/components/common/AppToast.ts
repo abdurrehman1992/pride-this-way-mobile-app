@@ -22,7 +22,7 @@ export const showToast = ({
     position: "bottom",
     visibilityTime: duration,
     autoHide: true,
-    bottomOffset: 110,
+    bottomOffset: 30,
   });
 };
 

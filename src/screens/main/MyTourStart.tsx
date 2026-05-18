@@ -32,7 +32,7 @@ import {
   RedHeartIcon,
 } from '../../constants/icons';
 import { COLORS } from '../../constants/colors';
-import { FONT_FAMILY } from '../../constants/fonts';
+import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import ScanVerifyModal from '../../components/modals/ScanVerifyModal';
 import TopHeader from '../../components/Home/TopHeader';
 import EventDetailModal from '../../components/modals/EventDetailModal';
@@ -1974,12 +1974,12 @@ const styles = StyleSheet.create({
     opacity: 0.95,
   },
   actionOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 110,
     justifyContent: 'flex-end',
   },
   actionBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.28)',
   },
   actionSheet: {
@@ -2039,14 +2039,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   completionOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 120,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,
   },
   completionBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.45)',
   },
   completionCard: {
@@ -2102,12 +2102,12 @@ const styles = StyleSheet.create({
   completionCancelText: {
     fontFamily: FONT_FAMILY.InterTight_Medium,
     color: COLORS.TEXT_PRIMARY,
-    fontSize: 16,
+    fontSize: FONT_SIZE.SMALL_TEXT,
   },
   completionPrimaryText: {
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
     color: COLORS.WHITE,
-    fontSize: 16,
+    fontSize: FONT_SIZE.SMALL_TEXT,
   },
   btnText: {
     fontSize: 14,

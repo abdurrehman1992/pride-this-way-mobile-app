@@ -33,7 +33,6 @@ import {
   clearRememberEmail,
   getRememberEmail,
 } from "../../utils/rememberMe";
-import { BackGroundImage } from "../../constants/images";
 import { showError, showSuccess } from "../../components/common/AppToast";
 import { loginUser } from "../../services/authService";
 
@@ -133,7 +132,7 @@ const Login: React.FC = () => {
         style={StyleSheet.absoluteFill}
         resizeMode="cover"
       /> */}
-      <View style={{ justifyContent: 'center', alignItems: 'center', flex: 1 }}>
+      <View style={styles.logo}>
         <AppLogo width={200} height={153} />
       </View>
       <View style={styles.overlay}>
@@ -228,7 +227,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor:COLORS.WHITE
+    backgroundColor: COLORS.WHITE
+  },
+  logo: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    flex: 1,
+    marginTop: 40
   },
   keyboardContainer: {
     flex: 1,

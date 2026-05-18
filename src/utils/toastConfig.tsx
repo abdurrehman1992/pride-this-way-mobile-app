@@ -7,21 +7,30 @@ export const toastConfig = {
   success: ({ text1, text2 }: any) => (
     <View style={[styles.container, styles.success]}>
       <Text style={styles.title}>{text1}</Text>
-      {text2 ? <Text style={styles.message}>{text2}</Text> : null}
+
+      {text2 ? (
+        <Text style={styles.message}>{text2}</Text>
+      ) : null}
     </View>
   ),
 
   error: ({ text1, text2 }: any) => (
-    <View style={[styles.container, styles.error]}>
+    <View style={[styles.container, styles.success]}>
       <Text style={styles.title}>{text1}</Text>
-      {text2 ? <Text style={styles.message}>{text2}</Text> : null}
+
+      {text2 ? (
+        <Text style={styles.message}>{text2}</Text>
+      ) : null}
     </View>
   ),
 
   info: ({ text1, text2 }: any) => (
-    <View style={[styles.container, styles.info]}>
+    <View style={[styles.container, styles.success]}>
       <Text style={styles.title}>{text1}</Text>
-      {text2 ? <Text style={styles.message}>{text2}</Text> : null}
+
+      {text2 ? (
+        <Text style={styles.message}>{text2}</Text>
+      ) : null}
     </View>
   ),
 };
@@ -29,39 +38,44 @@ export const toastConfig = {
 const styles = StyleSheet.create({
   container: {
     width: "90%",
-    padding: 14,
-    borderRadius: 12,
+
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     alignSelf: "center",
-    marginBottom: 8,
-    elevation: 3,
+    marginBottom: 10,
+    overflow: "hidden",
     borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
   },
 
   title: {
     color: COLORS.WHITE,
+
     fontSize: FONT_SIZE.TEXT,
+
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },
 
   message: {
     color: COLORS.WHITE,
+
     fontSize: FONT_SIZE.SMALL_TEXT,
+
     fontFamily: FONT_FAMILY.InterTight_Light,
-    marginTop: 2,
+
+    marginTop: 3,
   },
 
   success: {
-    backgroundColor: "rgba(24, 116, 233, 0.68)",
-    borderColor: "rgba(255,255,255,0.24)",
+    backgroundColor: "rgba(0,122,255,0.45)",
   },
 
   error: {
-    backgroundColor: "rgba(240, 68, 56, 0.68)",
-    borderColor: "rgba(255,255,255,0.24)",
+    backgroundColor: "rgba(255,59,48,0.75)",
   },
 
   info: {
-    backgroundColor: "rgba(15, 23, 42, 0.62)",
-    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255, 204, 0, 0.75)",
   },
 });

@@ -2,12 +2,10 @@ import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
   StyleSheet,
-  // ImageBackground,
   Text,
   ScrollView,
   Keyboard,
   ActivityIndicator,
-  Image
 } from "react-native";
 
 import { COLORS } from "../../constants/colors";
@@ -16,7 +14,6 @@ import CustomInput from "../../components/common/CustomInput";
 import CustomButton from "../../components/common/CustomButton";
 import AuthBottomNavigation from "../../components/common/AuthBottomNavigation";
 import { useNavigation } from "@react-navigation/native";
-// import { BackGroundImage } from "../../constants/images";
 import { SinupIcon } from "../../constants/icons";
 import { useDispatch } from "react-redux";
 import {
@@ -134,8 +131,8 @@ const Signup: React.FC = () => {
         style={StyleSheet.absoluteFill}
         resizeMode="cover"
       /> */}
-      <View style={{justifyContent:'center', alignItems:'center',flex:1}}>
-        <AppLogo width={200} height={153}/>
+      <View style={styles.logo}>
+        <AppLogo width={200} height={153} />
       </View>
       <View style={styles.overlay}>
         <ScrollView
@@ -262,12 +259,18 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     backgroundColor: COLORS.WHITE
   },
+  logo: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    flex: 1,
+    marginTop:40
+  },
   keyboardContainer: {
     flex: 1,
     justifyContent: "flex-end",
   },
   overlay: {
-    marginTop:10,
+    marginTop: 10,
     height: "75%",
     width: "100%",
     backgroundColor: COLORS.WHITE,

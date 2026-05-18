@@ -31,7 +31,7 @@ const TAB_ICONS = {
     active: BottomActvieForYou,
     inactive: BottomForYouIcon,
   },
-  MyTour: {
+  MyTours: {
     active: BottomActiveMyTours,
     inactive: BottomMyToursIcon,
   },
@@ -45,7 +45,7 @@ const TAB_ICONS = {
 const TabNavigator: React.FC = () => {
   return (
     <Tab.Navigator
-      initialRouteName="MyTour"
+      initialRouteName="MyTours"
       backBehavior="history"
       screenOptions={({ route }) => {
         const icons = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
@@ -87,7 +87,7 @@ const TabNavigator: React.FC = () => {
         };
       }}
     >
-      <Tab.Screen name="MyTour" component={MyTourNavigator} />
+      <Tab.Screen name="MyTours" component={MyTourNavigator} />
       <Tab.Screen name="Map" component={MapNavigator} />
       <Tab.Screen name="ForYou" component={ForYouNavigator} />
       <Tab.Screen name="Favorites" component={FovoritesNavigator} />
