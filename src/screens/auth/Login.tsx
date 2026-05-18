@@ -15,7 +15,7 @@ import { FONT_SIZE, FONT_FAMILY } from "../../constants/fonts";
 import CustomInput from "../../components/common/CustomInput";
 import CustomButton from "../../components/common/CustomButton";
 import AuthBottomNavigation from "../../components/common/AuthBottomNavigation";
-import { LoginIcon, RemeberMe, RemeberMeTick } from "../../constants/icons";
+import { AppLogo, LoginIcon, RemeberMe, RemeberMeTick } from "../../constants/icons";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { AuthStackParamList } from "../../types/types";
@@ -129,11 +129,14 @@ const Login: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <ImageBackground
+      {/* <ImageBackground
         source={BackGroundImage}
         style={StyleSheet.absoluteFill}
         resizeMode="cover"
-      />
+      /> */}
+      <View style={{ justifyContent: 'center', alignItems: 'center', flex: 1 }}>
+        <AppLogo width={200} height={153} />
+      </View>
       <View style={styles.overlay}>
         <ScrollView
           showsVerticalScrollIndicator={false}
@@ -233,13 +236,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: "flex-end",
+    backgroundColor:COLORS.WHITE
   },
   keyboardContainer: {
     flex: 1,
     justifyContent: "flex-end",
   },
   overlay: {
-    height: "76.5%",
+    height: "75%",
     width: "100%",
     backgroundColor: COLORS.WHITE,
     borderTopLeftRadius: 16,

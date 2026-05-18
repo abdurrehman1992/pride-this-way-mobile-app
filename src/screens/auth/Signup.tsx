@@ -2,11 +2,12 @@ import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
   StyleSheet,
-  ImageBackground,
+  // ImageBackground,
   Text,
   ScrollView,
   Keyboard,
   ActivityIndicator,
+  Image
 } from "react-native";
 
 import { COLORS } from "../../constants/colors";
@@ -15,7 +16,7 @@ import CustomInput from "../../components/common/CustomInput";
 import CustomButton from "../../components/common/CustomButton";
 import AuthBottomNavigation from "../../components/common/AuthBottomNavigation";
 import { useNavigation } from "@react-navigation/native";
-import { BackGroundImage } from "../../constants/images";
+// import { BackGroundImage } from "../../constants/images";
 import { SinupIcon } from "../../constants/icons";
 import { useDispatch } from "react-redux";
 import {
@@ -25,6 +26,7 @@ import {
 } from "../../Redux/slices/authSlice";
 import { showError, showSuccess } from "../../components/common/AppToast";
 import { signupUser } from "../../services/authService";
+import { AppLogo } from "../../constants/icons";
 
 import {
   validateName,
@@ -127,11 +129,14 @@ const Signup: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <ImageBackground
+      {/* <ImageBackground
         source={BackGroundImage}
         style={StyleSheet.absoluteFill}
         resizeMode="cover"
-      />
+      /> */}
+      <View style={{justifyContent:'center', alignItems:'center',flex:1}}>
+        <AppLogo width={200} height={153}/>
+      </View>
       <View style={styles.overlay}>
         <ScrollView
           showsVerticalScrollIndicator={false}
@@ -261,14 +266,16 @@ const styles = StyleSheet.create({
 
   container: {
     flex: 1,
-    justifyContent: 'flex-end'
+    justifyContent: 'flex-end',
+    backgroundColor: COLORS.WHITE
   },
   keyboardContainer: {
     flex: 1,
     justifyContent: "flex-end",
   },
   overlay: {
-    height: "76.5%",
+    marginTop:10,
+    height: "75%",
     width: "100%",
     backgroundColor: COLORS.WHITE,
     borderTopLeftRadius: 16,
@@ -277,7 +284,7 @@ const styles = StyleSheet.create({
   },
   signupText: {
     paddingHorizontal: 24,
-    marginTop: 36,
+    marginTop: 24,
     marginBottom: 34,
     gap: 8
   },

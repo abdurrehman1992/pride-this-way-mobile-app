@@ -57,9 +57,11 @@ export default React.memo(TopHeader);
 const styles = StyleSheet.create({
   container: {
     width: "100%",
-    height: 136,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    // height: 136,
+    height: 115,
+
+    // borderBottomLeftRadius: 20,
+    // borderBottomRightRadius: 20,
     overflow: "hidden",
     justifyContent: "flex-end",
   },

@@ -77,3 +77,4 @@ export { default as RouteIcon } from '../assets/icons/routeIcon.svg';
 export { default as VisionCameraIcon } from '../assets/icons/visionCameraIcon.svg';
 export { default as DownArrow } from '../assets/icons/arrowDown.svg';
 export {default as BlueMapIcon} from '../assets/icons/blueMapIcon.svg'
+export {default as AppLogo} from '../assets/icons/appLogo.svg'

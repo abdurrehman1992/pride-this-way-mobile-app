@@ -129,11 +129,11 @@ const CustomDrawer = ({ navigation }: any) => {
 
           <View style={[styles.menuCard, styles.toursCard]}>
             <Text style={styles.cardTitle} numberOfLines={1}>
-              1,250
+              24
             </Text>
 
             <Text style={styles.cardText} numberOfLines={1}>
-              Rewards Points
+              Places Visited
             </Text>
           </View>
         </View>
@@ -350,7 +350,7 @@ const styles = StyleSheet.create({
 
   cardText: {
     fontSize: FONT_SIZE.CARD_TEXT,
-    fontFamily: FONT_FAMILY.InterTight_Regular,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
     marginTop: 6,
   },
 });

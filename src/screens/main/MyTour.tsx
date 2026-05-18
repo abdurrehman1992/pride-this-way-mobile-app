@@ -430,7 +430,7 @@ const MyTour = () => {
       </Text>
 
       <TouchableOpacity style={styles.btnContainer} onPress={() => openModal('location')}>
-        <Text style={styles.btn}>Start A Tour</Text>
+        <Text style={styles.btn}>Create A Tour</Text>
       </TouchableOpacity>
     </View>
   );
@@ -581,7 +581,7 @@ const MyTour = () => {
 
   return (
     <View style={styles.container}>
-      <TopHeader title="My Tour" />
+      <TopHeader title="My Tours" />
 
       {loadingRoutes ? (
         <View style={styles.loaderWrap}>
