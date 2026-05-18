@@ -146,6 +146,48 @@ const USERS_COLLECTION = 'users';
 const FAVORITES_SUBCOLLECTION = 'favorites';
 const USER_ROUTES_COLLECTION = 'users_routes';
 
+const rescheduleOtherActiveTours = async ({
+  userId,
+  excludeTourId,
+  scheduledDate,
+}: {
+  userId: string;
+  excludeTourId?: string | null;
+  scheduledDate?: string;
+}) => {
+  const nextScheduledDate = scheduledDate || new Date().toISOString();
+  const activeSnapshot = await firestore()
+    .collection(TOURS_COLLECTION)
+    .where('user_id', '==', userId)
+    .where('status', '==', 'active')
+    .get();
+
+  const docsToUpdate = activeSnapshot.docs.filter((doc) => doc.id !== excludeTourId);
+  if (docsToUpdate.length === 0) {
+    return;
+  }
+
+  await Promise.all(
+    docsToUpdate.map(async (doc) => {
+      await Promise.all([
+        firestore().collection(TOURS_COLLECTION).doc(doc.id).set({
+          status: 'scheduled',
+          scheduledDate: nextScheduledDate,
+          completedAt: null,
+          updatedAt: nextScheduledDate,
+        }, { merge: true }),
+        firestore().collection(USER_ROUTES_COLLECTION).doc(doc.id).set({
+          status: 'scheduled',
+          scheduledDate: nextScheduledDate,
+          completed: false,
+          completedAt: null,
+          updatedAt: nextScheduledDate,
+        }, { merge: true }),
+      ]);
+    })
+  );
+};
+
 const toArray = <T,>(value: unknown): T[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -700,6 +742,14 @@ export const saveUserTour = async ({
   scheduledDate?: string | null;
 }) => {
   const now = new Date().toISOString();
+  if (status === 'active') {
+    await rescheduleOtherActiveTours({
+      userId,
+      excludeTourId: tourId,
+      scheduledDate: now,
+    });
+  }
+
   const allPlaces = places.map((place, index) => {
     const progress = placeProgress[place.id];
     return {
@@ -842,6 +892,22 @@ export const fetchUserTours = async (userId?: string): Promise<SavedTour[]> => {
   return snapshot.docs
     .map((doc) => parseSavedTour(doc.id, doc.data()))
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+};
+
+export const scheduleOtherActiveTours = async ({
+  userId,
+  excludeTourId,
+  scheduledDate,
+}: {
+  userId?: string;
+  excludeTourId?: string | null;
+  scheduledDate?: string;
+}) => {
+  if (!userId) {
+    return;
+  }
+
+  await rescheduleOtherActiveTours({ userId, excludeTourId, scheduledDate });
 };
 
 export const deleteUserTour = async (tourId?: string | null) => {

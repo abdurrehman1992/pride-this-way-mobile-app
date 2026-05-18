@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   Alert,
+  Animated,
   View,
   Text,
   StyleSheet,
@@ -30,6 +31,8 @@ import {
   ForkIcon,
   DeleteWhiteIcon,
   RedHeartIcon,
+  BlueMapIcon,
+  GrayMapIcon,
 } from '../../constants/icons';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
@@ -212,6 +215,84 @@ const orderStopsByNearest = (
   return ordered;
 };
 
+const PulsingPin = () => {
+  const scale = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.parallel([
+        Animated.sequence([
+          Animated.timing(scale, {
+            toValue: 1,
+            duration: 1200,
+            useNativeDriver: true,
+          }),
+          Animated.timing(scale, {
+            toValue: 0,
+            duration: 0,
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.sequence([
+          Animated.timing(opacity, {
+            toValue: 0.55,
+            duration: 0,
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacity, {
+            toValue: 0,
+            duration: 1200,
+            useNativeDriver: true,
+          }),
+        ]),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [opacity, scale]);
+
+  const haloScale = scale.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.6, 2.2],
+  });
+
+  return (
+    <View style={pulseStyles.wrapper} pointerEvents="none">
+      <Animated.View
+        style={[
+          pulseStyles.halo,
+          { opacity, transform: [{ scale: haloScale }] },
+        ]}
+      />
+      <View style={pulseStyles.iconLayer}>
+        <BlueMapIcon width={35} height={46} />
+      </View>
+    </View>
+  );
+};
+
+const pulseStyles = StyleSheet.create({
+  wrapper: {
+    width: 46,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  halo: {
+    position: 'absolute',
+    bottom: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#1D82DD',
+  },
+  iconLayer: {
+    width: 35,
+    height: 46,
+  },
+});
+
 const MyTourStart = () => {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
@@ -264,10 +345,12 @@ const MyTourStart = () => {
   const [selectedStop, setSelectedStop] = useState<TourStop | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<FirebaseEvent | null>(null);
   const [tourCompletedVisible, setTourCompletedVisible] = useState(false);
+  const [isCompletedTour, setIsCompletedTour] = useState(false);
   const [cardPosition, setCardPosition] = useState({ x: 24, y: 260 });
   const [tourActionVisible, setTourActionVisible] = useState(false);
-  const [, setIsPausedTour] = useState(false);
+  const [isPausedTour, setIsPausedTour] = useState(false);
   const pendingEditSaveRef = useRef(false);
+  const introPlayedRef = useRef(false);
 
   const fetchRoadSegment = useCallback(
     async (from: [number, number], to: [number, number]): Promise<[number, number][]> => {
@@ -298,7 +381,10 @@ const MyTourStart = () => {
 
         const routedCoordinates = data.routes?.[0]?.geometry?.coordinates;
         if (routedCoordinates && routedCoordinates.length >= 2) {
-          return routedCoordinates as [number, number][];
+          // Mapbox snaps the route to the nearest road, so the first/last
+          // coordinates aren't exactly `from`/`to`. Force the segment to begin
+          // at `from` and end at `to` so the line meets the pin tips precisely.
+          return [from, ...(routedCoordinates as [number, number][]), to];
         }
       } catch {
         // Fall back to straight line if API fails
@@ -460,8 +546,10 @@ const MyTourStart = () => {
             return acc;
           }, {});
           const wasPaused = savedTour.status === 'paused';
+          const wasCompleted = savedTour.status === 'completed';
           setTourStarted(savedTour.status === 'active');
           setIsPausedTour(wasPaused);
+          setIsCompletedTour(wasCompleted);
           setTourId(savedTour.id);
           setStartedAt(savedTour.startedAt || null);
           setIsEdited(savedTour.isEdited || isEdited);
@@ -671,7 +759,54 @@ const MyTourStart = () => {
   }, [handleCurrentLocation]);
 
   useEffect(() => {
+    if (
+      introPlayedRef.current ||
+      !cameraRef.current ||
+      !mapReady ||
+      !currentLocation ||
+      !nearestPendingStop
+    ) {
+      return;
+    }
+
+    // Mark as played BEFORE scheduling timers so any in-flight re-render of
+    // this effect (caused by state updates between now and the flyTo) bails
+    // out at the guard above. We deliberately do NOT clear the timeout in
+    // cleanup — if we did, a re-render between the easeTo and the flyTo
+    // would cancel the flyTo and the user would only ever see the easeTo.
+    introPlayedRef.current = true;
+
+    const startCoord = currentLocation;
+    const targetCoord = nearestPendingStop.coordinate;
+    const targetHeading = tourStarted ? 18 : 0;
+
+    cameraRef.current.setCamera({
+      centerCoordinate: startCoord,
+      zoomLevel: 14,
+      animationDuration: 700,
+      animationMode: 'easeTo',
+    });
+
+    setTimeout(() => {
+      cameraRef.current?.setCamera({
+        centerCoordinate: targetCoord,
+        zoomLevel: 15.2,
+        heading: targetHeading,
+        animationDuration: 1600,
+        animationMode: 'flyTo',
+      });
+    }, 800);
+  }, [currentLocation, mapReady, nearestPendingStop, tourStarted]);
+
+  useEffect(() => {
     if (!cameraRef.current || !mapReady) {
+      return;
+    }
+
+    // Skip the auto-fit to full-route bounds when the intro sequence is
+    // responsible for framing the camera on the next destination. Without
+    // this guard, the bounds-fit immediately overrides the intro's zoom.
+    if (nearestPendingStop) {
       return;
     }
 
@@ -706,7 +841,7 @@ const MyTourStart = () => {
     const sw: [number, number] = [Math.min(...longitudes), Math.min(...latitudes)];
 
     cameraRef.current.fitBounds(ne, sw, [170, 36, 180, 36], 900);
-  }, [airSegments, completedAirSegments, completedRoadSegments, mapReady, orderedPlaceStops, roadSegments]);
+  }, [airSegments, completedAirSegments, completedRoadSegments, mapReady, nearestPendingStop, orderedPlaceStops, roadSegments]);
 
   useEffect(() => {
     const hasCompletedTour = orderedPlaceStops.length > 0 && orderedRemainingStops.length === 0;
@@ -915,7 +1050,9 @@ const MyTourStart = () => {
     [placeProgress]
   );
 
-  const canResumeTour = Boolean(tourId || hasVisitedProgress || startedAt);
+  const canResumeTour =
+    !isCompletedTour &&
+    (isPausedTour || Boolean(tourId || hasVisitedProgress || startedAt));
 
   const currentMarkerNeedsStandalonePin = useMemo(() => {
     if (!currentLocation) {
@@ -1152,7 +1289,7 @@ const MyTourStart = () => {
     const nextStartedAt = startedAt || new Date().toISOString();
     setStartedAt(nextStartedAt);
     setTourStarted(true);
-
+    setIsCompletedTour(false);
     setIsPausedTour(false);
 
     try {
@@ -1174,6 +1311,9 @@ const MyTourStart = () => {
   };
 
   const handlePauseTour = async () => {
+    if (isCompletedTour) {
+      return;
+    }
     setTourStarted(false);
     setIsPausedTour(true);
     setSelectedStop(null);
@@ -1184,6 +1324,9 @@ const MyTourStart = () => {
   };
 
   const handleCloseTour = async () => {
+    if (isCompletedTour) {
+      return;
+    }
     if (tourId) {
       await deleteUserTour(tourId);
     }
@@ -1199,6 +1342,9 @@ const MyTourStart = () => {
   };
 
   const handleTourAction = () => {
+    if (isCompletedTour) {
+      return;
+    }
     setTourActionVisible(true);
   };
 
@@ -1273,6 +1419,9 @@ const MyTourStart = () => {
       if (allDone) {
         setRoadSegments([]);
         setAirSegments([]);
+        setTourStarted(false);
+        setTourActionVisible(false);
+        setIsCompletedTour(true);
         setTourCompletedVisible(true);
       }
 
@@ -1348,10 +1497,12 @@ const MyTourStart = () => {
             >
               <Mapbox.Camera
                 ref={cameraRef}
-                centerCoordinate={centerCoordinate}
-                zoomLevel={12.6}
-                pitch={0}
-                heading={tourStarted ? 18 : 0}
+                defaultSettings={{
+                  centerCoordinate,
+                  zoomLevel: 12.6,
+                  pitch: 0,
+                  heading: 0,
+                }}
                 animationMode="easeTo"
                 animationDuration={900}
               />
@@ -1384,6 +1535,8 @@ const MyTourStart = () => {
 
               {tourStops.map((stop) => {
                 const visited = Boolean(placeProgress[stop.id]?.visited);
+                const isNextPending =
+                  !visited && nearestPendingStop?.id === stop.id;
                 return (
                   <Mapbox.MarkerView
                     key={stop.id}
@@ -1397,13 +1550,11 @@ const MyTourStart = () => {
                       style={styles.markerTapArea}
                     >
                       {visited ? (
-                        <View style={styles.grayPin}>
-                          <View style={styles.grayPinInner} />
-                        </View>
+                        <GrayMapIcon width={35} height={46} />
+                      ) : isNextPending ? (
+                        <PulsingPin />
                       ) : (
-                        <View style={styles.bluePin}>
-                          <View style={styles.bluePinInner} />
-                        </View>
+                        <BlueMapIcon width={35} height={46} />
                       )}
                     </TouchableOpacity>
                   </Mapbox.MarkerView>
@@ -1437,11 +1588,7 @@ const MyTourStart = () => {
                   coordinate={[...currentLocation]}
                   anchor={{ x: 0.5, y: 1 }}
                 >
-                  <View style={styles.currentMapMarker}>
-                    <View style={styles.grayPin}>
-                      <View style={styles.grayPinInner} />
-                    </View>
-                  </View>
+                  <GrayMapIcon width={35} height={46} />
                 </Mapbox.MarkerView>
               ) : null}
             </Mapbox.MapView>
@@ -1523,42 +1670,44 @@ const MyTourStart = () => {
               </View>
             </View>
 
-            <View style={styles.bottomRow}>
-              <TouchableOpacity
-                style={[
-                  styles.confirmBtn,
-                  (!selectedStopIsNearestPending ||
-                    Boolean(placeProgress[selectedStop.id]?.visited)) &&
-                    styles.confirmBtnDisabled,
-                ]}
-                onPress={() => {
-                  if (!selectedStopIsNearestPending) {
-                    const nearestTitle = nearestPendingStop?.title || 'the nearest location';
-                    showInfo(
-                      'Nearest Stop Required',
-                      `Please confirm ${nearestTitle} before this stop.`
-                    );
-                    return;
-                  }
+            {!isCompletedTour ? (
+              <View style={styles.bottomRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.confirmBtn,
+                    (!selectedStopIsNearestPending ||
+                      Boolean(placeProgress[selectedStop.id]?.visited)) &&
+                      styles.confirmBtnDisabled,
+                  ]}
+                  onPress={() => {
+                    if (!selectedStopIsNearestPending) {
+                      const nearestTitle = nearestPendingStop?.title || 'the nearest location';
+                      showInfo(
+                        'Nearest Stop Required',
+                        `Please confirm ${nearestTitle} before this stop.`
+                      );
+                      return;
+                    }
 
-                  setScanVisible(true);
-                }}
-                disabled={Boolean(placeProgress[selectedStop.id]?.visited)}
-              >
-                <Text style={styles.confirmText}>
-                  {placeProgress[selectedStop.id]?.visited
-                    ? 'Visited'
-                    : selectedStopIsNearestPending
-                      ? 'Confirm Visit'
-                      : 'Nearest Stop Only'}
-                </Text>
-              </TouchableOpacity>
+                    setScanVisible(true);
+                  }}
+                  disabled={Boolean(placeProgress[selectedStop.id]?.visited)}
+                >
+                  <Text style={styles.confirmText}>
+                    {placeProgress[selectedStop.id]?.visited
+                      ? 'Visited'
+                      : selectedStopIsNearestPending
+                        ? 'Confirm Visit'
+                        : 'Nearest Stop Only'}
+                  </Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity onPress={() => handleDeleteStop(selectedStop.id)}>
-                <DeleteWhiteIcon width={24} height={24} />
-              </TouchableOpacity>
-            </View>
-            {!placeProgress[selectedStop.id]?.visited && !selectedStopIsNearestPending ? (
+                <TouchableOpacity onPress={() => handleDeleteStop(selectedStop.id)}>
+                  <DeleteWhiteIcon width={24} height={24} />
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {!isCompletedTour && !placeProgress[selectedStop.id]?.visited && !selectedStopIsNearestPending ? (
               <Text style={styles.nearestStopHint}>
                 Confirm {nearestPendingStop?.title || 'the nearest location'} first to unlock this stop.
               </Text>
@@ -1566,23 +1715,36 @@ const MyTourStart = () => {
           </TouchableOpacity>
         )}
 
-        <View style={styles.rowButtons}>
-          <TouchableOpacity style={styles.favoriteBtn} onPress={handleTourAction}>
-            <Text style={[styles.btnText, { color: COLORS.TEXT_PRIMARY }]}>
-              Action
-            </Text>
-          </TouchableOpacity>
+        {isCompletedTour ? (
+          <View style={styles.rowButtons}>
+            <TouchableOpacity
+              style={[styles.startTourBtn, styles.startTourBtnStarted]}
+              disabled
+            >
+              <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
+                Tour Completed
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.rowButtons}>
+            <TouchableOpacity style={styles.favoriteBtn} onPress={handleTourAction}>
+              <Text style={[styles.btnText, { color: COLORS.TEXT_PRIMARY }]}>
+                Action
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.startTourBtn, tourStarted && styles.startTourBtnStarted]}
-            onPress={handleStartTour}
-            disabled={tourStarted}
-          >
-            <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
-              {tourStarted ? 'Tour Started' : canResumeTour ? 'Resume Tour' : 'Start a Tour'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity
+              style={[styles.startTourBtn, tourStarted && styles.startTourBtnStarted]}
+              onPress={handleStartTour}
+              disabled={tourStarted}
+            >
+              <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
+                {tourStarted ? 'Tour Started' : canResumeTour ? 'Resume Tour' : 'Start a Tour'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <ScanVerifyModal
           visible={scanVisible}
@@ -1741,50 +1903,6 @@ const styles = StyleSheet.create({
     height: 70,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  currentMapMarker: {
-    width: 48,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    opacity: 0.92,
-  },
-  grayPin: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#9AA3AF',
-    borderWidth: 2.5,
-    borderColor: '#6B7280',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  grayPinInner: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#E5E7EB',
-  },
-  bluePin: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: COLORS.BUTTON_COLOR,
-    borderWidth: 2.5,
-    borderColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.22,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  bluePinInner: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.82)',
   },
   eventMarker: {
     width: 40,
