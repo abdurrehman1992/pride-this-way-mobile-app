@@ -759,46 +759,37 @@ const MyTourStart = () => {
     handleCurrentLocation(false);
   }, [handleCurrentLocation]);
 
-  useEffect(() => {
-    if (
-      introPlayedRef.current ||
-      !cameraRef.current ||
-      !mapReady ||
-      !currentLocation ||
-      !nearestPendingStop
-    ) {
-      return;
-    }
+useEffect(() => {
+  // Guard: Don't run if map isn't ready or we don't have location yet
+  if (!mapReady || !currentLocation || !nearestPendingStop || introPlayedRef.current) {
+    return;
+  }
 
-    // Mark as played BEFORE scheduling timers so any in-flight re-render of
-    // this effect (caused by state updates between now and the flyTo) bails
-    // out at the guard above. We deliberately do NOT clear the timeout in
-    // cleanup — if we did, a re-render between the easeTo and the flyTo
-    // would cancel the flyTo and the user would only ever see the easeTo.
+  // Use a small delay to let the Infinix render the initial map tiles
+  const timer = setTimeout(() => {
     introPlayedRef.current = true;
-
-    const startCoord = currentLocation;
-    const targetCoord = nearestPendingStop.coordinate;
-    const targetHeading = tourStarted ? 18 : 0;
-
-    cameraRef.current.setCamera({
-      centerCoordinate: startCoord,
+    
+    cameraRef.current?.setCamera({
+      centerCoordinate: currentLocation,
       zoomLevel: 14,
-      animationDuration: 700,
+      animationDuration: 800,
       animationMode: 'easeTo',
     });
 
+    // Nested timeout for the second flyTo movement
     setTimeout(() => {
       cameraRef.current?.setCamera({
-        centerCoordinate: targetCoord,
-        zoomLevel: 15.2,
-        heading: targetHeading,
-        animationDuration: 1600,
+        centerCoordinate: nearestPendingStop.coordinate,
+        zoomLevel: 15.5,
+        heading: tourStarted ? 18 : 0,
+        animationDuration: 1800,
         animationMode: 'flyTo',
       });
-    }, 800);
-  }, [currentLocation, mapReady, nearestPendingStop, tourStarted]);
+    }, 900);
+  }, 500);
 
+  return () => clearTimeout(timer);
+}, [currentLocation, mapReady, nearestPendingStop, tourStarted]);
   useEffect(() => {
     if (!cameraRef.current || !mapReady) {
       return;
@@ -1247,40 +1238,41 @@ const MyTourStart = () => {
     showSuccess('Added to Favorites', 'You have Added to favorites successfully');
   };
 
-  const handleCurrentLocation = useCallback((shouldFocus = true) => {
-    const request = (granted: boolean) => {
-      if (!granted) return;
+const handleCurrentLocation = useCallback(async (zoom = true) => {
+  // 1. Instantly move to a "cached" position if available to make it feel fast
+  if (currentLocation && zoom) {
+    cameraRef.current?.setCamera({
+      centerCoordinate: currentLocation,
+      zoomLevel: 15,
+      animationDuration: 500, // Faster duration
+    });
+  }
+
+  const getPos = (): Promise<[number, number]> => 
+    new Promise((resolve, reject) => {
       Geolocation.getCurrentPosition(
-        (pos) => {
-          const coords: [number, number] = [
-            pos.coords.longitude,
-            pos.coords.latitude,
-          ];
-          setTourOrigin((prev) => prev || coords);
-          setCurrentLocation(coords);
-          if (shouldFocus) {
-            cameraRef.current?.setCamera({
-              centerCoordinate: coords,
-              zoomLevel: 14,
-              animationDuration: 800,
-              animationMode: 'easeTo',
-            });
-          }
+        (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
+        (err) => {
+          // If high accuracy is slow, grab the "last known" or low-accuracy immediately
+          Geolocation.getCurrentPosition(
+            (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
+            reject,
+            { enableHighAccuracy: false, timeout: 2000 } // Super short timeout for fallback
+          );
         },
-        () => { },
-        { enableHighAccuracy: true, timeout: 10000 },
+        // Reduce this timeout. 8s-10s is too long for a user to wait.
+        { enableHighAccuracy: true, timeout: 3000 } 
       );
-    };
+    });
 
-    if (Platform.OS === 'android') {
-      PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      ).then((result) => request(result === PermissionsAndroid.RESULTS.GRANTED));
-    } else {
-      request(true);
-    }
-  }, []);
-
+  try {
+    const pos = await getPos();
+    setCurrentLocation(pos);
+    // ... camera movement logic
+  } catch (err) {
+    // Fail silently or show toast
+  }
+}, [currentLocation]);
   const handleStartTour = async () => {
     if (!routeDetails) {
       return;

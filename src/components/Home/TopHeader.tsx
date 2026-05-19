@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ImageBackground,
   TouchableOpacity,
+  StatusBar
 } from "react-native";
 
 import { MenuIcon, Notification } from "../../constants/icons";
@@ -29,26 +30,33 @@ const TopHeader: React.FC<Props> = ({ title }) => {
   };
 
   return (
-    <ImageBackground
-      source={BgFrame}
-      style={styles.container}
-      fadeDuration={0}
-    >
-      <View style={styles.headerRow}>
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={openDrawer}
-        >
-          <MenuIcon width={33.75} height={33.75} />
-        </TouchableOpacity>
+    <>
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle="light-content"
+      />
+      <ImageBackground
+        source={BgFrame}
+        style={styles.container}
+        fadeDuration={0}
+      >
+        <View style={styles.headerRow}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={openDrawer}
+          >
+            <MenuIcon width={33.75} height={33.75} />
+          </TouchableOpacity>
 
-        <Text style={styles.title}>{title}</Text>
+          <Text style={styles.title}>{title}</Text>
 
-        <View style={styles.notificationBtn}>
-          <Notification width={19.5} height={20.58} />
+          <View style={styles.notificationBtn}>
+            <Notification width={19.5} height={20.58} />
+          </View>
         </View>
-      </View>
-    </ImageBackground>
+      </ImageBackground>
+    </>
   );
 };
 
@@ -71,7 +79,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 32,
-    marginBottom: 25,
+    marginBottom: 20,
   },
 
   title: {

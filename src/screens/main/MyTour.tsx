@@ -9,7 +9,7 @@ import {
     ActivityIndicator,
     RefreshControl,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import {
     CreatedTourLocationIcon,
@@ -147,46 +147,87 @@ const MyTour = () => {
 
         try {
             const tours = await fetchUserTours(userId);
-            const cards = await Promise.all(
-                tours.map(async (tour: SavedTour) => {
-                    const [places, details] = await Promise.all([
-                        fetchPlacesByIds(tour.all_places.map((item) => item.place_id)),
-                        fetchRouteDetails({ routeId: tour.route_id, userId }),
-                    ]);
+            if (!tours || tours.length === 0) {
+                setSavedTourCards([]);
+                return;
+            }
 
-                    const extraPlaces = places.filter((place) =>
-                        tour.all_places.some(
-                            (item) => item.place_id === place.id && item.addedByUser
-                        )
-                    );
-
-                    return {
-                        ...details,
-                        cardId: `saved-${tour.id}`,
-                        isOpen: true,
-                        displayName: tour.title,
-                        cityLabel:
-                            [tour.city_name, tour.country].filter(Boolean).join(', ') ||
-                            [details.route.city_name, details.route.country].filter(Boolean).join(', '),
-                        extraPlaces,
-                        removedPlaceIds: [],
-                        tourId: tour.id,
-                        status: tour.status,
-                        scheduledDate: tour.scheduledDate || null,
-                        isSavedTour: true,
-                        updatedAt: tour.updatedAt || tour.createdAt || '',
-                        createdAt: tour.createdAt || tour.updatedAt || '',
-                        places,
-                    } satisfies RouteCardState;
-                })
+            // 1. PERFORMANCE WIN: Extract and deduplicate all place IDs from ALL tours up front
+            const allPlaceIds = Array.from(
+                new Set(tours.flatMap((t) => t.all_places?.map((p) => p.place_id) || []))
             );
 
+            // 2. PERFORMANCE WIN: Run batch fetches in parallel for the entire screen data at once
+            const [globalPlaces, ...allRouteDetails] = await Promise.all([
+                allPlaceIds.length > 0 ? fetchPlacesByIds(allPlaceIds) : Promise.resolve([]),
+                ...tours.map((t) =>
+                    fetchRouteDetails({ routeId: t.route_id, userId }).catch(() => null)
+                ),
+            ]);
+
+            // Create a fast-lookup map for places: O(1) complexity instead of O(N) filtering inside array map
+            const placesMap = new Map((globalPlaces || []).map((p) => [p.id, p]));
+
+            // Match route details array position back to its corresponding tour
+            const routeDetailsMap = new Map(
+                tours.map((t, index) => [t.route_id, allRouteDetails[index]])
+            );
+
+            // 3. Assemble the state cards instantly using the mapping cache
+            const cards = tours.map((tour) => {
+                const details = routeDetailsMap.get(tour.route_id);
+
+                const fallbackRoute = details || {
+                    route: {
+                        id: tour.route_id,
+                        name: tour.title || 'Custom Tour',
+                        city_name: tour.city_name || '',
+                        country: tour.country || '',
+                        dateRange: { startDate: 'Flexible' }
+                    },
+                    places: [],
+                    events: [],
+                    favoritePlace: null,
+                    favoritePlaces: []
+                };
+
+                // Map internal IDs using our flat global memory array cache
+                const tourPlaces = (tour.all_places || [])
+                    .map((p) => placesMap.get(p.place_id))
+                    .filter((p): p is FirebasePlace => !!p);
+
+                const extraPlaces = tourPlaces.filter((place) =>
+                    tour.all_places?.some(
+                        (item) => item.place_id === place.id && item.addedByUser
+                    )
+                );
+
+                return {
+                    ...fallbackRoute,
+                    cardId: `saved-${tour.id}`,
+                    isOpen: false, // Keeping it false speeds up initial structural UI rendering layouts
+                    displayName: tour.title || fallbackRoute.route.name,
+                    cityLabel:
+                        [tour.city_name, tour.country].filter(Boolean).join(', ') ||
+                        [fallbackRoute.route.city_name, fallbackRoute.route.country].filter(Boolean).join(', '),
+                    extraPlaces,
+                    removedPlaceIds: [],
+                    tourId: tour.id,
+                    status: tour.status,
+                    scheduledDate: tour.scheduledDate || null,
+                    isSavedTour: true,
+                    updatedAt: tour.updatedAt || tour.createdAt || '',
+                    createdAt: tour.createdAt || tour.updatedAt || '',
+                    places: tourPlaces,
+                } satisfies RouteCardState;
+            });
+
             setSavedTourCards(cards);
-        } catch {
-            setSavedTourCards([]);
+        } catch (error) {
+            console.error("Error inside optimized loadSavedTours runner:", error);
+            // Only clear if absolutely necessary to prevent layout blinking shifts
         }
     }, [userId]);
-
     useEffect(() => {
         loadTags();
     }, [loadTags]);
@@ -194,6 +235,12 @@ const MyTour = () => {
     useEffect(() => {
         loadSavedTours();
     }, [loadSavedTours]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadSavedTours();
+        }, [loadSavedTours])
+    );
 
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
@@ -557,13 +604,29 @@ const MyTour = () => {
             return true;
         });
     };
+    const [isRefreshEnabled, setIsRefreshEnabled] = useState(true);
+    const handleScrollOffsetDetect = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const { contentOffset } = event.nativeEvent;
+        // Only enable pulling gestures when user explicitly drags significantly past the zero anchor limit
+        if (contentOffset.y <= -45) {
+            setIsRefreshEnabled(true);
+        } else if (contentOffset.y > 0) {
+            setIsRefreshEnabled(false);
+        }
+    };
 
     const renderEmptyState = () => (
         <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.emptyScrollContent}
             refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.BUTTON_COLOR} />
+                // <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.BUTTON_COLOR} />
+                <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={handleRefresh}
+                    tintColor={COLORS.BUTTON_COLOR}
+                    enabled={isRefreshEnabled}
+                />
             }
         >
             <View style={[styles.content, { paddingBottom: bottomHeight + 40 }]}>
@@ -773,7 +836,7 @@ const MyTour = () => {
                 <View style={styles.loaderWrap}>
                     <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
                 </View>
-            ) : allCards.length <= 0 ? (
+            ) : allCards.length === 0 ? (
                 renderEmptyState()
             ) : (
                 <View style={styles.mainContent}>
