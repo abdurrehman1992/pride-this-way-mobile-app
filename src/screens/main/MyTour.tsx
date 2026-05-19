@@ -556,11 +556,11 @@ const MyTour = () => {
             return !savedTime || savedTime < localTime;
         });
 
-        return [...savedTourCards, ...dedupedRouteCards].sort((a, b) => {
-            const statusDiff = statusPriority(a.status) - statusPriority(b.status);
-            if (statusDiff !== 0) {
-                return statusDiff;
-            }
+    return [...savedTourCards, ...dedupedRouteCards].sort((a, b) => {
+      const statusDiff = statusPriority(a.status) - statusPriority(b.status);
+      if (statusDiff !== 0) {
+        return statusDiff;
+      }
 
             const aTime = a.updatedAt || a.createdAt || '';
             const bTime = b.updatedAt || b.createdAt || '';

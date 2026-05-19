@@ -5,7 +5,7 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
-platform :ios, min_ios_version_supported
+platform :ios, '16.0'
 prepare_react_native_project!
 
 linkage = ENV['USE_FRAMEWORKS']
@@ -16,6 +16,24 @@ end
 
 target 'PridethisWay' do
   config = use_native_modules!
+
+  # Required by @react-native-firebase: Firebase Swift pods need their
+  # non-modular C dependencies to generate module maps so they can be
+  # imported when built as static libraries. Applied per-pod (not globally
+  # via use_modular_headers!) because the global flag triggers gRPC to
+  # reference a modulemap path that CocoaPods does not actually generate.
+  pod 'Firebase', :modular_headers => true
+  pod 'FirebaseCore', :modular_headers => true
+  pod 'FirebaseCoreInternal', :modular_headers => true
+  pod 'FirebaseCoreExtension', :modular_headers => true
+  pod 'FirebaseAuth', :modular_headers => true
+  pod 'FirebaseFirestore', :modular_headers => true
+  pod 'FirebaseSharedSwift', :modular_headers => true
+  pod 'GoogleUtilities', :modular_headers => true
+  pod 'FirebaseAppCheckInterop', :modular_headers => true
+  pod 'FirebaseAuthInterop', :modular_headers => true
+  pod 'FirebaseFirestoreInternal', :modular_headers => true
+  pod 'RecaptchaInterop', :modular_headers => true
 
   use_react_native!(
     :path => config[:reactNativePath],
@@ -33,5 +51,15 @@ target 'PridethisWay' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+    # Force every pod target's iOS deployment to 16.0. react_native_post_install
+    # only bumps targets below the RN default (15.1), so pods that already
+    # declare a higher target inherit it. CxxStdlib (used by Firebase Firestore
+    # via gRPC C++ interop on Xcode 16) requires iOS 16.0+, so the app target
+    # and every pod target must be aligned to 16.0 or the Swift compiler fails.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+      end
+    end
   end
 end
