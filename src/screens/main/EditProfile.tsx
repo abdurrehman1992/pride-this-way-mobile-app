@@ -17,13 +17,9 @@ import { CameraIcon, SinupIcon } from "../../constants/icons";
 import { pickImageFromGallery } from "../../utils/imagePicker";
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY } from "../../constants/fonts";
-import { PROFILE_IMAGE } from "../../constants/images";
 import CustomInput from "../../components/common/CustomInput";
 import CustomButton from "../../components/common/CustomButton";
-import {
-    validateName,
-    validatePhone
-} from "../../utils/validation";
+import { validateName, validatePhone } from "../../utils/validation";
 import { useNavigation } from "@react-navigation/native";
 import { useDispatch, useSelector } from "react-redux";
 import { showError, showSuccess } from "../../components/common/AppToast";
@@ -31,56 +27,64 @@ import { RootState } from "../../Redux/store";
 import { loginSuccess } from "../../Redux/slices/authSlice";
 import { updateCurrentUserProfile } from "../../services/authService";
 import { uploadImageToCloudinary } from "../../services/cloudinaryService";
+
 const EditProfile = () => {
-    const navigation = useNavigation<any>()
+    const navigation = useNavigation<any>();
     const dispatch = useDispatch();
     const user = useSelector((state: RootState) => state.auth.user);
+
     const [image, setImage] = useState<string | null>(null);
     const [fullName, setFullName] = useState("");
     const [email, setEmail] = useState("");
     const [phone, setPhone] = useState("");
+
     const [loading, setLoading] = useState(false);
+    const [uploadingImage, setUploadingImage] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
     const [errors, setErrors] = useState({
         name: "",
         phone: ""
     });
 
     useEffect(() => {
-        if (!user) return;
+        if (!user || isSubmitting) return;
 
         setFullName(user.name || "");
         setEmail(user.email || "");
         setPhone(user.phone || "");
         setImage(user.profileImage || null);
-    }, [user]);
-
-    const [uploadingImage, setUploadingImage] = useState(false);
+    }, [user, isSubmitting]);
 
     const handlePickImage = async () => {
         if (uploadingImage) return;
+
         const uri = await pickImageFromGallery();
         if (!uri) return;
 
-        const isAlreadyRemote = uri.startsWith('http://') || uri.startsWith('https://');
-        if (isAlreadyRemote) {
+        const isRemote = uri.startsWith("http");
+
+        if (isRemote) {
             setImage(uri);
             return;
         }
 
         setImage(uri);
         setUploadingImage(true);
+
         try {
             const { secureUrl } = await uploadImageToCloudinary(uri);
             setImage(secureUrl);
         } catch (err) {
             const message =
-                err instanceof Error ? err.message : 'Image upload failed.';
-            showError('Upload Failed', message);
+                err instanceof Error ? err.message : "Image upload failed.";
+            showError("Upload Failed", message);
             setImage(user?.profileImage || null);
         } finally {
             setUploadingImage(false);
         }
     };
+
     const handleNameChange = (text: string) => {
         setFullName(text);
         setErrors(prev => ({
@@ -96,6 +100,7 @@ const EditProfile = () => {
             phone: validatePhone(text)
         }));
     };
+
     const isFormValid = useMemo(() => {
         return (
             fullName.trim() !== "" &&
@@ -104,38 +109,41 @@ const EditProfile = () => {
             errors.phone === ""
         );
     }, [fullName, email, errors]);
-
     const handleUpdateProfile = async () => {
-        if (!isFormValid || loading || uploadingImage) return;
+    if (!isFormValid || loading || uploadingImage) return;
 
-        setLoading(true);
+    setLoading(true);
+    setIsSubmitting(true);
 
-        try {
-            const session = await updateCurrentUserProfile({
-                fullName,
-                email,
-                phone,
-                profileImage: image,
-            });
+    try {
+        const updatedUser = await updateCurrentUserProfile({
+            fullName,
+            email,
+            phone,
+            profileImage: image,
+        });
 
-            dispatch(loginSuccess(session));
-            showSuccess("Profile updated successfully");
-            navigation.reset({
-                index: 0,
-                routes: [
-                    {
-                        name: 'Profile',
-                    },
-                ],
-            });
-        } catch (error) {
-            const message =
-                error instanceof Error ? error.message : "Unable to update profile.";
-            showError("Update Failed", message);
-        } finally {
-            setLoading(false);
-        }
-    };
+        // 🔥 IMPORTANT: ensure backend returns FULL user object
+        dispatch(loginSuccess(updatedUser));
+
+        showSuccess("Profile updated successfully");
+
+        navigation.reset({
+            index: 0,
+            routes: [{ name: "Profile" }],
+        });
+
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : "Unable to update profile.";
+
+        showError("Update Failed", message);
+
+    } finally {
+        setLoading(false);
+        setIsSubmitting(false);
+    }
+};
 
     return (
         <SafeAreaView style={styles.container} edges={["top"]}>
@@ -161,20 +169,31 @@ const EditProfile = () => {
                             disabled={uploadingImage}
                         >
                             <Image
-                                source={{ uri: image || PROFILE_IMAGE }}
+                                source={{
+                                    uri:
+                                        image ||
+                                        "https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png",
+                                }}
                                 style={styles.profileImage}
                             />
+
                             {uploadingImage ? (
                                 <View style={styles.uploadOverlay}>
                                     <ActivityIndicator color={COLORS.WHITE} />
                                 </View>
                             ) : (
-                                <CameraIcon width={35} height={35} style={styles.iconOverlay} />
+                                <CameraIcon
+                                    width={35}
+                                    height={35}
+                                    style={styles.iconOverlay}
+                                />
                             )}
                         </TouchableOpacity>
 
                         <Text style={styles.changeText}>
-                            {uploadingImage ? 'Uploading…' : 'Change Profile Picture'}
+                            {uploadingImage
+                                ? "Uploading…"
+                                : "Change Profile Picture"}
                         </Text>
                     </View>
 
@@ -193,7 +212,6 @@ const EditProfile = () => {
                             placeholder="Email Address"
                             value={email}
                             onChangeText={() => {}}
-                            keyboardType="email-address"
                             editable={false}
                         />
 
@@ -207,6 +225,7 @@ const EditProfile = () => {
                         />
                     </View>
 
+                    {/* BUTTON */}
                     {loading ? (
                         <ActivityIndicator
                             size="large"
@@ -228,7 +247,6 @@ const EditProfile = () => {
 };
 
 export default EditProfile;
-
 const styles = StyleSheet.create({
     container: {
         flex: 1,

@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
   },
 
   success: {
-    backgroundColor: "rgba(0,122,255,0.45)",
+    backgroundColor: "rgba(0,122,255,0.90)",
   },
 
   error: {

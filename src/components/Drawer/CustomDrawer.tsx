@@ -32,7 +32,7 @@ import { logout } from '../../Redux/slices/authSlice';
 import { RootState } from '../../Redux/store';
 import { logoutUser } from '../../services/authService';
 import { fetchRewardsSummary } from '../../services/myTourService';
-import { showError } from '../common/AppToast';
+import { showError, showSuccess } from '../common/AppToast';
 
 import TabsButtons from '../common/TabsButtons';
 
@@ -44,7 +44,6 @@ const CustomDrawer = ({ navigation }: any) => {
   const navigateTo = useCallback(
     (screen: string, params?: any) => {
       navigation.navigate(screen, params);
-
       requestAnimationFrame(() => {
         navigation.closeDrawer();
       });
@@ -56,6 +55,7 @@ const CustomDrawer = ({ navigation }: any) => {
     try {
       await logoutUser();
       dispatch(logout());
+      showSuccess("Logout Success",'You have logged out successfully')
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unable to logout.';
@@ -105,7 +105,7 @@ const CustomDrawer = ({ navigation }: any) => {
               onPress={() => navigateTo('Profile')}
             >
               <Image
-                source={{ uri: user?.profileImage || PROFILE_IMAGE }}
+                source={{ uri: user?.profileImage || 'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png' }}
                 style={styles.profilePhoto}
                 fadeDuration={0}
               />
@@ -182,9 +182,7 @@ const CustomDrawer = ({ navigation }: any) => {
             title="Help & Support"
             Icon={HelpIcon}
             onPress={() =>
-              navigateTo('Tabs', {
-                screen: 'MyTour',
-              })
+              navigateTo('Support', { screen: 'Help_Support' })
             }
           />
 
@@ -192,9 +190,7 @@ const CustomDrawer = ({ navigation }: any) => {
             title="Terms & Conditions"
             Icon={TermsIcon}
             onPress={() =>
-              navigateTo('Tabs', {
-                screen: 'MyTour',
-              })
+              navigateTo('Support', { screen: 'Terms_Conditions' })
             }
           />
         </View>

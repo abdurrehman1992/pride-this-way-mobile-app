@@ -7,6 +7,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Keyboard,
+  Image,
 } from "react-native";
 
 import { COLORS } from "../../constants/colors";
@@ -35,6 +36,7 @@ import {
 } from "../../utils/rememberMe";
 import { showError, showSuccess } from "../../components/common/AppToast";
 import { loginUser } from "../../services/authService";
+import { AppLogoImage } from "../../constants/images";
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, "Login">;
 
@@ -113,7 +115,7 @@ const Login: React.FC = () => {
 
       dispatch(loginSuccess(session));
 
-      showSuccess("Login Successful", "Welcome back!");
+      showSuccess("Login Successful", "Welcome back to Pride this way!");
     } catch (error) {
       console.log("LOGIN ERROR:", error);
       const message =
@@ -127,13 +129,9 @@ const Login: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      {/* <ImageBackground
-        source={BackGroundImage}
-        style={StyleSheet.absoluteFill}
-        resizeMode="cover"
-      /> */}
       <View style={styles.logo}>
-        <AppLogo width={200} height={153} />
+        <AppLogo/>
+
       </View>
       <View style={styles.overlay}>
         <ScrollView
