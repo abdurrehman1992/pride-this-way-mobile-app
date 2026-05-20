@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 
 import {
   View,
@@ -31,6 +31,7 @@ import { useSelector } from 'react-redux';
 import { logout } from '../../Redux/slices/authSlice';
 import { RootState } from '../../Redux/store';
 import { logoutUser } from '../../services/authService';
+import { fetchRewardsSummary } from '../../services/myTourService';
 import { showError } from '../common/AppToast';
 
 import TabsButtons from '../common/TabsButtons';
@@ -39,6 +40,7 @@ const CustomDrawer = ({ navigation }: any) => {
   const dispatch = useDispatch();
   const insets = useSafeAreaInsets();
   const user = useSelector((state: RootState) => state.auth.user);
+  const [visitedPlacesCount, setVisitedPlacesCount] = useState(0);
   const navigateTo = useCallback(
     (screen: string, params?: any) => {
       navigation.navigate(screen, params);
@@ -60,6 +62,32 @@ const CustomDrawer = ({ navigation }: any) => {
       showError('Logout Failed', message);
     }
   }, [dispatch]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    fetchRewardsSummary(user?.id)
+      .then((summary) => {
+        if (!isMounted) {
+          return;
+        }
+
+        const visitedCount = summary.tours.reduce(
+          (sum, tour) => sum + tour.places.filter((place) => place.visited).length,
+          0
+        );
+        setVisitedPlacesCount(visitedCount);
+      })
+      .catch(() => {
+        if (isMounted) {
+          setVisitedPlacesCount(0);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id]);
 
   return (
     <View style={styles.container}>
@@ -116,7 +144,7 @@ const CustomDrawer = ({ navigation }: any) => {
         <View style={styles.itemsRow}>
           <View style={[styles.menuCard, styles.rewardsCard]}>
             <Text style={styles.cardTitle} numberOfLines={1}>
-              1,250
+              {(user?.points || 0).toLocaleString()}
             </Text>
 
             <Text style={styles.cardText} numberOfLines={1}>
@@ -126,7 +154,7 @@ const CustomDrawer = ({ navigation }: any) => {
 
           <View style={[styles.menuCard, styles.toursCard]}>
             <Text style={styles.cardTitle} numberOfLines={1}>
-              24
+              {visitedPlacesCount.toLocaleString()}
             </Text>
 
             <Text style={styles.cardText} numberOfLines={1}>

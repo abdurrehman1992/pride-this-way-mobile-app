@@ -73,6 +73,13 @@ type RouteCardState = RecommendedRoute & {
 
 type TourFilter = 'All' | 'Current' | 'Paused' | 'Scheduled' | 'Favourite' | 'Completed';
 
+type TourStatusUpdate = {
+    tourId?: string;
+    routeId?: string;
+    status?: string;
+    updatedAt?: string;
+};
+
 const buildTourIdentityKey = (tour: Pick<RouteCardState, 'displayName' | 'route'>) =>
     `${tour.route.id}::${(tour.displayName || '').trim().toLowerCase()}`;
 
@@ -98,6 +105,28 @@ const buildPlaceProgressFromSavedTour = (savedTour: SavedTour) =>
         };
         return acc;
     }, {});
+
+const applyTourStatusUpdate = (
+    item: RouteCardState,
+    update?: TourStatusUpdate
+): RouteCardState => {
+    if (!update) {
+        return item;
+    }
+
+    const matchesTourId = update.tourId && item.tourId === update.tourId;
+    const matchesRouteId = update.routeId && item.route.id === update.routeId;
+
+    if (!matchesTourId && !matchesRouteId) {
+        return item;
+    }
+
+    return {
+        ...item,
+        status: (update.status as RouteCardState['status']) || item.status,
+        updatedAt: update.updatedAt || new Date().toISOString(),
+    };
+};
 
 const MyTour = () => {
     const route = useRoute<any>();
@@ -127,6 +156,7 @@ const MyTour = () => {
     const [activeFilter, setActiveFilter] = useState<TourFilter>('All');
     const addedRouteId = route.params?.routeId;
     const addedPlaceId = route.params?.addedPlaceId;
+    const tourUpdate = route.params?.tourUpdate as TourStatusUpdate | undefined;
 
     const tagNames = useMemo(() => tags.map((tag) => tag.name), [tags]);
     const selectedTagIds = useMemo(
@@ -268,6 +298,15 @@ const MyTour = () => {
             loadSavedTours();
         }, [loadSavedTours])
     );
+
+    useEffect(() => {
+        if (!tourUpdate?.status) {
+            return;
+        }
+
+        setRouteCards((prev) => prev.map((item) => applyTourStatusUpdate(item, tourUpdate)));
+        setSavedTourCards((prev) => prev.map((item) => applyTourStatusUpdate(item, tourUpdate)));
+    }, [tourUpdate]);
 
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
@@ -549,7 +588,18 @@ const MyTour = () => {
                     scheduledDate: null,
                 });
 
-                await loadSavedTours();
+                setSavedTourCards((prev) =>
+                    prev.map((item) =>
+                        item.tourId === savedTourId
+                            ? {
+                                ...item,
+                                status: 'active',
+                                updatedAt: now,
+                                scheduledDate: null,
+                            }
+                            : item
+                    )
+                );
                 setRouteCards((prev) =>
                     prev
                         .filter((routeCard) => routeCard.cardId !== tour.cardId)

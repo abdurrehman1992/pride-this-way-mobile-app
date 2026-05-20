@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Keyboard,
+  Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,7 +17,7 @@ import EventDetailModal from '../../components/modals/EventDetailModal';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY } from '../../constants/fonts';
-import { DropdownIcon, SearchIcon } from '../../constants/icons';
+import { CrossIcon, DropdownIcon, SearchIcon } from '../../constants/icons';
 import {
   fetchMapEvents,
   searchLocationSuggestions,
@@ -34,10 +36,13 @@ type QuickCity = {
   coordinates: [number, number];
 };
 
-type EventMarker = FirebaseEvent & {
-  markerType: 'pride' | 'podcast';
-  markerCoordinate: [number, number];
+type EventGroup = {
+  id: string;
+  coordinate: [number, number];
+  events: FirebaseEvent[];
 };
+
+type DateField = 'start' | 'end';
 
 const isPodcastEvent = (event: FirebaseEvent) =>
   (event.event_type || '').toLowerCase().trim() === 'podcast_event';
@@ -163,6 +168,107 @@ const eventCoordinate = (event: FirebaseEvent): [number, number] => [
   Number(event.coordinates?.latitude || 0),
 ];
 
+const coordinateKey = ([longitude, latitude]: [number, number]) =>
+  `${longitude.toFixed(3)}:${latitude.toFixed(3)}`;
+
+const markerColorForEvent = (event: FirebaseEvent) =>
+  isPodcastEvent(event) ? '#1B84FF' : '#F04452';
+
+const formatDateValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const buildCalendarDays = (monthDate: Date) => {
+  const start = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+  const daysInMonth = end.getDate();
+  const firstWeekday = start.getDay();
+  const cells: Array<Date | null> = [];
+
+  for (let index = 0; index < firstWeekday; index += 1) {
+    cells.push(null);
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), day));
+  }
+
+  while (cells.length % 7 !== 0) {
+    cells.push(null);
+  }
+
+  return cells;
+};
+
+const parseDateOnly = (value?: string | null) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+};
+
+const eventMatchesDateRange = (
+  event: FirebaseEvent,
+  startDateFilter: string,
+  endDateFilter: string
+) => {
+  const filterStart = parseDateOnly(startDateFilter);
+  const filterEnd = parseDateOnly(endDateFilter);
+
+  if (!filterStart && !filterEnd) {
+    return true;
+  }
+
+  const eventStart = parseDateOnly(event.startDate) || parseDateOnly(event.endDate);
+  const eventEnd = parseDateOnly(event.endDate) || eventStart;
+
+  if (!eventStart && !eventEnd) {
+    return false;
+  }
+
+  const rangeStart = eventStart || eventEnd;
+  const rangeEnd = eventEnd || eventStart;
+
+  if (filterStart && rangeEnd && rangeEnd < filterStart) {
+    return false;
+  }
+
+  if (filterEnd && rangeStart && rangeStart > filterEnd) {
+    return false;
+  }
+
+  return true;
+};
+
+const groupEventsByCoordinate = (events: FirebaseEvent[]): EventGroup[] => {
+  const groups = new globalThis.Map<string, EventGroup>();
+
+  events.forEach((event) => {
+    const coordinate = eventCoordinate(event);
+    const key = coordinateKey(coordinate);
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.events.push(event);
+      return;
+    }
+
+    groups.set(key, {
+      id: key,
+      coordinate,
+      events: [event],
+    });
+  });
+
+  return Array.from(groups.values());
+};
+
 const Map = () => {
   const cameraRef = useRef<Mapbox.Camera>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -173,6 +279,14 @@ const Map = () => {
   const [selectedEvent, setSelectedEvent] = useState<FirebaseEvent | null>(null);
   const [searchSuggestions, setSearchSuggestions] = useState<LocationSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [startDateFilter, setStartDateFilter] = useState('');
+  const [endDateFilter, setEndDateFilter] = useState('');
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [activeDateField, setActiveDateField] = useState<DateField>('start');
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
 
   useEffect(() => {
     let isMounted = true;
@@ -238,30 +352,15 @@ const Map = () => {
 
   const filteredEvents = useMemo(() => {
     const filterLabel = selectedLocation?.label || '';
-    return events.filter((event) => eventMatchesFilter(event, filterLabel));
-  }, [events, selectedLocation]);
+    return events.filter(
+      (event) =>
+        eventMatchesFilter(event, filterLabel) &&
+        eventMatchesDateRange(event, startDateFilter, endDateFilter)
+    );
+  }, [endDateFilter, events, selectedLocation, startDateFilter]);
 
-  const prideMarkers = useMemo<EventMarker[]>(
-    () =>
-      filteredEvents
-        .filter((event) => !isPodcastEvent(event))
-        .map((event) => ({
-          ...event,
-          markerType: 'pride',
-          markerCoordinate: eventCoordinate(event),
-        })),
-    [filteredEvents]
-  );
-
-  const podcastMarkers = useMemo<EventMarker[]>(
-    () =>
-      filteredEvents
-        .filter((event) => isPodcastEvent(event))
-        .map((event) => ({
-          ...event,
-          markerType: 'podcast',
-          markerCoordinate: eventCoordinate(event),
-        })),
+  const groupedEvents = useMemo<EventGroup[]>(
+    () => groupEventsByCoordinate(filteredEvents),
     [filteredEvents]
   );
 
@@ -270,16 +369,79 @@ const Map = () => {
       return;
     }
 
-    cameraRef.current?.setCamera({
-      centerCoordinate: location.coordinates,
-      zoomLevel: 4.4,
-      pitch: 0,
-      heading: 0,
-      animationDuration: 1400,
-      animationMode: 'flyTo',
-    });
-    setZoomLevel(4.4);
+    const matchingEvents = events.filter(
+      (event) =>
+        eventMatchesFilter(event, location.label) &&
+        eventMatchesDateRange(event, startDateFilter, endDateFilter)
+    );
+
+    if (matchingEvents.length === 0) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: location.coordinates,
+        zoomLevel: 4.4,
+        pitch: 0,
+        heading: 0,
+        animationDuration: 1400,
+        animationMode: 'flyTo',
+      });
+      setZoomLevel(4.4);
+      return;
+    }
+
+    const coordinates = matchingEvents.map(eventCoordinate);
+    const longitudes = coordinates.map(([longitude]) => longitude);
+    const latitudes = coordinates.map(([, latitude]) => latitude);
+    const minLongitude = Math.min(...longitudes);
+    const maxLongitude = Math.max(...longitudes);
+    const minLatitude = Math.min(...latitudes);
+    const maxLatitude = Math.max(...latitudes);
+
+    if (
+      minLongitude === maxLongitude &&
+      minLatitude === maxLatitude
+    ) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: [minLongitude, minLatitude],
+        zoomLevel: 9,
+        pitch: 0,
+        heading: 0,
+        animationDuration: 1400,
+        animationMode: 'flyTo',
+      });
+      setZoomLevel(9);
+      return;
+    }
+
+    cameraRef.current?.fitBounds(
+      [maxLongitude, maxLatitude],
+      [minLongitude, minLatitude],
+      [70, 20, 170, 20],
+      1400
+    );
+    setZoomLevel(10.5);
+  }, [endDateFilter, events, startDateFilter]);
+
+  const openCalendar = useCallback((field: DateField) => {
+    const currentValue = field === 'start' ? startDateFilter : endDateFilter;
+    const parsed = parseDateOnly(currentValue) || new Date();
+    setActiveDateField(field);
+    setCalendarMonth(new Date(parsed.getFullYear(), parsed.getMonth(), 1));
+    setCalendarVisible(true);
+  }, [endDateFilter, startDateFilter]);
+
+  const closeCalendar = useCallback(() => {
+    setCalendarVisible(false);
   }, []);
+
+  const handleCalendarDateSelect = useCallback((date: Date) => {
+    const nextValue = formatDateValue(date);
+    if (activeDateField === 'start') {
+      setStartDateFilter(nextValue);
+    } else {
+      setEndDateFilter(nextValue);
+    }
+    setCalendarVisible(false);
+  }, [activeDateField]);
 
   const handleQuickCityPress = useCallback(
     (city: QuickCity) => {
@@ -313,11 +475,21 @@ const Map = () => {
     [focusLocation]
   );
 
+  useEffect(() => {
+    if (!selectedLocation) {
+      return;
+    }
+
+    focusLocation(selectedLocation);
+  }, [selectedLocation, startDateFilter, endDateFilter, focusLocation]);
+
   const handleClearFilter = useCallback(() => {
     setSelectedLocation(null);
     setSearchText('');
     setSearchSuggestions([]);
     setShowSuggestions(false);
+    setStartDateFilter('');
+    setEndDateFilter('');
     cameraRef.current?.setCamera({
       centerCoordinate: INITIAL_CAMERA_CENTER,
       zoomLevel: INITIAL_CAMERA_ZOOM,
@@ -335,10 +507,21 @@ const Map = () => {
     setShowSuggestions(true);
   }, []);
 
-  const handleMarkerPress = useCallback((marker: EventMarker) => {
-    setSelectedEvent(marker);
+  const handleClearSearch = useCallback(() => {
+    setSearchText('');
+    setSelectedLocation(null);
+    setSearchSuggestions([]);
+    setShowSuggestions(false);
+  }, []);
+
+  const calendarDays = useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
+  const activeDateValue = activeDateField === 'start' ? startDateFilter : endDateFilter;
+  const selectedCalendarValue = parseDateOnly(activeDateValue);
+
+  const handleMarkerPress = useCallback((event: FirebaseEvent) => {
+    setSelectedEvent(event);
     cameraRef.current?.setCamera({
-      centerCoordinate: marker.markerCoordinate,
+      centerCoordinate: eventCoordinate(event),
       zoomLevel: 5.2,
       pitch: 0,
       heading: 0,
@@ -347,6 +530,40 @@ const Map = () => {
     });
     setZoomLevel(5.2);
   }, []);
+
+  const handleCloseSelectedEvent = useCallback(() => {
+    if (selectedEvent) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: eventCoordinate(selectedEvent),
+        zoomLevel: 5.2,
+        pitch: 0,
+        heading: 0,
+        animationDuration: 600,
+        animationMode: 'easeTo',
+      });
+      setZoomLevel(5.2);
+    }
+
+    setSelectedEvent(null);
+  }, [selectedEvent]);
+
+  const handleGroupPress = useCallback((group: EventGroup) => {
+    if (group.events.length === 1) {
+      handleMarkerPress(group.events[0]);
+      return;
+    }
+
+    const nextZoom = Math.min(zoomLevel + 2, 18);
+    cameraRef.current?.setCamera({
+      centerCoordinate: group.coordinate,
+      zoomLevel: nextZoom,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 600,
+      animationMode: 'easeTo',
+    });
+    setZoomLevel(nextZoom);
+  }, [handleMarkerPress, zoomLevel]);
 
   const handleZoom = useCallback((direction: 'in' | 'out') => {
     const nextZoom =
@@ -383,7 +600,7 @@ const Map = () => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.quickCitiesContent}
         >
-          {QUICK_CITIES.map((city) => {
+          {/* {QUICK_CITIES.map((city) => {
             const isActive = selectedLocation?.id === city.id;
             return (
               <TouchableOpacity
@@ -402,7 +619,7 @@ const Map = () => {
                 </Text>
               </TouchableOpacity>
             );
-          })}
+          })} */}
         </ScrollView>
 
         <View style={styles.searchBlock}>
@@ -418,7 +635,17 @@ const Map = () => {
                 onFocus={() => setShowSuggestions(true)}
               />
             </View>
-            <DropdownIcon width={11} height={6} />
+            {searchText || selectedLocation ? (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                onPress={handleClearSearch}
+              >
+                <CrossIcon width={12} height={12} />
+              </TouchableOpacity>
+            ) : (
+              <DropdownIcon width={11} height={6} />
+            )}
           </View>
 
           {showSuggestions && searchSuggestions.length > 0 ? (
@@ -442,6 +669,55 @@ const Map = () => {
               </ScrollView>
             </View>
           ) : null}
+        </View>
+
+        <View style={styles.dateFiltersRow}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.dateInputWrap}
+            onPress={() => openCalendar('start')}
+          >
+            <View style={styles.dateFieldRow}>
+              <Text style={[styles.dateInputText, !startDateFilter && styles.datePlaceholderText]}>
+                {startDateFilter || 'From date'}
+              </Text>
+              {startDateFilter ? (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    setStartDateFilter('');
+                  }}
+                >
+                  <CrossIcon width={12} height={12} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.dateInputWrap}
+            onPress={() => openCalendar('end')}
+          >
+            <View style={styles.dateFieldRow}>
+              <Text style={[styles.dateInputText, !endDateFilter && styles.datePlaceholderText]}>
+                {endDateFilter || 'To date'}
+              </Text>
+              {endDateFilter ? (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    setEndDateFilter('');
+                  }}
+                >
+                  <CrossIcon width={12} height={12} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -469,10 +745,12 @@ const Map = () => {
               >
                 <Mapbox.Camera
                   ref={cameraRef}
-                  centerCoordinate={INITIAL_CAMERA_CENTER}
-                  zoomLevel={INITIAL_CAMERA_ZOOM}
-                  pitch={0}
-                  heading={0}
+                  defaultSettings={{
+                    centerCoordinate: INITIAL_CAMERA_CENTER,
+                    zoomLevel: INITIAL_CAMERA_ZOOM,
+                    pitch: 0,
+                    heading: 0,
+                  }}
                 />
                 <Mapbox.Atmosphere style={atmosphereStyle} />
                 <Mapbox.ShapeSource id="prideStripes" shape={prideStripes}>
@@ -508,43 +786,40 @@ const Map = () => {
                   />
                 </Mapbox.VectorSource>
 
-                {prideMarkers.map((event) => (
-                  <Mapbox.MarkerView
-                    key={`pride-${event.id}`}
-                    id={`pride-${event.id}`}
-                    coordinate={event.markerCoordinate}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <TouchableOpacity
-                      activeOpacity={0.85}
-                      onPress={() => handleMarkerPress(event)}
-                      style={styles.markerTapArea}
-                    >
-                      <View style={[styles.markerBubble, styles.redMarkerBubble]}>
-                        <View style={styles.markerInnerDot} />
-                      </View>
-                    </TouchableOpacity>
-                  </Mapbox.MarkerView>
-                ))}
+                {groupedEvents.map((group) => {
+                  const groupWidth = Math.max(24, 12 + group.events.length * 12);
 
-                {podcastMarkers.map((event) => (
-                  <Mapbox.MarkerView
-                    key={`podcast-${event.id}`}
-                    id={`podcast-${event.id}`}
-                    coordinate={event.markerCoordinate}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                  >
-                    <TouchableOpacity
-                      activeOpacity={0.85}
-                      onPress={() => handleMarkerPress(event)}
-                      style={styles.markerTapArea}
+                  return (
+                    <Mapbox.MarkerView
+                      key={`group-${group.id}`}
+                      id={`group-${group.id}`}
+                      coordinate={group.coordinate}
+                      anchor={{ x: 0.5, y: 0.5 }}
                     >
-                      <View style={[styles.markerBubble, styles.blueMarkerBubble]}>
-                        <View style={styles.markerInnerDot} />
-                      </View>
-                    </TouchableOpacity>
-                  </Mapbox.MarkerView>
-                ))}
+                      <TouchableOpacity
+                        activeOpacity={0.9}
+                        onPress={() => handleGroupPress(group)}
+                        style={[styles.groupMarkerTapArea, { width: groupWidth }]}
+                      >
+                        <View style={[styles.groupMarkerRow, { width: groupWidth }]}>
+                          {group.events.map((event, index) => (
+                            <View
+                              key={event.id}
+                              style={[
+                                styles.groupMarkerBubble,
+                                {
+                                  left: index * 12,
+                                  backgroundColor: markerColorForEvent(event),
+                                  zIndex: group.events.length - index,
+                                },
+                              ]}
+                            />
+                          ))}
+                        </View>
+                      </TouchableOpacity>
+                    </Mapbox.MarkerView>
+                  );
+                })}
               </Mapbox.MapView>
 
               <View style={[styles.zoomControls]}>
@@ -591,9 +866,90 @@ const Map = () => {
       <EventDetailModal
         visible={Boolean(selectedEvent)}
         event={selectedEvent}
-        onClose={() => setSelectedEvent(null)}
+        onClose={handleCloseSelectedEvent}
         variant="compact"
       />
+
+      <Modal
+        visible={calendarVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeCalendar}
+      >
+        <Pressable style={styles.calendarOverlay} onPress={closeCalendar}>
+          <Pressable style={styles.calendarCard} onPress={() => {}}>
+            <View style={styles.calendarHeader}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() =>
+                  setCalendarMonth(
+                    new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1)
+                  )
+                }
+              >
+                <Text style={styles.calendarNavText}>{'<'}</Text>
+              </TouchableOpacity>
+              <Text style={styles.calendarTitle}>
+                {calendarMonth.toLocaleDateString('en-US', {
+                  month: 'long',
+                  year: 'numeric',
+                })}
+              </Text>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() =>
+                  setCalendarMonth(
+                    new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1)
+                  )
+                }
+              >
+                <Text style={styles.calendarNavText}>{'>'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.calendarWeekRow}>
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+                <Text key={`${day}-${index}`} style={styles.calendarWeekday}>
+                  {day}
+                </Text>
+              ))}
+            </View>
+
+            <View style={styles.calendarGrid}>
+              {calendarDays.map((date, index) => {
+                const isSelected =
+                  Boolean(date) &&
+                  Boolean(selectedCalendarValue) &&
+                  formatDateValue(date as Date) === formatDateValue(selectedCalendarValue as Date);
+
+                return (
+                  <TouchableOpacity
+                    key={`${date ? formatDateValue(date) : 'empty'}-${index}`}
+                    activeOpacity={0.85}
+                    disabled={!date}
+                    style={[
+                      styles.calendarDayCell,
+                      isSelected && styles.calendarDayCellSelected,
+                      !date && styles.calendarDayCellEmpty,
+                    ]}
+                    onPress={() => date && handleCalendarDateSelect(date)}
+                  >
+                    <Text
+                      style={[
+                        styles.calendarDayText,
+                        isSelected && styles.calendarDayTextSelected,
+                        !date && styles.calendarDayTextEmpty,
+                      ]}
+                    >
+                      {date ? date.getDate() : ''}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 };
@@ -683,6 +1039,38 @@ const styles = StyleSheet.create({
     position: 'relative',
     zIndex: 60,
   },
+  dateFiltersRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  dateInputWrap: {
+    flex: 1,
+    height: 44,
+    borderRadius: 18,
+    backgroundColor: COLORS.WHITE,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    shadowColor: '#0B2A45',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  dateInputText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+  },
+  dateFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  datePlaceholderText: {
+    color: '#66717B',
+  },
   citySearchInputWrap: {
     flex: 1,
     flexDirection: 'row',
@@ -765,37 +1153,28 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },
-  markerTapArea: {
-    width: 34,
+  groupMarkerTapArea: {
+    minWidth: 24,
     height: 34,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  markerBubble: {
+  groupMarkerRow: {
+    height: 24,
+    justifyContent: 'center',
+  },
+  groupMarkerBubble: {
+    position: 'absolute',
     width: 24,
     height: 24,
     borderRadius: 12,
     borderWidth: 3,
     borderColor: COLORS.WHITE,
-    justifyContent: 'center',
-    alignItems: 'center',
     shadowColor: '#0A1B2A',
     shadowOpacity: 0.24,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 7,
-  },
-  redMarkerBubble: {
-    backgroundColor: '#F04452',
-  },
-  blueMarkerBubble: {
-    backgroundColor: '#1B84FF',
-  },
-  markerInnerDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.WHITE,
   },
   mapFallback: {
     flex: 1,
@@ -848,5 +1227,76 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     fontFamily: FONT_FAMILY.InterTight_Regular,
+  },
+  calendarOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  calendarCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 24,
+    backgroundColor: COLORS.WHITE,
+    padding: 18,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  calendarNavText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 22,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    width: 28,
+    textAlign: 'center',
+  },
+  calendarTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 17,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  calendarWeekRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  calendarWeekday: {
+    flex: 1,
+    textAlign: 'center',
+    color: '#66717B',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarDayCell: {
+    width: '14.2857%',
+    aspectRatio: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 18,
+  },
+  calendarDayCellSelected: {
+    backgroundColor: COLORS.BUTTON_COLOR,
+  },
+  calendarDayCellEmpty: {
+    opacity: 0,
+  },
+  calendarDayText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  calendarDayTextSelected: {
+    color: COLORS.WHITE,
+  },
+  calendarDayTextEmpty: {
+    color: 'transparent',
   },
 });

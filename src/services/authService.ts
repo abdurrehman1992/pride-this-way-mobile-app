@@ -87,9 +87,11 @@ const upsertUserDocument = async ({
 }) => {
   const docRef = getUserDocumentRef(uid);
   const existingSnapshot = await docRef.get();
+  const existingData = existingSnapshot.data();
   const trimmedName = fullName.trim();
   const trimmedEmail = email.trim().toLowerCase();
   const trimmedPhone = phone.trim();
+  const nowIso = new Date().toISOString();
 
   const payload: FirebaseFirestoreTypes.UpdateData = {
     uid,
@@ -104,8 +106,8 @@ const upsertUserDocument = async ({
     payload.profileImage = profileImage;
   }
 
-  if (!existingSnapshot.exists) {
-    payload.createdAt = firestore.FieldValue.serverTimestamp();
+  if (!existingData?.createdAt) {
+    payload.createdAt = nowIso;
   }
 
   await docRef.set(payload, { merge: true });

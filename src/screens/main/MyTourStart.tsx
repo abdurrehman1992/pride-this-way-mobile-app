@@ -316,6 +316,8 @@ const MyTourStart = () => {
   const [airSegments, setAirSegments] = useState<[number, number][][]>([]);
   const [completedRoadSegments, setCompletedRoadSegments] = useState<[number, number][][]>([]);
   const [completedAirSegments, setCompletedAirSegments] = useState<[number, number][][]>([]);
+  const [completedApproachRoadSegments, setCompletedApproachRoadSegments] = useState<[number, number][][]>([]);
+  const [completedApproachAirSegments, setCompletedApproachAirSegments] = useState<[number, number][][]>([]);
   const [tourStops, setTourStops] = useState<TourStop[]>([]);
   const [tourId, setTourId] = useState<string | null>(route.params?.tourId || null);
   const tourIdRef = useRef<string | null>(route.params?.tourId || null);
@@ -877,10 +879,11 @@ useEffect(() => {
       })
       .map((stop) => stop.coordinate);
 
+    const routeStartCoordinate =
+      ((tourStarted || hasVisitedProgress) ? routeAnchor : currentLocation) || null;
+
     const lineStops = [
-      ...(((tourStarted || hasVisitedProgress) ? routeAnchor : currentLocation)
-        ? [(((tourStarted || hasVisitedProgress) ? routeAnchor : currentLocation) as [number, number])]
-        : []),
+      ...(routeStartCoordinate ? [routeStartCoordinate] : []),
       ...filteredPlaceCoords,
     ];
 
@@ -918,7 +921,9 @@ useEffect(() => {
 
   useEffect(() => {
     const completedStops = [
-      ...(tourOrigin && visitedStopsInVisitOrder.length > 0 ? [tourOrigin] : []),
+      ...(tourOrigin && visitedStopsInVisitOrder.length > 0
+        ? [tourOrigin]
+        : []),
       ...visitedStopsInVisitOrder.map((stop) => stop.coordinate),
     ];
 
@@ -953,6 +958,99 @@ useEffect(() => {
     };
   }, [buildRouteSegments, tourOrigin, visitedStopsInVisitOrder]);
 
+  useEffect(() => {
+    if (!isCompletedTour || !currentLocation) {
+      setCompletedApproachRoadSegments([]);
+      setCompletedApproachAirSegments([]);
+      return;
+    }
+
+    const firstCompletedStop =
+      visitedStopsInVisitOrder[0]?.coordinate || orderedPlaceStops[0]?.coordinate;
+
+    if (!firstCompletedStop) {
+      setCompletedApproachRoadSegments([]);
+      setCompletedApproachAirSegments([]);
+      return;
+    }
+
+    const sameSpot =
+      Math.abs(firstCompletedStop[0] - currentLocation[0]) < 0.000001 &&
+      Math.abs(firstCompletedStop[1] - currentLocation[1]) < 0.000001;
+
+    if (sameSpot) {
+      setCompletedApproachRoadSegments([]);
+      setCompletedApproachAirSegments([]);
+      return;
+    }
+
+    let isMounted = true;
+    const lineStops: [number, number][] = [currentLocation, firstCompletedStop];
+    setCompletedApproachRoadSegments([]);
+    setCompletedApproachAirSegments([]);
+
+    const fetchApproachRoute = async () => {
+      try {
+        const next = await buildRouteSegments(lineStops);
+        if (!isMounted) return;
+        setCompletedApproachRoadSegments(next.road);
+        setCompletedApproachAirSegments(next.air);
+      } catch {
+        if (isMounted) {
+          setCompletedApproachRoadSegments([lineStops]);
+          setCompletedApproachAirSegments([]);
+        }
+      }
+    };
+
+    fetchApproachRoute();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [buildRouteSegments, currentLocation, isCompletedTour, orderedPlaceStops, visitedStopsInVisitOrder]);
+
+  useEffect(() => {
+    if (!cameraRef.current || !mapReady || !isCompletedTour) {
+      return;
+    }
+
+    const completedCoords = [
+      ...completedRoadSegments.flat(),
+      ...completedAirSegments.flat(),
+    ];
+    const fallbackCoords = orderedPlaceStops.map((stop) => stop.coordinate);
+    const coordinates =
+      completedCoords.length >= 2 ? completedCoords : fallbackCoords;
+
+    if (coordinates.length === 0) {
+      return;
+    }
+
+    if (coordinates.length === 1) {
+      cameraRef.current.setCamera({
+        centerCoordinate: coordinates[0],
+        zoomLevel: 13,
+        animationDuration: 900,
+        animationMode: 'easeTo',
+      });
+      return;
+    }
+
+    const longitudes = coordinates.map((c) => c[0]);
+    const latitudes = coordinates.map((c) => c[1]);
+    const ne: [number, number] = [Math.max(...longitudes), Math.max(...latitudes)];
+    const sw: [number, number] = [Math.min(...longitudes), Math.min(...latitudes)];
+
+    cameraRef.current.fitBounds(ne, sw, [170, 36, 180, 36], 900);
+  }, [
+    completedAirSegments,
+    completedRoadSegments,
+    isCompletedTour,
+    mapReady,
+    orderedPlaceStops,
+  ]);
+
   const routeLine = useMemo<FeatureCollection<LineString>>(
     () => ({
       type: 'FeatureCollection',
@@ -979,6 +1077,20 @@ useEffect(() => {
         })),
     }),
     [completedAirSegments, completedRoadSegments]
+  );
+
+  const completedApproachRouteLine = useMemo<FeatureCollection<LineString>>(
+    () => ({
+      type: 'FeatureCollection',
+      features: [...completedApproachRoadSegments, ...completedApproachAirSegments]
+        .filter((seg) => seg.length >= 2)
+        .map((seg) => ({
+          type: 'Feature' as const,
+          properties: {},
+          geometry: { type: 'LineString' as const, coordinates: seg },
+        })),
+    }),
+    [completedApproachAirSegments, completedApproachRoadSegments]
   );
   // Stop name labels (native SymbolLayer — renders at every zoom level reliably)
   const unvisitedStopLabels = useMemo<FeatureCollection<Point>>(() => ({
@@ -1058,17 +1170,10 @@ useEffect(() => {
     [placeProgress]
   );
 
-  const currentMarkerNeedsStandalonePin = useMemo(() => {
-    if (!currentLocation) {
-      return false;
-    }
-
-    return !tourStops.some((stop) => {
-      const dx = Math.abs(stop.coordinate[0] - currentLocation[0]);
-      const dy = Math.abs(stop.coordinate[1] - currentLocation[1]);
-      return dx < 0.000001 && dy < 0.000001;
-    });
-  }, [currentLocation, tourStops]);
+  const currentMarkerNeedsStandalonePin = useMemo(
+    () => Boolean(currentLocation),
+    [currentLocation]
+  );
 
   const updateSelectedStopPosition = useCallback(async (stop: TourStop) => {
     if (!mapRef.current) {
@@ -1294,9 +1399,16 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
     setIsPausedTour(true);
     setSelectedStop(null);
     setSelectedEvent(null);
-    await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => { });
+    const savedId = await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => null);
     showInfo('Tour Paused', 'You can resume this tour anytime.');
-    navigation.goBack();
+    navigation.navigate('MyTour', {
+      tourUpdate: {
+        tourId: savedId || tourId || undefined,
+        routeId: routeId,
+        status: 'paused',
+        updatedAt: new Date().toISOString(),
+      },
+    });
   };
 
 
@@ -1476,6 +1588,12 @@ return (
               {completedRouteLine.features.length > 0 && (
                 <Mapbox.ShapeSource id="completedTourRouteLine" shape={completedRouteLine}>
                   <Mapbox.LineLayer id="completedTourRouteLineLayer" style={completedRouteLineLayerStyle} />
+                </Mapbox.ShapeSource>
+              )}
+
+              {completedApproachRouteLine.features.length > 0 && (
+                <Mapbox.ShapeSource id="completedApproachRouteLine" shape={completedApproachRouteLine}>
+                  <Mapbox.LineLayer id="completedApproachRouteLineLayer" style={completedRouteLineLayerStyle} />
                 </Mapbox.ShapeSource>
               )}
 
@@ -1762,7 +1880,14 @@ return (
                   style={styles.completionPrimaryBtn}
                   onPress={() => {
                     setTourCompletedVisible(false);
-                    navigation.navigate('MyTour' as never);
+                    navigation.navigate('MyTour', {
+                      tourUpdate: {
+                        tourId: tourId || undefined,
+                        routeId: routeId,
+                        status: 'completed',
+                        updatedAt: new Date().toISOString(),
+                      },
+                    });
                   }}
                 >
                   <Text style={styles.completionPrimaryText}>Back To My Tour</Text>
