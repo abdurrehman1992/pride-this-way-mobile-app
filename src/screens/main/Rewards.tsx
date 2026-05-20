@@ -64,17 +64,20 @@ const STATIC_REWARDS = {
 
 const Rewards = () => {
   const userId = useSelector((state: RootState) => state.auth.user?.id);
+  const userPoints = useSelector(
+    (state: RootState) => state.auth.user?.points ?? 0
+  );
   const [showAll, setShowAll] = useState(false);
-  const [totalPoints, setTotalPoints] = useState(0);
   const [rewards, setRewards] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+
+  const totalPoints = userPoints;
 
   const loadRewards = useCallback(async () => {
     const summary = await fetchRewardsSummary(userId);
     const source =
       summary.tours.length > 0 ? summary : STATIC_REWARDS;
 
-    setTotalPoints(source.totalPoints);
     setRewards(
       source.tours.map((tour, index) => ({
         id: tour.id,

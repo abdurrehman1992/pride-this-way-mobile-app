@@ -40,7 +40,7 @@ const Profile = () => {
       <View style={styles.profileContainer}>
         <Image
           source={{
-            uri: PROFILE_IMAGE
+            uri: user?.profileImage || PROFILE_IMAGE
           }}
           style={styles.profileImage}
         />

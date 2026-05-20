@@ -21,6 +21,7 @@ import {
     getCurrentPosition,
     getAddressFromCoords,
 } from "../../utils/location";
+import { suggestLocations } from "../../services/aiService";
 
 import {
     ModalCloseIcon,
@@ -62,16 +63,19 @@ const LocationModal: React.FC<Props> = ({
     onClose,
     onNext,
     title = "Select Your Location",
-    locations = DEFAULT_LOCATION_LIST,
+    locations,
     searchValue,
     onSearchChange,
-    loadingSuggestions = false,
+    loadingSuggestions,
 }) => {
     const [internalSearch, setInternalSearch] = useState("");
     const [selected, setSelected] = useState("");
     const [loadingLocation, setLoadingLocation] = useState(false);
     const [isKeyboardVisible, setKeyboardVisible] = useState(false);
+    const [aiCities, setAiCities] = useState<string[]>([]);
+    const [aiLoading, setAiLoading] = useState(false);
     const search = searchValue ?? internalSearch;
+    const useExternal = locations !== undefined;
 
     const panY = useRef(new Animated.Value(1000)).current;
     useEffect(() => {
@@ -102,6 +106,29 @@ const LocationModal: React.FC<Props> = ({
             panY.setValue(1000);
         }
     }, [visible, panY]);
+
+    useEffect(() => {
+        if (useExternal || !visible) return;
+        let cancelled = false;
+
+        setAiLoading(true);
+        const handle = setTimeout(async () => {
+            try {
+                const cities = await suggestLocations(search);
+                if (!cancelled) setAiCities(cities);
+            } catch (err) {
+                console.warn("[LocationModal] suggestLocations failed", err);
+                if (!cancelled) setAiCities(DEFAULT_LOCATION_LIST);
+            } finally {
+                if (!cancelled) setAiLoading(false);
+            }
+        }, search.trim() ? 400 : 0);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(handle);
+        };
+    }, [search, visible, useExternal]);
 
     const closeWithAnimation = () => {
         Animated.timing(panY, {
@@ -140,11 +167,19 @@ const LocationModal: React.FC<Props> = ({
                 : "70%";
 
     const filteredLocations = useMemo(() => {
-        if (!search.trim()) return locations;
-        return locations.filter((item) =>
-            item.toLowerCase().includes(search.toLowerCase())
-        );
-    }, [locations, search]);
+        if (useExternal) {
+            const list = locations as string[];
+            if (!search.trim()) return list;
+            return list.filter((item) =>
+                item.toLowerCase().includes(search.toLowerCase())
+            );
+        }
+        return aiCities;
+    }, [locations, search, useExternal, aiCities]);
+
+    const showLoadingSuggestions = useExternal
+        ? !!loadingSuggestions
+        : aiLoading;
 
     const handleSelect = (item: string) => {
         if (onSearchChange) {
@@ -298,7 +333,7 @@ const LocationModal: React.FC<Props> = ({
                             styles.scrollContentBottom,
                         ]}
                     >
-                        {loadingSuggestions ? (
+                        {showLoadingSuggestions ? (
                             <View style={styles.emptyState}>
                                 <ActivityIndicator color={COLORS.BUTTON_COLOR} />
                             </View>

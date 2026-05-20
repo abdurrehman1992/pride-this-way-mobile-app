@@ -38,6 +38,7 @@ export type FirebaseEvent = {
   city_name?: string;
   country?: string;
   category?: string;
+  event_type?: string;
   coverImage?: string;
   startDate?: string;
   endDate?: string;
@@ -144,7 +145,6 @@ const EVENTS_COLLECTION = 'events';
 const TOURS_COLLECTION = 'tours';
 const USERS_COLLECTION = 'users';
 const FAVORITES_SUBCOLLECTION = 'favorites';
-const USER_ROUTES_COLLECTION = 'users_routes';
 
 const rescheduleOtherActiveTours = async ({
   userId,
@@ -169,21 +169,12 @@ const rescheduleOtherActiveTours = async ({
 
   await Promise.all(
     docsToUpdate.map(async (doc) => {
-      await Promise.all([
-        firestore().collection(TOURS_COLLECTION).doc(doc.id).set({
-          status: 'scheduled',
-          scheduledDate: nextScheduledDate,
-          completedAt: null,
-          updatedAt: nextScheduledDate,
-        }, { merge: true }),
-        firestore().collection(USER_ROUTES_COLLECTION).doc(doc.id).set({
-          status: 'scheduled',
-          scheduledDate: nextScheduledDate,
-          completed: false,
-          completedAt: null,
-          updatedAt: nextScheduledDate,
-        }, { merge: true }),
-      ]);
+      await firestore().collection(TOURS_COLLECTION).doc(doc.id).set({
+        status: 'scheduled',
+        scheduledDate: nextScheduledDate,
+        completedAt: null,
+        updatedAt: nextScheduledDate,
+      }, { merge: true });
     })
   );
 };
@@ -233,6 +224,7 @@ const parseEvent = (
   city_name: data?.city_name || '',
   country: data?.country || '',
   category: data?.category || 'Event',
+  event_type: data?.event_type || '',
   coverImage: data?.coverImage || '',
   startDate: data?.startDate || '',
   endDate: data?.endDate || '',
@@ -699,11 +691,45 @@ export const fetchPlacesByIds = async (placeIds: string[]) => {
   return Array.from(placesMap.values()).filter((place) => placeIdSet.has(place.id));
 };
 
+export const fetchRoutesByIds = async (
+  routeIds: string[]
+): Promise<FirebaseRoute[]> => {
+  if (routeIds.length === 0) return [];
+
+  const snapshot = await firestore().collection(ROUTES_COLLECTION).get();
+  const wanted = new Set(routeIds);
+  return snapshot.docs
+    .filter((doc) => wanted.has(doc.id))
+    .map((doc) => parseRoute(doc.id, doc.data()));
+};
+
+export const fetchToursByIds = async (
+  tourIds: string[]
+): Promise<SavedTour[]> => {
+  if (tourIds.length === 0) return [];
+
+  const snapshot = await firestore().collection(TOURS_COLLECTION).get();
+  const wanted = new Set(tourIds);
+  return snapshot.docs
+    .filter((doc) => wanted.has(doc.id))
+    .map((doc) => parseSavedTour(doc.id, doc.data()));
+};
+
+export const fetchEventsByIds = async (
+  eventIds: string[]
+): Promise<FirebaseEvent[]> => {
+  if (eventIds.length === 0) return [];
+
+  const snapshot = await firestore().collection(EVENTS_COLLECTION).get();
+  const wanted = new Set(eventIds);
+  return snapshot.docs
+    .filter((doc) => wanted.has(doc.id))
+    .map((doc) => parseEvent(doc.id, doc.data()));
+};
+
 export const saveUserTour = async ({
   tourId,
   userId,
-  userName,
-  userEmail,
   route,
   title,
   places,
@@ -766,13 +792,6 @@ export const saveUserTour = async ({
     (sum, item) => sum + Number(item.pointsEarned || 0),
     0
   );
-  const visitedStops = allPlaces.filter((item) => item.visited).length;
-  const visitedPlaceIds = allPlaces
-    .filter((item) => item.visited)
-    .map((item) => item.place_id);
-  const pendingPlaceIds = allPlaces
-    .filter((item) => !item.visited)
-    .map((item) => item.place_id);
 
   const payload = {
     title: title.trim() || route.name,
@@ -790,7 +809,6 @@ export const saveUserTour = async ({
     all_places: allPlaces,
     event_ids: events.map((event) => event.id),
     updatedAt: now,
-    createdAt: now,
   };
 
   let savedId: string;
@@ -801,39 +819,63 @@ export const saveUserTour = async ({
       .set(payload, { merge: true });
     savedId = tourId;
   } else {
-    const docRef = await firestore().collection(TOURS_COLLECTION).add(payload);
+    const docRef = await firestore()
+      .collection(TOURS_COLLECTION)
+      .add({
+        ...payload,
+        createdAt: now,
+      });
     savedId = docRef.id;
   }
 
-  // Sync to users_routes collection (admin/analytics view of all user tours)
   await firestore()
-    .collection(USER_ROUTES_COLLECTION)
-    .doc(savedId)
-    .set({
-      user_id: userId,
-      user_name: userName || '',
-      user_email: userEmail || '',
-      tour_id: savedId,
-      route_id: route.id,
-      tour_title: title.trim() || route.name,
-      city_name: route.city_name || '',
-      country: route.country || '',
-      status,
-      total_stops: places.length,
-      visited_stops: visitedStops,
-      completed: status === 'completed',
-      all_places: allPlaces,
-      visited_place_ids: visitedPlaceIds,
-      pending_place_ids: pendingPlaceIds,
-      totalPoints,
-      startedAt: startedAt || now,
-      completedAt: completedAt || null,
-      scheduledDate: scheduledDate || null,
-      updatedAt: now,
-      createdAt: now,
-    }, { merge: true });
+    .collection(USERS_COLLECTION)
+    .doc(userId)
+    .set(
+      {
+        tours: firestore.FieldValue.arrayUnion(savedId),
+      },
+      { merge: true }
+    );
 
   return savedId;
+};
+
+export const addUserVisitPoints = async ({
+  userId,
+  tourId,
+  placeId,
+  pointsToAdd,
+}: {
+  userId: string;
+  tourId: string;
+  placeId: string;
+  pointsToAdd: number;
+}) => {
+  if (!userId || !pointsToAdd) return;
+
+  const visitKey = `${tourId}:${placeId}`;
+  const userRef = firestore().collection(USERS_COLLECTION).doc(userId);
+
+  await firestore().runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    const data = snap.data() || {};
+    const visited: string[] = Array.isArray(data.visitedKeys)
+      ? data.visitedKeys
+      : [];
+
+    if (visited.includes(visitKey)) return;
+
+    tx.set(
+      userRef,
+      {
+        points: firestore.FieldValue.increment(pointsToAdd),
+        visitedKeys: firestore.FieldValue.arrayUnion(visitKey),
+        tours: firestore.FieldValue.arrayUnion(tourId),
+      },
+      { merge: true }
+    );
+  });
 };
 
 export const fetchLatestUserTourForRoute = async ({
@@ -915,10 +957,7 @@ export const deleteUserTour = async (tourId?: string | null) => {
     return;
   }
 
-  await Promise.all([
-    firestore().collection(TOURS_COLLECTION).doc(tourId).delete(),
-    firestore().collection(USER_ROUTES_COLLECTION).doc(tourId).delete(),
-  ]);
+  await firestore().collection(TOURS_COLLECTION).doc(tourId).delete();
 };
 
 export const fetchRewardsSummary = async (

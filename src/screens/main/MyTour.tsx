@@ -37,6 +37,7 @@ import { showError, showInfo, showSuccess } from '../../components/common/AppToa
 import {
     deleteUserTour,
     fetchUserTours,
+    fetchUserTourById,
     fetchPlacesByIds,
     fetchRecommendedRoutes,
     fetchRouteDetails,
@@ -75,6 +76,29 @@ type TourFilter = 'All' | 'Current' | 'Paused' | 'Scheduled' | 'Favourite' | 'Co
 const buildTourIdentityKey = (tour: Pick<RouteCardState, 'displayName' | 'route'>) =>
     `${tour.route.id}::${(tour.displayName || '').trim().toLowerCase()}`;
 
+const buildPlaceProgressFromSavedTour = (savedTour: SavedTour) =>
+    savedTour.all_places.reduce<
+        Record<
+            string,
+            {
+                visited: boolean;
+                visitedAt?: string | null;
+                proofImageUri?: string | null;
+                pointsEarned?: number;
+                addedByUser?: boolean;
+            }
+        >
+    >((acc, item) => {
+        acc[item.place_id] = {
+            visited: item.visited,
+            visitedAt: item.visitedAt,
+            proofImageUri: item.proofImageUri,
+            pointsEarned: item.pointsEarned,
+            addedByUser: item.addedByUser,
+        };
+        return acc;
+    }, {});
+
 const MyTour = () => {
     const route = useRoute<any>();
     const navigation = useNavigation<NavigationProp>();
@@ -97,6 +121,7 @@ const MyTour = () => {
     const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
     const [loadingSuggestions, setLoadingSuggestions] = useState(false);
     const [loadingRoutes, setLoadingRoutes] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [savedTourCards, setSavedTourCards] = useState<RouteCardState[]>([]);
     const [activeFilter, setActiveFilter] = useState<TourFilter>('All');
@@ -226,6 +251,8 @@ const MyTour = () => {
         } catch (error) {
             console.error("Error inside optimized loadSavedTours runner:", error);
             // Only clear if absolutely necessary to prevent layout blinking shifts
+        } finally {
+            setInitialLoad(false);
         }
     }, [userId]);
     useEffect(() => {
@@ -471,7 +498,80 @@ const MyTour = () => {
         }
     }, []);
 
-    const handleStartTour = (tour: RouteCardState) => {
+    const handleStartTour = async (tour: RouteCardState) => {
+        let savedTourId = tour.tourId || null;
+
+        // For non-completed tours, immediately persist as active before navigating
+        // so the user lands on MyTourStart in a started state.
+        if (userId && tour.status !== 'completed') {
+            try {
+                const now = new Date().toISOString();
+                const existingSavedTour = savedTourId
+                    ? await fetchUserTourById(savedTourId)
+                    : null;
+                const allPlaces = allRoutePlaces(tour);
+                let placesToPersist = allPlaces;
+                let placeProgress = {};
+
+                if (existingSavedTour) {
+                    placeProgress = buildPlaceProgressFromSavedTour(existingSavedTour);
+                    const persistedPlaces = await fetchPlacesByIds(
+                        existingSavedTour.all_places.map((item) => item.place_id)
+                    );
+                    const persistedPlaceMap = new Map(
+                        persistedPlaces.map((place) => [place.id, place])
+                    );
+                    const orderedPersistedPlaces = existingSavedTour.all_places
+                        .map((item) => persistedPlaceMap.get(item.place_id))
+                        .filter((place): place is FirebasePlace => Boolean(place));
+                    placesToPersist =
+                        orderedPersistedPlaces.length > 0 ? orderedPersistedPlaces : allPlaces;
+                }
+
+                savedTourId = await saveUserTour({
+                    tourId: tour.tourId || null,
+                    userId,
+                    userName: authUser?.name || '',
+                    userEmail: authUser?.email || '',
+                    route: tour.route,
+                    title: tour.displayName,
+                    places: placesToPersist,
+                    events: tour.events,
+                    placeProgress,
+                    currentStopIndex: existingSavedTour?.currentStopIndex || 0,
+                    isEdited: existingSavedTour?.isEdited ||
+                        Boolean(tour.isSavedTour) ||
+                        tour.extraPlaces.length > 0 ||
+                        tour.removedPlaceIds.length > 0,
+                    status: 'active',
+                    startedAt: existingSavedTour?.startedAt || now,
+                    completedAt: null,
+                    scheduledDate: null,
+                });
+
+                await loadSavedTours();
+                setRouteCards((prev) =>
+                    prev
+                        .filter((routeCard) => routeCard.cardId !== tour.cardId)
+                        .map((routeCard) =>
+                            routeCard.status === 'active'
+                                ? {
+                                    ...routeCard,
+                                    status: 'scheduled',
+                                    scheduledDate: routeCard.scheduledDate || now,
+                                    updatedAt: now,
+                                }
+                                : routeCard
+                        )
+                );
+            } catch (error) {
+                const message =
+                    error instanceof Error ? error.message : 'Unable to start this tour right now.';
+                showError('Start Tour Failed', message);
+                return;
+            }
+        }
+
         navigation.navigate('MyTourStart', {
             routeId: tour.route.id,
             routeName: tour.displayName,
@@ -480,7 +580,8 @@ const MyTour = () => {
             selectedTagIds,
             extraPlaceIds: tour.extraPlaces.map((place) => place.id),
             removedPlaceIds: tour.removedPlaceIds,
-            tourId: tour.tourId,
+            tourId: savedTourId || undefined,
+            autoStart: tour.status !== 'completed',
             isEdited:
                 Boolean(tour.isSavedTour) ||
                 tour.extraPlaces.length > 0 ||
@@ -491,7 +592,7 @@ const MyTour = () => {
     const handleToggleFavorite = async (tour: RouteCardState) => {
         const favoriteId = tour.tourId || tour.route.id;
         if (isFavorite(favoriteId)) {
-            await removeFromFavorites(favoriteId);
+            await removeFromFavorites(favoriteId, 'Route');
             showInfo(
                 'Removed from Favorites',
                 `${tour.displayName} removed successfully`
@@ -556,7 +657,15 @@ const MyTour = () => {
             return !savedTime || savedTime < localTime;
         });
 
-    return [...savedTourCards, ...dedupedRouteCards].sort((a, b) => {
+    const merged = [...savedTourCards, ...dedupedRouteCards];
+    const seenCardIds = new Set<string>();
+    const uniqueMerged = merged.filter((card) => {
+      if (seenCardIds.has(card.cardId)) return false;
+      seenCardIds.add(card.cardId);
+      return true;
+    });
+
+    return uniqueMerged.sort((a, b) => {
       const statusDiff = statusPriority(a.status) - statusPriority(b.status);
       if (statusDiff !== 0) {
         return statusDiff;
@@ -832,7 +941,7 @@ const MyTour = () => {
         <View style={styles.container}>
             <TopHeader title="My Tours" />
 
-            {loadingRoutes ? (
+            {loadingRoutes || initialLoad ? (
                 <View style={styles.loaderWrap}>
                     <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
                 </View>

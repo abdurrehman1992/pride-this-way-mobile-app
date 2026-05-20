@@ -30,6 +30,7 @@ import { showError, showSuccess } from "../../components/common/AppToast";
 import { RootState } from "../../Redux/store";
 import { loginSuccess } from "../../Redux/slices/authSlice";
 import { updateCurrentUserProfile } from "../../services/authService";
+import { uploadImageToCloudinary } from "../../services/cloudinaryService";
 const EditProfile = () => {
     const navigation = useNavigation<any>()
     const dispatch = useDispatch();
@@ -50,11 +51,35 @@ const EditProfile = () => {
         setFullName(user.name || "");
         setEmail(user.email || "");
         setPhone(user.phone || "");
+        setImage(user.profileImage || null);
     }, [user]);
 
+    const [uploadingImage, setUploadingImage] = useState(false);
+
     const handlePickImage = async () => {
+        if (uploadingImage) return;
         const uri = await pickImageFromGallery();
-        if (uri) setImage(uri);
+        if (!uri) return;
+
+        const isAlreadyRemote = uri.startsWith('http://') || uri.startsWith('https://');
+        if (isAlreadyRemote) {
+            setImage(uri);
+            return;
+        }
+
+        setImage(uri);
+        setUploadingImage(true);
+        try {
+            const { secureUrl } = await uploadImageToCloudinary(uri);
+            setImage(secureUrl);
+        } catch (err) {
+            const message =
+                err instanceof Error ? err.message : 'Image upload failed.';
+            showError('Upload Failed', message);
+            setImage(user?.profileImage || null);
+        } finally {
+            setUploadingImage(false);
+        }
     };
     const handleNameChange = (text: string) => {
         setFullName(text);
@@ -75,14 +100,13 @@ const EditProfile = () => {
         return (
             fullName.trim() !== "" &&
             email.trim() !== "" &&
-            phone.trim() !== "" &&
             errors.name === "" &&
             errors.phone === ""
         );
-    }, [fullName, email, phone, errors]);
+    }, [fullName, email, errors]);
 
     const handleUpdateProfile = async () => {
-        if (!isFormValid || loading) return;
+        if (!isFormValid || loading || uploadingImage) return;
 
         setLoading(true);
 
@@ -91,6 +115,7 @@ const EditProfile = () => {
                 fullName,
                 email,
                 phone,
+                profileImage: image,
             });
 
             dispatch(loginSuccess(session));
@@ -130,16 +155,26 @@ const EditProfile = () => {
 
                     {/* PROFILE IMAGE */}
                     <View style={styles.profileSection}>
-                        <TouchableOpacity onPress={handlePickImage} activeOpacity={0.8}>
+                        <TouchableOpacity
+                            onPress={handlePickImage}
+                            activeOpacity={0.8}
+                            disabled={uploadingImage}
+                        >
                             <Image
                                 source={{ uri: image || PROFILE_IMAGE }}
                                 style={styles.profileImage}
                             />
-                            <CameraIcon width={35} height={35} style={styles.iconOverlay} />
+                            {uploadingImage ? (
+                                <View style={styles.uploadOverlay}>
+                                    <ActivityIndicator color={COLORS.WHITE} />
+                                </View>
+                            ) : (
+                                <CameraIcon width={35} height={35} style={styles.iconOverlay} />
+                            )}
                         </TouchableOpacity>
 
                         <Text style={styles.changeText}>
-                            Change Profile Picture
+                            {uploadingImage ? 'Uploading…' : 'Change Profile Picture'}
                         </Text>
                     </View>
 
@@ -183,7 +218,7 @@ const EditProfile = () => {
                             title="Update Profile"
                             Icon={SinupIcon}
                             onPress={handleUpdateProfile}
-                            disabled={!isFormValid}
+                            disabled={!isFormValid || uploadingImage}
                         />
                     )}
                 </ScrollView>
@@ -229,6 +264,17 @@ const styles = StyleSheet.create({
         padding: 6,
         borderRadius: 20,
         elevation: 3,
+    },
+    uploadOverlay: {
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: 60,
+        backgroundColor: "rgba(0,0,0,0.45)",
+        alignItems: "center",
+        justifyContent: "center",
     },
     changeText: {
         marginTop: 12,

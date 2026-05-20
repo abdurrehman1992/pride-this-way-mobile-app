@@ -1,103 +1,288 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    FlatList,
+    ActivityIndicator,
+} from 'react-native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import {
-    EventIcon, FavoriteScreenIcon, FoodTabIcon,
-    ForkIcon, MusicTabIcon, MapIconMain
+    EventIcon,
+    FavoriteScreenIcon,
+    MapIconMain,
 } from '../../constants/icons';
 import PlacesArroundCard from '../../components/Home/PlacesArroundCard';
 import CustomTabs from '../../components/common/CustomTabs';
-import { useFavorites, FavoriteItem } from '../../context/FavoritesContext';
+import { useFavorites } from '../../context/FavoritesContext';
+import {
+    fetchEventsByIds,
+    fetchPlacesByIds,
+    fetchToursByIds,
+    FirebaseEvent,
+    FirebasePlace,
+    SavedTour,
+} from '../../services/myTourService';
+
+type TabValue = 'Places' | 'Tours' | 'Events';
+
 const Favorites = () => {
-    const { favorites } = useFavorites();
+    const { favorites, favoriteTours, favoriteEvents } = useFavorites();
     const navigation = useNavigation<any>();
-    const [activeTab, setActiveTab] = useState('All');
+    const [activeTab, setActiveTab] = useState<TabValue>('Places');
+    const [places, setPlaces] = useState<FirebasePlace[]>([]);
+    const [tours, setTours] = useState<SavedTour[]>([]);
+    const [events, setEvents] = useState<FirebaseEvent[]>([]);
+    const [loading, setLoading] = useState(false);
 
     const tabs = [
-        { label: 'All', value: 'All' },
-        { label: 'Food', value: 'Food', icon: <FoodTabIcon width={15.53} height={15.53} /> },
-        { label: 'Restaurant', value: 'Restaurant', icon: <ForkIcon width={16} height={16} /> },
-        { label: 'Music', value: 'Music', icon: <MusicTabIcon width={16} height={16} /> },
-        { label: 'Event', value: 'Event', icon: <EventIcon width={16} height={16} /> },
-        { label: 'Tours', value: 'Route', icon: <MapIconMain width={16} height={16} /> },
+        { label: 'Places', value: 'Places' },
+        {
+            label: 'Tours',
+            value: 'Tours',
+            icon: <MapIconMain width={16} height={16} />,
+        },
+        {
+            label: 'Events',
+            value: 'Events',
+            icon: <EventIcon width={16} height={16} />,
+        },
     ];
-    const filteredData = activeTab === 'All'
-        ? favorites
-        : favorites.filter(item => item.category === activeTab);
-    const handleNavigate = (item: FavoriteItem) => {
-        if (!item.routeName) return;
-        if (item.routeName === "MyTourStart") {
-            navigation.navigate("MyTour", {
-                screen: "MyTourStart",
-                params: item.routeParams,
+
+    const loadAll = useCallback(async () => {
+        setLoading(true);
+        try {
+            console.log('[Favorites] context arrays:', {
+                favorites,
+                favoriteTours,
+                favoriteEvents,
             });
+            const [placesData, toursData, eventsData] = await Promise.all([
+                fetchPlacesByIds(favorites),
+                fetchToursByIds(favoriteTours),
+                fetchEventsByIds(favoriteEvents),
+            ]);
+            console.log('[Favorites] resolved from Firestore:', {
+                placesCount: placesData.length,
+                toursCount: toursData.length,
+                eventsCount: eventsData.length,
+                tourIdsFound: toursData.map((t) => t.id),
+            });
+
+            const placesById = new Map(placesData.map((p) => [p.id, p]));
+            const toursById = new Map(toursData.map((t) => [t.id, t]));
+            const eventsById = new Map(eventsData.map((e) => [e.id, e]));
+
+            setPlaces(
+                favorites
+                    .map((id) => placesById.get(id))
+                    .filter((p): p is FirebasePlace => Boolean(p))
+            );
+            setTours(
+                favoriteTours
+                    .map((id) => toursById.get(id))
+                    .filter((t): t is SavedTour => Boolean(t))
+            );
+            setEvents(
+                favoriteEvents
+                    .map((id) => eventsById.get(id))
+                    .filter((e): e is FirebaseEvent => Boolean(e))
+            );
+        } catch (err) {
+            console.warn('[Favorites] failed to load', err);
+        } finally {
+            setLoading(false);
         }
-        else if (item.routeName === "PlacesArroundDetails") {
-            navigation.navigate("ForYou", {
-                screen: "RecommendationDetials",
-                params: {
-                    item: item,
+    }, [favorites, favoriteTours, favoriteEvents]);
+
+    useEffect(() => {
+        loadAll();
+    }, [loadAll]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadAll();
+        }, [loadAll])
+    );
+
+    const totalCount = favorites.length + favoriteTours.length + favoriteEvents.length;
+
+    const handlePlaceTap = (place: FirebasePlace) => {
+        navigation.navigate('ForYou', {
+            screen: 'RecommendationDetials',
+            params: {
+                item: {
+                    id: place.id,
+                    title: place.name,
+                    description: place.description || place.address || '',
+                    rating: String(place.rating || ''),
+                    image: place.imageUrl || '',
+                    category: 'Food',
                 },
-            });
-        }
-        else if (item.routeName === "RecommendationDetials") {
-            navigation.navigate("ForYou", {
-                screen: "RecommendationDetials",
-                params: {
-                    item: item,
-                },
-            });
-        }
-        else {
-            navigation.navigate(item.routeName, item.routeParams);
-        }
+            },
+        });
     };
+
+    const handleTourTap = (tour: SavedTour) => {
+        navigation.navigate('MyTour', {
+            screen: 'MyTourStart',
+            params: {
+                routeId: tour.route_id,
+                tourId: tour.id,
+                tourName: tour.title,
+                cityLabel: [tour.city_name, tour.country].filter(Boolean).join(', '),
+            },
+        });
+    };
+
+    const renderPlaceItem = ({ item }: { item: FirebasePlace }) => (
+        <TouchableOpacity
+            onPress={() => handlePlaceTap(item)}
+            activeOpacity={0.9}
+            style={styles.itemWrapper}
+        >
+            <PlacesArroundCard
+                id={item.id}
+                title={item.name}
+                description={item.description || item.address || 'Location'}
+                rating={String(item.rating || 0)}
+                image={item.imageUrl || ''}
+                location={[item.city_name, item.country].filter(Boolean).join(', ')}
+                category="Place"
+            />
+        </TouchableOpacity>
+    );
+
+    const renderTourItem = ({ item }: { item: SavedTour }) => (
+        <TouchableOpacity
+            onPress={() => handleTourTap(item)}
+            activeOpacity={0.9}
+            style={styles.itemWrapper}
+        >
+            <PlacesArroundCard
+                id={item.id}
+                title={item.title || 'My Tour'}
+                description={[item.city_name, item.country].filter(Boolean).join(', ') || 'Tour'}
+                rating={''}
+                image={''}
+                location={[item.city_name, item.country].filter(Boolean).join(', ')}
+                category="Route"
+            />
+        </TouchableOpacity>
+    );
+
+    const renderEventItem = ({ item }: { item: FirebaseEvent }) => (
+        <TouchableOpacity
+            activeOpacity={0.9}
+            style={styles.itemWrapper}
+        >
+            <PlacesArroundCard
+                id={item.id}
+                title={item.title}
+                description={item.description || item.address || 'Event'}
+                rating={String(item.rating || '')}
+                image={item.coverImage || ''}
+                location={[item.city_name, item.country].filter(Boolean).join(', ')}
+                category="Event"
+                time={item.startTime}
+            />
+        </TouchableOpacity>
+    );
+
+    const renderActiveTab = () => {
+        if (loading) {
+            return (
+                <View style={styles.content}>
+                    <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
+                </View>
+            );
+        }
+
+        if (activeTab === 'Places') {
+            if (places.length === 0) {
+                return <EmptyMessage text="No favorite places yet" />;
+            }
+            return (
+                <FlatList
+                    data={places}
+                    keyExtractor={(item) => item.id}
+                    renderItem={renderPlaceItem}
+                    contentContainerStyle={styles.listContent}
+                />
+            );
+        }
+
+        if (activeTab === 'Tours') {
+            if (tours.length === 0) {
+                return <EmptyMessage text="No favorite tours yet" />;
+            }
+            return (
+                <FlatList
+                    data={tours}
+                    keyExtractor={(item) => item.id}
+                    renderItem={renderTourItem}
+                    contentContainerStyle={styles.listContent}
+                />
+            );
+        }
+
+        if (events.length === 0) {
+            return <EmptyMessage text="No favorite events yet" />;
+        }
+        return (
+            <FlatList
+                data={events}
+                keyExtractor={(item) => item.id}
+                renderItem={renderEventItem}
+                contentContainerStyle={styles.listContent}
+            />
+        );
+    };
+
     return (
         <View style={styles.container}>
             <TopHeader title="Favorites" />
-            {favorites.length === 0 ? (
+            {totalCount === 0 ? (
                 <View style={styles.content}>
                     <FavoriteScreenIcon width={127.71} height={179} />
                     <Text style={styles.title}>Oops! No Favorites Yet</Text>
-                    <Text style={styles.desc}>Discover amazing places and events and add them here!</Text>
-                    <TouchableOpacity style={styles.btnContainer} onPress={() => navigation.navigate('ForYou')}>
+                    <Text style={styles.desc}>
+                        Discover amazing places and events and add them here!
+                    </Text>
+                    <TouchableOpacity
+                        style={styles.btnContainer}
+                        onPress={() => navigation.navigate('ForYou')}
+                    >
                         <Text style={styles.btn}>Explore Now</Text>
                     </TouchableOpacity>
                 </View>
             ) : (
                 <View style={styles.favoritesContent}>
-                    <CustomTabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
-                    <FlatList
-                        data={filteredData}
-                        keyExtractor={(item) => item.id}
-                        renderItem={({ item }) => (
-                            <TouchableOpacity
-                                onPress={() => handleNavigate(item)}
-                                activeOpacity={0.9}
-                                style={styles.itemWrapper}
-                            >
-                                <PlacesArroundCard
-                                    id={item.id}
-                                    title={item.title}
-                                    description={item.description}
-                                    rating={item.rating}
-                                    image={item.image}
-                                    category={item.category}
-                                />
-                            </TouchableOpacity>
-                        )}
-                        contentContainerStyle={styles.listContent}
+                    <CustomTabs
+                        tabs={tabs}
+                        activeTab={activeTab}
+                        onChange={(value: string) => setActiveTab(value as TabValue)}
                     />
+                    {renderActiveTab()}
                 </View>
             )}
         </View>
     );
 };
 
+const EmptyMessage = ({ text }: { text: string }) => (
+    <View style={styles.content}>
+        <FavoriteScreenIcon width={127.71} height={179} />
+        <Text style={styles.title}>{text}</Text>
+    </View>
+);
+
 export default Favorites;
+
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -125,7 +310,7 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.InterTight_Regular,
         color: COLORS.TEXT_SECONDARY,
         lineHeight: 20,
-        width: 310
+        width: 310,
     },
 
     btn: {
@@ -135,8 +320,8 @@ const styles = StyleSheet.create({
     },
 
     btnContainer: {
-        justifyContent: "center",
-        alignItems: "center",
+        justifyContent: 'center',
+        alignItems: 'center',
         marginTop: 28,
         backgroundColor: COLORS.BUTTON_COLOR,
         height: 50,
@@ -146,16 +331,16 @@ const styles = StyleSheet.create({
 
     listContent: {
         paddingTop: 6,
-        paddingBottom: 20
+        paddingBottom: 20,
     },
 
     itemWrapper: {
         marginBottom: 16,
-        marginHorizontal: 24
+        marginHorizontal: 24,
     },
     favoritesContent: {
         flex: 1,
         marginTop: 24,
-        gap: 5
-    }
-})
+        gap: 5,
+    },
+});

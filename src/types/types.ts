@@ -28,6 +28,7 @@ export type MyTourStackParamList = {
     removedPlaceIds?: string[];
     tourId?: string;
     isEdited?: boolean;
+    autoStart?: boolean;
   } | undefined,
   RecommendationDetials: undefined
 };

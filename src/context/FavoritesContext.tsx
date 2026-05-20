@@ -7,10 +7,16 @@ import React, {
   useState,
 } from "react";
 import firestore from "@react-native-firebase/firestore";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { RootState } from "../Redux/store";
+import {
+  setUserFavorites,
+  setUserFavoriteTours,
+  setUserFavoriteEvents,
+} from "../Redux/slices/authSlice";
 
 export type CategoryType =
+  | "Place"
   | "Restaurant"
   | "Food"
   | "Music"
@@ -32,133 +38,188 @@ export type FavoriteItem = {
   createdAt?: string;
 };
 
+export type FavoriteBucket = "favorites" | "favoriteTours" | "favoriteEvents";
+
 type FavoritesContextType = {
-  favorites: FavoriteItem[];
+  favorites: string[];
+  favoriteTours: string[];
+  favoriteEvents: string[];
   addToFavorites: (item: FavoriteItem) => Promise<void>;
-  removeFromFavorites: (id: string) => Promise<void>;
+  removeFromFavorites: (id: string, category?: CategoryType) => Promise<void>;
   isFavorite: (id: string) => boolean;
+  bucketForCategory: (category?: CategoryType) => FavoriteBucket;
 };
 
 const FavoritesContext = createContext<FavoritesContextType | null>(null);
 
 const USERS_COLLECTION = "users";
-const FAVORITES_SUBCOLLECTION = "favorites";
 
-const removeUndefinedDeep = (value: any): any => {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => removeUndefinedDeep(item))
-      .filter((item) => item !== undefined);
+const AI_ID_PREFIXES = [
+  "fallback_",
+  "fb_addloc",
+  "place_",
+  "rec_",
+  "addloc_",
+];
+
+const isAIGeneratedId = (id: string): boolean => {
+  const lower = id.toLowerCase();
+  return AI_ID_PREFIXES.some((prefix) => lower.startsWith(prefix));
+};
+
+const bucketForCategory = (category?: CategoryType): FavoriteBucket => {
+  if (category === "Route") return "favoriteTours";
+  if (
+    category === "Event" ||
+    category === "Music" ||
+    category === "Food" ||
+    category === "Restaurant"
+  ) {
+    return "favoriteEvents";
   }
+  return "favorites";
+};
 
-  if (value && typeof value === "object") {
-    return Object.entries(value).reduce<Record<string, any>>((acc, [key, item]) => {
-      const cleaned = removeUndefinedDeep(item);
-      if (cleaned !== undefined) {
-        acc[key] = cleaned;
-      }
-      return acc;
-    }, {});
-  }
-
-  return value === undefined ? undefined : value;
+const extractIds = (raw: any): string[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item: any) =>
+      typeof item === "string" ? item : item?.id ? String(item.id) : null
+    )
+    .filter((id: string | null): id is string => Boolean(id));
 };
 
 export const FavoritesProvider = ({ children }: any) => {
+  const dispatch = useDispatch();
   const userId = useSelector((state: RootState) => state.auth.user?.id);
-  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+  const [favorites, setFavorites] = useState<string[]>([]);
+  const [favoriteTours, setFavoriteTours] = useState<string[]>([]);
+  const [favoriteEvents, setFavoriteEvents] = useState<string[]>([]);
 
   useEffect(() => {
     if (!userId) {
       setFavorites([]);
+      setFavoriteTours([]);
+      setFavoriteEvents([]);
       return;
     }
 
     const unsubscribe = firestore()
       .collection(USERS_COLLECTION)
       .doc(userId)
-      .collection(FAVORITES_SUBCOLLECTION)
       .onSnapshot(
         (snapshot) => {
-          const items = snapshot.docs
-            .map((doc) => {
-              const data = doc.data();
-              return {
-                id: doc.id,
-                title: data.title || "",
-                description: data.description || "",
-                rating: data.rating || "",
-                image: data.image || "",
-                category: (data.category || "Food") as CategoryType,
-                sourceScreen: data.sourceScreen || "",
-                routeName: data.routeName || "",
-                routeParams: data.routeParams || undefined,
-                city_name: data.city_name || "",
-                country: data.country || "",
-                createdAt: data.createdAt || "",
-              };
-            })
-            .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+          const data = snapshot.data();
+          const places = extractIds(data?.favorites);
+          const tours = extractIds(data?.favoriteTours);
+          const events = extractIds(data?.favoriteEvents);
 
-          setFavorites(items);
+          console.log('[FavoritesContext] snapshot fields:', {
+            favoritesRaw: data?.favorites,
+            favoriteToursRaw: data?.favoriteTours,
+            favoriteEventsRaw: data?.favoriteEvents,
+            extractedPlaces: places,
+            extractedTours: tours,
+            extractedEvents: events,
+          });
+
+          setFavorites(places);
+          setFavoriteTours(tours);
+          setFavoriteEvents(events);
+
+          dispatch(setUserFavorites(places));
+          dispatch(setUserFavoriteTours(tours));
+          dispatch(setUserFavoriteEvents(events));
         },
-        () => setFavorites([])
+        (err) => {
+          console.warn('[FavoritesContext] snapshot error:', err);
+          setFavorites([]);
+          setFavoriteTours([]);
+          setFavoriteEvents([]);
+        }
       );
 
     return unsubscribe;
-  }, [userId]);
+  }, [userId, dispatch]);
 
   const addToFavorites = useCallback(
     async (item: FavoriteItem) => {
-      if (!userId) {
+      if (!userId || !item?.id) return;
+      if (isAIGeneratedId(item.id)) {
+        console.log('[Favorites] skipping AI-generated id:', item.id);
         return;
       }
-
-      const payload = removeUndefinedDeep({
-        ...item,
-        createdAt: item.createdAt || new Date().toISOString(),
-        user_id: userId,
-      });
+      const bucket = bucketForCategory(item.category);
 
       await firestore()
         .collection(USERS_COLLECTION)
         .doc(userId)
-        .collection(FAVORITES_SUBCOLLECTION)
-        .doc(item.id)
-        .set(payload, { merge: true });
+        .set(
+          {
+            [bucket]: firestore.FieldValue.arrayUnion(item.id),
+          },
+          { merge: true }
+        );
     },
     [userId]
   );
 
   const removeFromFavorites = useCallback(
-    async (id: string) => {
-      if (!userId) {
+    async (id: string, category?: CategoryType) => {
+      if (!userId || !id) return;
+
+      const userRef = firestore().collection(USERS_COLLECTION).doc(userId);
+
+      if (category) {
+        const bucket = bucketForCategory(category);
+        await userRef.set(
+          {
+            [bucket]: firestore.FieldValue.arrayRemove(id),
+          },
+          { merge: true }
+        );
         return;
       }
 
-      await firestore()
-        .collection(USERS_COLLECTION)
-        .doc(userId)
-        .collection(FAVORITES_SUBCOLLECTION)
-        .doc(id)
-        .delete();
+      // Category unknown — remove from all buckets to be safe
+      await userRef.set(
+        {
+          favorites: firestore.FieldValue.arrayRemove(id),
+          favoriteTours: firestore.FieldValue.arrayRemove(id),
+          favoriteEvents: firestore.FieldValue.arrayRemove(id),
+        },
+        { merge: true }
+      );
     },
     [userId]
   );
 
   const isFavorite = useCallback(
-    (id: string) => favorites.some((item) => item.id === id),
-    [favorites]
+    (id: string) =>
+      favorites.includes(id) ||
+      favoriteTours.includes(id) ||
+      favoriteEvents.includes(id),
+    [favorites, favoriteTours, favoriteEvents]
   );
 
   const value = useMemo(
     () => ({
       favorites,
+      favoriteTours,
+      favoriteEvents,
       addToFavorites,
       removeFromFavorites,
       isFavorite,
+      bucketForCategory,
     }),
-    [favorites, addToFavorites, removeFromFavorites, isFavorite]
+    [
+      favorites,
+      favoriteTours,
+      favoriteEvents,
+      addToFavorites,
+      removeFromFavorites,
+      isFavorite,
+    ]
   );
 
   return (

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -47,8 +47,16 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   variant = "default",
   category = "Event",
 }) => {
+  const [imageFailed, setImageFailed] = useState(false);
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
   const favorite = isFavorite(id);
+
+  const resolvedImage =
+    imageFailed || !image
+      ? PLACES_ARROUND
+      : typeof image === 'string'
+      ? { uri: image }
+      : image;
 
   const handleFavorite = () => {
     if (favorite) {
@@ -72,7 +80,11 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   return (
     <View style={[styles.container, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact]}>
       <View style={styles.topSection}>
-        <Image source={typeof image === 'string' ? { uri: image } : image} style={styles.image} />
+        <Image
+          source={resolvedImage}
+          onError={() => setImageFailed(true)}
+          style={styles.image}
+        />
 
         <View style={styles.textContainer}>
           <View style={styles.badge}>

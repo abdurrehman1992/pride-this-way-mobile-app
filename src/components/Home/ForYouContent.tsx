@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   FlatList,
   TouchableOpacity,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import CustomSearchInput from './CustomSearchInput';
@@ -15,95 +16,58 @@ import LocationModal from '../../components/modals/LocationModal';
 import PreferenceModal from '../../components/modals/PreferenceModal';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
+import { FilterIcon } from '../../constants/images';
 import {
-  DetailBackground,
-  FilterIcon,
-  PLACES_ARROUND,
-  RECOMMENDED_IMAGE,
-} from '../../constants/images';
+  getRecommendations,
+  buildUnsplashUrl,
+  AIRecommendations,
+  AIPlace,
+} from '../../services/aiService';
 
-const horizontalData = [
-  {
-    id: 'place_1',
-    title: 'Beach Party',
-    description: 'Fun night at beach',
-    rating: '4.5',
-    image: DetailBackground,
-    category: 'Event',
-  },
-  {
-    id: 'place_2',
-    title: 'Music Night',
-    description: 'Live band show',
-    rating: '4.7',
-    image: RECOMMENDED_IMAGE,
-    category: 'Music',
-  },
-  {
-    id: 'place_3',
-    title: 'Food Festival',
-    description: 'Street food event',
-    rating: '4.8',
-    image: DetailBackground,
-    category: 'Food',
-  },
-];
+type Props = {
+  location: string;
+  prefs: string[];
+  onReset?: () => void;
+};
 
-const recommendedData = [
-  {
-    id: 'rec_1',
-    title: 'Skyline Rooftop Dining',
-    description: 'Enjoy food with stunning city views',
-    rating: '4.7',
-    image: RECOMMENDED_IMAGE,
-    category: 'Restaurant',
-  },
-  {
-    id: 'rec_2',
-    title: 'Jazz Night',
-    description: 'Live jazz experience',
-    rating: '4.6',
-    image: DetailBackground,
-    category: 'Music',
-  },
-  {
-    id: 'rec_3',
-    title: 'Mountain Hiking',
-    description: 'Adventure in the hills',
-    rating: '4.8',
-    image: PLACES_ARROUND,
-    category: 'Adventure',
-  },
-  {
-    id: 'rec_4',
-    title: 'City Museum Tour',
-    description: 'Explore history & culture',
-    rating: '4.5',
-    image: DetailBackground,
-    category: 'History',
-  },
-  {
-    id: 'rec_5',
-    title: 'Shopping Mall',
-    description: 'Best brands & deals',
-    rating: '4.4',
-    image: RECOMMENDED_IMAGE,
-    category: 'Shopping',
-  },
-];
-
-const Home: React.FC = () => {
+const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
   const navigation = useNavigation<any>();
   const [showAll, setShowAll] = useState(false);
   const [showAllPlaces, setShowAllPlaces] = useState(false);
   const [searchText, setSearchText] = useState('');
-  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
-  const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(
+    location || null,
+  );
+  const [selectedPrefs, setSelectedPrefs] = useState<string[]>(prefs);
   const [modals, setModals] = useState({
     location: false,
     preference: false,
   });
+  const [data, setData] = useState<AIRecommendations | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
   const hasFilters = selectedLocation || selectedPrefs.length > 0;
+
+  const loadRecommendations = async (loc: string, p: string[]) => {
+    if (!loc) return;
+    setLoading(true);
+    setError(false);
+    try {
+      const result = await getRecommendations(loc, p);
+      setData(result);
+    } catch (err) {
+      console.warn('[ForYouContent] unexpected error', err);
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRecommendations(location, prefs);
+  }, [location, prefs.sort().join(',')]);
+
   const openLocationModal = () => {
     setModals({ location: true, preference: false });
   };
@@ -112,24 +76,24 @@ const Home: React.FC = () => {
     setModals({ location: false, preference: false });
   };
 
-  const handleLocationSelect = (locations: string[]) => {
-    const primary = locations[0] ?? null;
-    setSelectedLocation(primary);
-
-    setModals({
-      location: false,
-      preference: true,
-    });
+  const handleLocationNext = (loc: string) => {
+    setSelectedLocation(loc);
+    setModals({ location: false, preference: true });
   };
 
-  const handleApplyPreferences = (prefs: string[]) => {
-    setSelectedPrefs(prefs);
+  const handleApplyPreferences = (newPrefs: string[]) => {
+    setSelectedPrefs(newPrefs);
     closeModals();
+    if (selectedLocation) {
+      loadRecommendations(selectedLocation, newPrefs);
+    }
   };
 
   const resetFilters = () => {
     setSelectedLocation(null);
     setSelectedPrefs([]);
+    setData(null);
+    if (onReset) onReset();
   };
 
   const togglePref = (item: string) => {
@@ -137,31 +101,19 @@ const Home: React.FC = () => {
       prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item],
     );
   };
+
+  const placesAround = data?.placesAroundYou ?? [];
+  const recommended = data?.recommendedForYou ?? [];
+
   const filteredPlaces = useMemo(() => {
-    return horizontalData.filter(item => {
-      const matchSearch = item.title
-        .toLowerCase()
-        .includes(searchText.toLowerCase());
-
-      const matchLocation =
-        !selectedLocation || item.title.includes(selectedLocation);
-
-      return matchSearch && matchLocation;
-    });
-  }, [searchText, selectedLocation]);
+    const q = searchText.toLowerCase();
+    return placesAround.filter(item => item.title.toLowerCase().includes(q));
+  }, [searchText, placesAround]);
 
   const filteredRecommended = useMemo(() => {
-    return recommendedData.filter(item => {
-      const matchPrefs =
-        selectedPrefs.length === 0 || selectedPrefs.includes(item.category);
-
-      const matchSearch = item.title
-        .toLowerCase()
-        .includes(searchText.toLowerCase());
-
-      return matchPrefs && matchSearch;
-    });
-  }, [searchText, selectedPrefs]);
+    const q = searchText.toLowerCase();
+    return recommended.filter(item => item.title.toLowerCase().includes(q));
+  }, [searchText, recommended]);
 
   const displayedData = showAll
     ? filteredRecommended
@@ -170,24 +122,31 @@ const Home: React.FC = () => {
     ? filteredPlaces
     : filteredPlaces.slice(0, 2);
 
+  const renderRecommendedItem = ({ item }: { item: AIPlace }) => (
+    <RecommendedForYou
+      id={item.id}
+      title={item.title}
+      description={item.description}
+      rating={item.rating}
+      image={buildUnsplashUrl(item.imageKeyword)}
+      onPress={() =>
+        navigation.navigate('RecommendationDetials', {
+          item: {
+            ...item,
+            image: buildUnsplashUrl(item.imageKeyword),
+          },
+        })
+      }
+    />
+  );
+
   return (
     <View style={styles.container}>
       <FlatList
         data={displayedData}
         keyExtractor={item => item.id}
         showsVerticalScrollIndicator={false}
-        renderItem={({ item }) => (
-          <RecommendedForYou
-            id={item.id}
-            title={item.title}
-            description={item.description}
-            rating={item.rating}
-            image={item.image}
-            onPress={() =>
-              navigation.navigate('RecommendationDetials', { item })
-            }
-          />
-        )}
+        renderItem={renderRecommendedItem}
         ListHeaderComponent={
           <>
             <View style={styles.search}>
@@ -231,62 +190,89 @@ const Home: React.FC = () => {
               </View>
             )}
 
-            <View>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionHeaderText} numberOfLines={2}>
-                  Places Around You
+            {loading && (
+              <View style={styles.loadingWrap}>
+                <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
+                <Text style={styles.loadingText}>
+                  Finding the best spots for you…
                 </Text>
+              </View>
+            )}
+
+            {error && !loading && (
+              <View style={styles.errorWrap}>
+                <Text style={styles.errorText}>Couldn’t load recommendations.</Text>
                 <TouchableOpacity
-                  onPress={() => setShowAllPlaces(!showAllPlaces)}
-                  style={styles.headerAction}
+                  style={styles.retryBtn}
+                  onPress={() =>
+                    loadRecommendations(selectedLocation || '', selectedPrefs)
+                  }
                 >
-                  <Text style={styles.seeAllText}>
-                    {showAllPlaces ? 'Show Less' : 'See All'}
-                  </Text>
+                  <Text style={styles.retryText}>Retry</Text>
                 </TouchableOpacity>
               </View>
+            )}
 
-              <FlatList
-                data={displayedPlaces}
-                horizontal
-                keyExtractor={item => item.id}
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.listContainer}
-                renderItem={({ item }) => (
-                  <PlacesArroundCard
-                    id={item.id}
-                    title={item.title}
-                    description={item.description}
-                    rating={item.rating}
-                    image={item.image}
-                    width={295}
+            {!loading && !error && (
+              <>
+                <View>
+                  <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionHeaderText} numberOfLines={2}>
+                      Places Around You
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setShowAllPlaces(!showAllPlaces)}
+                      style={styles.headerAction}
+                    >
+                      <Text style={styles.seeAllText}>
+                        {showAllPlaces ? 'Show Less' : 'See All'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <FlatList
+                    data={displayedPlaces}
+                    horizontal
+                    keyExtractor={item => item.id}
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.listContainer}
+                    renderItem={({ item }) => (
+                      <PlacesArroundCard
+                        id={item.id}
+                        title={item.title}
+                        description={item.description}
+                        rating={item.rating}
+                        image={buildUnsplashUrl(item.imageKeyword)}
+                        width={295}
+                      />
+                    )}
                   />
-                )}
-              />
-            </View>
-            <View style={styles.recommendedSection}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionHeaderText} numberOfLines={2}>
-                  Recommended For You
-                </Text>
+                </View>
+                <View style={styles.recommendedSection}>
+                  <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionHeaderText} numberOfLines={2}>
+                      Recommended For You
+                    </Text>
 
-                <TouchableOpacity
-                  onPress={() => setShowAll(!showAll)}
-                  style={styles.headerAction}
-                >
-                  <Text style={[styles.seeAllText, styles.recommendedAction]}>
-                    {showAll ? 'Show Less' : 'Show All'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+                    <TouchableOpacity
+                      onPress={() => setShowAll(!showAll)}
+                      style={styles.headerAction}
+                    >
+                      <Text style={[styles.seeAllText, styles.recommendedAction]}>
+                        {showAll ? 'Show Less' : 'Show All'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </>
+            )}
           </>
         }
       />
       <LocationModal
         visible={modals.location}
         onClose={closeModals}
-        onNext={handleLocationSelect}
+        onNext={handleLocationNext}
       />
 
       <PreferenceModal
@@ -301,7 +287,7 @@ const Home: React.FC = () => {
   );
 };
 
-export default Home;
+export default ForYouContent;
 
 const styles = StyleSheet.create({
   container: {
@@ -392,5 +378,38 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     color: COLORS.CLEAR_ALL,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  loadingWrap: {
+    paddingVertical: 60,
+    alignItems: 'center',
+    gap: 12,
+  },
+  loadingText: {
+    color: COLORS.TEXT_SECONDARY,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    fontSize: FONT_SIZE.TEXT,
+  },
+  errorWrap: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    gap: 12,
+  },
+  errorText: {
+    color: COLORS.TEXT_SECONDARY,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    fontSize: FONT_SIZE.TEXT,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  retryBtn: {
+    paddingHorizontal: 30,
+    paddingVertical: 10,
+    backgroundColor: COLORS.BUTTON_COLOR,
+    borderRadius: 24,
+  },
+  retryText: {
+    color: COLORS.WHITE,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    fontSize: FONT_SIZE.TEXT,
   },
 });

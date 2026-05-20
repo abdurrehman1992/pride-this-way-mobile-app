@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { MapIconMain } from '../../constants/icons';
@@ -15,15 +16,38 @@ import TopHeader from '../../components/Home/TopHeader';
 import LocationModal from '../../components/modals/LocationModal';
 import PreferenceModal from '../../components/modals/PreferenceModal';
 import ForYouContent from '../../components/Home/ForYouContent';
+import { fetchTourTags, FirebaseTag } from '../../services/myTourService';
 
 const ForYou = () => {
   const [isPreferencesSet, setIsPreferencesSet] = useState(false);
   const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [flexToggle, setFlexToggle] = useState(false);
+  const [tagOptions, setTagOptions] = useState<string[]>([]);
   const [modals, setModals] = useState({
     location: false,
     preference: false,
   });
+
+  useEffect(() => {
+    fetchTourTags()
+      .then((tags: FirebaseTag[]) => {
+        const names = tags.map((t) => t.name).filter(Boolean);
+        if (names.length > 0) setTagOptions(names);
+      })
+      .catch((err) => {
+        console.warn('[ForYou] failed to fetch tags:', err);
+      });
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      setIsPreferencesSet(false);
+      setSelectedLocation('');
+      setSelectedPrefs([]);
+      setModals({ location: false, preference: false });
+    }, []),
+  );
 
   useEffect(() => {
     const keyboardShowListener = Keyboard.addListener('keyboardDidShow', () => {
@@ -53,7 +77,13 @@ const ForYou = () => {
   const handleCancel = () => {
     closeAllModals();
     setSelectedPrefs([]);
+    setSelectedLocation('');
     setIsPreferencesSet(false);
+  };
+
+  const handleLocationNext = (location: string) => {
+    setSelectedLocation(location);
+    goNextModal('location', 'preference');
   };
 
   const togglePreference = (item: string) => {
@@ -83,7 +113,11 @@ const ForYou = () => {
       <TopHeader title="Recommendations" />
 
       {isPreferencesSet ? (
-        <ForYouContent />
+        <ForYouContent
+          location={selectedLocation}
+          prefs={selectedPrefs}
+          onReset={handleCancel}
+        />
       ) : (
         <View style={styles.centerContainer}>
           <View style={styles.emptyStateWrapper}>
@@ -111,7 +145,7 @@ const ForYou = () => {
         secondaryLabel="Cancel"
         onClose={handleCancel}
         onSecondaryPress={handleCancel}
-        onNext={() => goNextModal('location', 'preference')}
+        onNext={handleLocationNext}
       />
 
       <PreferenceModal
@@ -124,6 +158,7 @@ const ForYou = () => {
         onSecondary={handleCancel}
         mode="forYou"
         showTwoButtons
+        preferences={tagOptions.length > 0 ? tagOptions : undefined}
       />
     </KeyboardAvoidingView>
   );

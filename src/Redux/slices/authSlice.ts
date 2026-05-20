@@ -1,9 +1,15 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
+
 interface User {
   id: string;
   name: string;
   email: string;
   phone?: string | null;
+  profileImage?: string | null;
+  points?: number;
+  favorites?: string[];
+  favoriteTours?: string[];
+  favoriteEvents?: string[];
 }
 interface AuthState {
   user: User | null;
@@ -57,6 +63,31 @@ const authSlice = createSlice({
       state.error = null;
       state.loading = false;
     },
+    updateUserProfile: (state, action: PayloadAction<Partial<User>>) => {
+      if (state.user) {
+        state.user = { ...state.user, ...action.payload };
+      }
+    },
+    setUserPoints: (state, action: PayloadAction<number>) => {
+      if (state.user) {
+        state.user.points = action.payload;
+      }
+    },
+    setUserFavorites: (state, action: PayloadAction<string[]>) => {
+      if (state.user) {
+        state.user.favorites = action.payload;
+      }
+    },
+    setUserFavoriteTours: (state, action: PayloadAction<string[]>) => {
+      if (state.user) {
+        state.user.favoriteTours = action.payload;
+      }
+    },
+    setUserFavoriteEvents: (state, action: PayloadAction<string[]>) => {
+      if (state.user) {
+        state.user.favoriteEvents = action.payload;
+      }
+    },
   },
 });
 export const {
@@ -65,5 +96,10 @@ export const {
   loginFailure,
   setAuthInitialized,
   logout,
+  updateUserProfile,
+  setUserPoints,
+  setUserFavorites,
+  setUserFavoriteTours,
+  setUserFavoriteEvents,
 } = authSlice.actions;
 export default authSlice.reducer;

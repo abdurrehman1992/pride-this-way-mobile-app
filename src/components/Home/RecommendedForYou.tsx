@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -35,7 +35,15 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
   image = RECOMMENDED_IMAGE,
   onPress,
 }) => {
+  const [imageFailed, setImageFailed] = useState(false);
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
+
+  const resolvedImage =
+    imageFailed || !image
+      ? RECOMMENDED_IMAGE
+      : typeof image === "string"
+      ? { uri: image }
+      : image;
 
   const favorite = isFavorite(id);
   const handleFavorite = () => {
@@ -61,7 +69,8 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
     <TouchableOpacity activeOpacity={0.8} onPress={onPress}>
       <View style={styles.container}>
         <ImageBackground
-          source={typeof image === "string" ? { uri: image } : image}
+          source={resolvedImage}
+          onError={() => setImageFailed(true)}
           style={styles.image}
           imageStyle={styles.imageRadius}
         >
@@ -118,7 +127,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.22)",
     borderRadius: 20,
   },

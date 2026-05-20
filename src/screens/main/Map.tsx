@@ -39,56 +39,8 @@ type EventMarker = FirebaseEvent & {
   markerCoordinate: [number, number];
 };
 
-const STATIC_PODCAST_MARKERS: Array<{
-  id: string;
-  title: string;
-  city_name: string;
-  country: string;
-  address: string;
-  description: string;
-  category: string;
-  startDate: string;
-  startTime: string;
-  coverImage?: string;
-  coordinates: [number, number];
-}> = [
-  {
-    id: 'podcast-static-1',
-    title: 'Voices of Pride Live',
-    city_name: 'Toronto',
-    country: 'Canada',
-    address: 'Downtown Toronto, ON, Canada',
-    description: 'A live community podcast recording featuring creators and local voices.',
-    category: 'Podcast Event',
-    startDate: '2026-06-15',
-    startTime: '17:30',
-    coordinates: [-79.3832, 43.6532],
-  },
-  {
-    id: 'podcast-static-2',
-    title: 'City Stories Podcast Meetup',
-    city_name: 'Dubai',
-    country: 'UAE',
-    address: 'Downtown Dubai, UAE',
-    description: 'A podcast meetup focused on travel, stories, and identity across cities.',
-    category: 'Podcast Event',
-    startDate: '2026-06-21',
-    startTime: '18:00',
-    coordinates: [55.2708, 25.2048],
-  },
-  {
-    id: 'podcast-static-3',
-    title: 'Rainbow Talks Studio Session',
-    city_name: 'London',
-    country: 'United Kingdom',
-    address: 'Camden, London, UK',
-    description: 'A hosted podcast session with interviews, music, and community highlights.',
-    category: 'Podcast Event',
-    startDate: '2026-06-29',
-    startTime: '19:00',
-    coordinates: [-0.1425, 51.5416],
-  },
-];
+const isPodcastEvent = (event: FirebaseEvent) =>
+  (event.event_type || '').toLowerCase().trim() === 'podcast_event';
 
 const QUICK_CITIES: QuickCity[] = [
   {
@@ -206,13 +158,10 @@ const eventMatchesFilter = (event: FirebaseEvent, filterLabel: string) => {
   return haystack.includes(normalizedFilter);
 };
 
-const buildPodcastCoordinate = (event: FirebaseEvent, index: number): [number, number] => {
-  const longitude = Number(event.coordinates?.longitude || 0);
-  const latitude = Number(event.coordinates?.latitude || 0);
-  const offset = index % 2 === 0 ? 0.32 : -0.32;
-
-  return [longitude + offset, latitude + 0.18];
-};
+const eventCoordinate = (event: FirebaseEvent): [number, number] => [
+  Number(event.coordinates?.longitude || 0),
+  Number(event.coordinates?.latitude || 0),
+];
 
 const Map = () => {
   const cameraRef = useRef<Mapbox.Camera>(null);
@@ -294,49 +243,26 @@ const Map = () => {
 
   const prideMarkers = useMemo<EventMarker[]>(
     () =>
-      filteredEvents.map((event) => ({
-        ...event,
-        markerType: 'pride',
-        markerCoordinate: [
-          Number(event.coordinates?.longitude || 0),
-          Number(event.coordinates?.latitude || 0),
-        ],
-      })),
+      filteredEvents
+        .filter((event) => !isPodcastEvent(event))
+        .map((event) => ({
+          ...event,
+          markerType: 'pride',
+          markerCoordinate: eventCoordinate(event),
+        })),
     [filteredEvents]
   );
 
   const podcastMarkers = useMemo<EventMarker[]>(
     () =>
-      STATIC_PODCAST_MARKERS.filter((event) =>
-        eventMatchesFilter(
-          {
-            ...event,
-            coordinates: {
-              longitude: event.coordinates[0],
-              latitude: event.coordinates[1],
-            },
-          },
-          selectedLocation?.label || ''
-        )
-      ).map((event, index) => ({
-        ...event,
-        markerType: 'podcast',
-        coordinates: {
-          longitude: event.coordinates[0],
-          latitude: event.coordinates[1],
-        },
-        markerCoordinate: buildPodcastCoordinate(
-          {
-            ...event,
-            coordinates: {
-              longitude: event.coordinates[0],
-              latitude: event.coordinates[1],
-            },
-          },
-          index
-        ),
-      })),
-    [selectedLocation]
+      filteredEvents
+        .filter((event) => isPodcastEvent(event))
+        .map((event) => ({
+          ...event,
+          markerType: 'podcast',
+          markerCoordinate: eventCoordinate(event),
+        })),
+    [filteredEvents]
   );
 
   const focusLocation = useCallback((location: LocationSuggestion) => {

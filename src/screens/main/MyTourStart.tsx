@@ -43,6 +43,7 @@ import ScanVerifyModal from '../../components/modals/ScanVerifyModal';
 import TopHeader from '../../components/Home/TopHeader';
 import EventDetailModal from '../../components/modals/EventDetailModal';
 import {
+  addUserVisitPoints,
   deleteUserTour,
   fetchPlacesByIds,
   fetchRouteDetails,
@@ -52,8 +53,9 @@ import {
   fetchUserTourById,
   saveUserTour,
 } from '../../services/myTourService';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../../Redux/store';
+import { setUserPoints } from '../../Redux/slices/authSlice';
 
 type TourStop = {
   id: string;
@@ -303,10 +305,11 @@ const MyTourStart = () => {
   const cameraRef = useRef<Mapbox.Camera>(null);
   const mapRef = useRef<Mapbox.MapView>(null);
   const user = useSelector((state: RootState) => state.auth.user);
+  const dispatch = useDispatch();
   const [expanded, setExpanded] = useState(false);
 
   const [scanVisible, setScanVisible] = useState(false);
-  const [tourStarted, setTourStarted] = useState(false);
+  const [tourStarted, setTourStarted] = useState(Boolean(route.params?.autoStart));
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [roadSegments, setRoadSegments] = useState<[number, number][][]>([]);
@@ -315,6 +318,10 @@ const MyTourStart = () => {
   const [completedAirSegments, setCompletedAirSegments] = useState<[number, number][][]>([]);
   const [tourStops, setTourStops] = useState<TourStop[]>([]);
   const [tourId, setTourId] = useState<string | null>(route.params?.tourId || null);
+  const tourIdRef = useRef<string | null>(route.params?.tourId || null);
+  useEffect(() => {
+    tourIdRef.current = tourId;
+  }, [tourId]);
   const [isEdited, setIsEdited] = useState(Boolean(route.params?.isEdited));
   const [extraPlaceIds, setExtraPlaceIds] = useState<string[]>(
     route.params?.extraPlaceIds || []
@@ -326,6 +333,10 @@ const MyTourStart = () => {
   const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(
     null
   );
+  const currentLocationRef = useRef<[number, number] | null>(null);
+  useEffect(() => {
+    currentLocationRef.current = currentLocation;
+  }, [currentLocation]);
   const [tourOrigin, setTourOrigin] = useState<[number, number] | null>(null);
   const [placeProgress, setPlaceProgress] = useState<
     Record<
@@ -351,8 +362,8 @@ const MyTourStart = () => {
   const [tourCompletedVisible, setTourCompletedVisible] = useState(false);
   const [isCompletedTour, setIsCompletedTour] = useState(false);
   const [cardPosition, setCardPosition] = useState({ x: 24, y: 260 });
-  const [tourActionVisible, setTourActionVisible] = useState(false);
-  const [isPausedTour, setIsPausedTour] = useState(false);
+  const [, setTourActionVisible] = useState(false);
+  const [, setIsPausedTour] = useState(false);
   const pendingEditSaveRef = useRef(false);
   const introPlayedRef = useRef(false);
   const fetchRoadSegment = useCallback(
@@ -548,7 +559,12 @@ const MyTourStart = () => {
           }, {});
           const wasPaused = savedTour.status === 'paused';
           const wasCompleted = savedTour.status === 'completed';
-          setTourStarted(savedTour.status === 'active');
+          const shouldAutoStart = Boolean(route.params?.autoStart) && !wasCompleted;
+          setTourStarted(
+            savedTour.status === 'active' ||
+            ((savedTour.status === 'paused' || savedTour.status === 'scheduled') &&
+              shouldAutoStart)
+          );
           setIsPausedTour(wasPaused);
           setIsCompletedTour(wasCompleted);
           setTourId(savedTour.id);
@@ -584,7 +600,7 @@ const MyTourStart = () => {
         setTourStops(stops);
       })
       .finally(() => setLoading(false));
-  }, [extraPlaceIds, isEdited, removedPlaceIds, route.params?.tourId, routeId, user?.id]);
+  }, [extraPlaceIds, isEdited, removedPlaceIds, route.params?.autoStart, route.params?.tourId, routeId, user?.id]);
 
   useEffect(() => {
     const addedPlaceId = route.params?.addedPlaceId;
@@ -1042,10 +1058,6 @@ useEffect(() => {
     [placeProgress]
   );
 
-  const canResumeTour =
-    !isCompletedTour &&
-    (isPausedTour || Boolean(tourId || hasVisitedProgress || startedAt));
-
   const currentMarkerNeedsStandalonePin = useMemo(() => {
     if (!currentLocation) {
       return false;
@@ -1165,7 +1177,7 @@ useEffect(() => {
       const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
       const status = forcedStatus ?? computedStatus;
       const savedId = await saveUserTour({
-        tourId,
+        tourId: tourIdRef.current,
         userId: user.id,
         userName: user.name || '',
         userEmail: user.email || '',
@@ -1181,12 +1193,13 @@ useEffect(() => {
         startedAt: nextStartedAt || new Date().toISOString(),
         completedAt: status === 'completed' ? new Date().toISOString() : null,
       });
+      tourIdRef.current = savedId;
       setTourId(savedId);
       return savedId;
     },
-    [isEdited, route.params?.tourName, routeDetails, tourId, tourStops, user?.email, user?.id, user?.name]
+    [isEdited, route.params?.tourName, routeDetails, tourStops, tourId, user?.email, user?.id, user?.name]
   );
-  // Intercept back navigation when tour is active — offer pause & leave
+  // Intercept back navigation when tour is active — offer pause or stay
   useEffect(() => {
     if (!tourStarted) return;
 
@@ -1199,13 +1212,13 @@ useEffect(() => {
           { text: 'Stay on Tour', style: 'cancel' },
           {
             text: 'Pause & Leave',
-            style: 'destructive',
             onPress: async () => {
               setTourStarted(false);
               setIsPausedTour(true);
               setSelectedStop(null);
               setSelectedEvent(null);
               await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => { });
+              showInfo('Tour Paused', 'You can resume this tour anytime.');
               navigation.dispatch(e.data.action);
             },
           },
@@ -1273,35 +1286,6 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
     // Fail silently or show toast
   }
 }, [currentLocation]);
-  const handleStartTour = async () => {
-    if (!routeDetails) {
-      return;
-    }
-
-    const nextStartedAt = startedAt || new Date().toISOString();
-    setStartedAt(nextStartedAt);
-    setTourStarted(true);
-    setIsCompletedTour(false);
-    setIsPausedTour(false);
-
-    try {
-      // Always persist — creates users_routes entry even on first start
-      await persistTourIfNeeded(placeProgress, nextStartedAt, 'active', true);
-      showSuccess(
-        canResumeTour ? 'Tour Resumed' : 'Tour Started',
-        canResumeTour
-          ? 'You can continue your journey from where you paused.'
-          : isEdited
-            ? 'Your edited tour has been saved.'
-            : 'Your route is ready to explore.'
-      );
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unable to start tour.';
-      showError('Start Tour Failed', message);
-    }
-  };
-
   const handlePauseTour = async () => {
     if (isCompletedTour) {
       return;
@@ -1310,35 +1294,11 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
     setIsPausedTour(true);
     setSelectedStop(null);
     setSelectedEvent(null);
-    setTourActionVisible(false);
     await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => { });
     showInfo('Tour Paused', 'You can resume this tour anytime.');
-  };
-
-  const handleCloseTour = async () => {
-    if (isCompletedTour) {
-      return;
-    }
-    if (tourId) {
-      await deleteUserTour(tourId);
-    }
-
-    setTourId(null);
-    setStartedAt(null);
-    setPlaceProgress({});
-    setSelectedStop(null);
-    setSelectedEvent(null);
-    setTourActionVisible(false);
-    showInfo('Tour Closed', 'This tour has been closed and will not resume again.');
     navigation.goBack();
   };
 
-  const handleTourAction = () => {
-    if (isCompletedTour) {
-      return;
-    }
-    setTourActionVisible(true);
-  };
 
   const handleVisitVerification = async (imageUri: string) => {
     if (!selectedStop?.place) {
@@ -1400,11 +1360,26 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
       setTourStarted(true);
       const nextStartedAt = startedAt || new Date().toISOString();
       setStartedAt(nextStartedAt);
+      let savedTourId: string | null = tourId;
       try {
-        await persistTourIfNeeded(nextProgress, nextStartedAt);
+        savedTourId = await persistTourIfNeeded(nextProgress, nextStartedAt);
       } catch (error) {
         if (!ALLOW_ANY_IMAGE_FOR_TESTING) {
           throw error;
+        }
+      }
+
+      if (user?.id && savedTourId && pointsEarned > 0) {
+        try {
+          await addUserVisitPoints({
+            userId: user.id,
+            tourId: savedTourId,
+            placeId: selectedStop.place.id,
+            pointsToAdd: pointsEarned,
+          });
+          dispatch(setUserPoints((user.points || 0) + pointsEarned));
+        } catch (err) {
+          console.warn('[MyTourStart] failed to add visit points', err);
         }
       }
       const allDone = placeStops.filter((stop) => !nextProgress[stop.id]?.visited).length === 0;
@@ -1456,8 +1431,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
       </View>
     );
   }
-
-  return (
+return (
     <View style={styles.container}>
       <TopHeader title="My Tour" />
       <View style={styles.background}>
@@ -1734,19 +1708,12 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           </View>
         ) : (
           <View style={styles.rowButtons}>
-            <TouchableOpacity style={styles.favoriteBtn} onPress={handleTourAction}>
-              <Text style={[styles.btnText, { color: COLORS.TEXT_PRIMARY }]}>
-                Action
-              </Text>
-            </TouchableOpacity>
-
             <TouchableOpacity
-              style={[styles.startTourBtn, tourStarted && styles.startTourBtnStarted]}
-              onPress={handleStartTour}
-              disabled={tourStarted}
+              style={styles.startTourBtn}
+              onPress={handlePauseTour}
             >
               <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
-                {tourStarted ? 'Tour Started' : canResumeTour ? 'Resume Tour' : 'Start a Tour'}
+                Pause Tour
               </Text>
             </TouchableOpacity>
           </View>
@@ -1768,42 +1735,6 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           event={selectedEvent}
           onClose={() => setSelectedEvent(null)}
         />
-
-        {tourActionVisible ? (
-          <View style={styles.actionOverlay}>
-            <TouchableOpacity
-              activeOpacity={1}
-              style={styles.actionBackdrop}
-              onPress={() => setTourActionVisible(false)}
-            />
-            <View style={styles.actionSheet}>
-              <Text style={styles.actionTitle}>Tour Actions</Text>
-
-              <TouchableOpacity
-                style={styles.actionPrimaryBtn}
-                onPress={handlePauseTour}
-              >
-                <Text style={styles.actionPrimaryText}>Pause Tour</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.actionDangerBtn}
-                onPress={() => {
-                  handleCloseTour().catch(() => {
-                    showError('Tour Close Failed', 'Unable to end this tour right now.');
-                  });
-                }}
-              >
-                <Text style={styles.actionDangerText}>End Tour</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.actionCancelBtn}
-                onPress={() => setTourActionVisible(false)}
-              >
-                <Text style={styles.actionCancelText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : null}
 
         {tourCompletedVisible ? (
           <View style={styles.completionOverlay}>

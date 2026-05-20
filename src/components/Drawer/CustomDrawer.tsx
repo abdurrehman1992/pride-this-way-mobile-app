@@ -77,7 +77,7 @@ const CustomDrawer = ({ navigation }: any) => {
               onPress={() => navigateTo('Profile')}
             >
               <Image
-                source={{ uri: PROFILE_IMAGE }}
+                source={{ uri: user?.profileImage || PROFILE_IMAGE }}
                 style={styles.profilePhoto}
                 fadeDuration={0}
               />

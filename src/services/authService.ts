@@ -10,6 +10,11 @@ export type AuthUserProfile = {
   name: string;
   email: string;
   phone?: string | null;
+  profileImage?: string | null;
+  points?: number;
+  favorites?: string[];
+  favoriteTours?: string[];
+  favoriteEvents?: string[];
 };
 
 export type AuthSession = {
@@ -33,6 +38,7 @@ type UpdateProfilePayload = {
   fullName: string;
   email: string;
   phone: string;
+  profileImage?: string | null;
 };
 
 const getFriendlyAuthMessage = (error: any) => {
@@ -71,11 +77,13 @@ const upsertUserDocument = async ({
   fullName,
   email,
   phone,
+  profileImage,
 }: {
   uid: string;
   fullName: string;
   email: string;
   phone: string;
+  profileImage?: string | null;
 }) => {
   const docRef = getUserDocumentRef(uid);
   const existingSnapshot = await docRef.get();
@@ -91,6 +99,10 @@ const upsertUserDocument = async ({
     phone: trimmedPhone,
     updatedAt: firestore.FieldValue.serverTimestamp(),
   };
+
+  if (profileImage !== undefined) {
+    payload.profileImage = profileImage;
+  }
 
   if (!existingSnapshot.exists) {
     payload.createdAt = firestore.FieldValue.serverTimestamp();
@@ -114,12 +126,26 @@ const buildAuthSession = async (
     resolvedEmail.split('@')[0] ||
     'User';
 
+  const extractIds = (value: any): string[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) =>
+        typeof item === 'string' ? item : item?.id ? String(item.id) : null
+      )
+      .filter((id): id is string => Boolean(id));
+  };
+
   return {
     user: {
       id: firebaseUser.uid,
       name: resolvedName,
       email: resolvedEmail,
       phone: profile?.phone || null,
+      profileImage: profile?.profileImage || null,
+      points: Number(profile?.points || 0),
+      favorites: extractIds(profile?.favorites),
+      favoriteTours: extractIds(profile?.favoriteTours),
+      favoriteEvents: extractIds(profile?.favoriteEvents),
     },
     token,
   };
@@ -180,6 +206,7 @@ export const updateCurrentUserProfile = async ({
   fullName,
   email,
   phone,
+  profileImage,
 }: UpdateProfilePayload): Promise<AuthSession> => {
   try {
     const currentUser = auth().currentUser;
@@ -205,6 +232,7 @@ export const updateCurrentUserProfile = async ({
       fullName: trimmedName,
       email: trimmedEmail,
       phone: trimmedPhone,
+      profileImage,
     });
 
     return buildAuthSession(auth().currentUser || currentUser, profile);
