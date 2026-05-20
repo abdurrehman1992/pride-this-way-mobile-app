@@ -13,18 +13,19 @@ import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { ProfileStackParamList } from '../../types/types'
 import { logoutUser } from '../../services/authService';
-import { showError } from '../../components/common/AppToast';
+import { showError, showSuccess } from '../../components/common/AppToast';
 type NavigationProp = NativeStackNavigationProp<ProfileStackParamList, "EditProfile">;
 
 const Profile = () => {
   const navigation = useNavigation<NavigationProp>();
   const dispatch = useDispatch();
   const user = useSelector((state: RootState) => state.auth.user);
-
+  // console.log(user)
   const handleLogout = async () => {
     try {
       await logoutUser();
       dispatch(logout());
+      showSuccess('You have logged out successfully')
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to logout.";
@@ -40,7 +41,7 @@ const Profile = () => {
       <View style={styles.profileContainer}>
         <Image
           source={{
-            uri: user?.profileImage || PROFILE_IMAGE
+            uri: user?.profileImage || 'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png'
           }}
           style={styles.profileImage}
         />
@@ -58,7 +59,7 @@ const Profile = () => {
           <Arrow width={18.25} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.button}
-        onPress={()=>navigation.navigate('ChangePassword')}
+          onPress={() => navigation.navigate('ChangePassword')}
         >
           <View style={styles.left}>
             <ChangePasswordIcon width={46.94} height={46.94} />
@@ -109,14 +110,14 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 20,
     color: COLORS.TEXT_PRIMARY,
-    fontFamily:FONT_FAMILY.Poppins_SemiBold,
+    fontFamily: FONT_FAMILY.Poppins_SemiBold,
     // marginBottom: 6,
   },
 
   email: {
     fontSize: 14,
     color: COLORS.TEXT_PRIMARY,
-    fontFamily:FONT_FAMILY.Poppins_Regular
+    fontFamily: FONT_FAMILY.Poppins_Regular
   },
   button: {
     flexDirection: 'row',

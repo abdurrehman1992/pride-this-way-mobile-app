@@ -57,7 +57,11 @@ export type RewardsStackParamList = {
 };
 export type AppStackParamList = {
   Tabs: undefined;
-  Main: undefined
+  Main: undefined,
+};
+export type SupportParamList = {
+  Help_Support: undefined;
+  Terms_Conditions: undefined,
 };
 
 export type TabParamList = {

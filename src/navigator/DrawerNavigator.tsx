@@ -7,6 +7,7 @@ import CustomDrawer from '../components/Drawer/CustomDrawer';
 import RewardsNavigator from './RewardsNavigator';
 import FavoritesNavigator from './FovoritesNavigator';
 import ProfileNavigator from './ProfileNavigator';
+import SupportNavigator from './SupportNavigator';
 
 const Drawer = createDrawerNavigator();
 const DRAWER_WIDTH = Math.min(Dimensions.get('window').width * 0.86, 340);
@@ -39,6 +40,7 @@ const DrawerNavigator = () => {
       <Drawer.Screen name="Favorites" component={FavoritesNavigator} />
       <Drawer.Screen name="Rewards" component={RewardsNavigator} />
       <Drawer.Screen name="Profile" component={ProfileNavigator} />
+      <Drawer.Screen name="Support" component={SupportNavigator} />
     </Drawer.Navigator>
   );
 };

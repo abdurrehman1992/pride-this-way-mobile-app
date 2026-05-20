@@ -6,6 +6,7 @@ import {
   ScrollView,
   Keyboard,
   ActivityIndicator,
+  Image,
 } from "react-native";
 
 import { COLORS } from "../../constants/colors";
@@ -32,6 +33,7 @@ import {
   validatePassword,
   validateConfirmPassword,
 } from "../../utils/validation";
+import { AppLogoImage } from "../../constants/images";
 
 const Signup: React.FC = () => {
   const navigation = useNavigation<any>();
@@ -132,7 +134,7 @@ const Signup: React.FC = () => {
         resizeMode="cover"
       /> */}
       <View style={styles.logo}>
-        <AppLogo width={200} height={153} />
+        <AppLogo />
       </View>
       <View style={styles.overlay}>
         <ScrollView
@@ -263,7 +265,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     flex: 1,
-    marginTop:40
+    marginTop: 40
   },
   keyboardContainer: {
     flex: 1,

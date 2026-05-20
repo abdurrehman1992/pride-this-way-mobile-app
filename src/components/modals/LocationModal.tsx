@@ -337,7 +337,7 @@ const LocationModal: React.FC<Props> = ({
                             <View style={styles.emptyState}>
                                 <ActivityIndicator color={COLORS.BUTTON_COLOR} />
                             </View>
-                        ) : filteredLocations.length > 0 ? (
+                        ) : filteredLocations.length > 0 && !selected ? ( // Added "&& !selected" here
                             <>
                                 {filteredLocations.map((item, i) => (
                                     <TouchableOpacity
@@ -351,11 +351,14 @@ const LocationModal: React.FC<Props> = ({
                                 ))}
                             </>
                         ) : (
-                            <View style={styles.emptyState}>
-                                <Text style={styles.emptyText}>
-                                    No location found
-                                </Text>
-                            </View>
+                            // Only show "No location found" if the user hasn't selected an item yet
+                            !selected && (
+                                <View style={styles.emptyState}>
+                                    <Text style={styles.emptyText}>
+                                        No location found
+                                    </Text>
+                                </View>
+                            )
                         )}
                     </ScrollView>
 

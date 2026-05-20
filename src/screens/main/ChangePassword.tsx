@@ -18,9 +18,13 @@ import {
     validateConfirmPassword
 } from '../../utils/validation';
 import { showError, showSuccess } from '../../components/common/AppToast';
-import { changeCurrentUserPassword } from '../../services/authService';
+import { changeCurrentUserPassword, logoutUser } from '../../services/authService';
+import { useDispatch } from 'react-redux';
+import { logout } from "../../Redux/slices/authSlice";
 
 const ChangePassword = ({ navigation }: any) => {
+    const dispatch = useDispatch();
+
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -33,18 +37,49 @@ const ChangePassword = ({ navigation }: any) => {
 
     const handleCurrentPassword = (text: string) => {
         setCurrentPassword(text);
+
+        let currentErr = '';
+        let newErr = errors.new;
+
+        if (!text.trim()) {
+            currentErr = 'Current password is required';
+        } else if (newPassword && text === newPassword) {
+            newErr = 'New password cannot be the same as your current password';
+        } else if (newPassword && text !== newPassword && errors.new === 'New password cannot be the same as your current password') {
+            // Clear the error on the new password field if they no longer match
+            const validationErrors = validatePassword(newPassword);
+            newErr = validationErrors.length ? validationErrors.join(', ') : '';
+        }
+
         setErrors(prev => ({
             ...prev,
-            current: text.trim() ? '' : 'Current password is required'
+            current: currentErr,
+            new: newErr
         }));
     };
 
     const handleNewPassword = (text: string) => {
         setNewPassword(text);
-        const err = validatePassword(text);
+
+        let newErr = '';
+        const validationErrors = validatePassword(text);
+
+        if (validationErrors.length) {
+            newErr = validationErrors.join(', ');
+        } else if (currentPassword && text === currentPassword) {
+            newErr = 'New password cannot be the same as your current password';
+        }
+
+        // Re-validate confirm password field in real-time when new password changes
+        let confirmErr = errors.confirm;
+        if (confirmPassword) {
+            confirmErr = validateConfirmPassword(text, confirmPassword);
+        }
+
         setErrors(prev => ({
             ...prev,
-            new: err.length ? err.join(', ') : ''
+            new: newErr,
+            confirm: confirmErr
         }));
     };
 
@@ -55,7 +90,16 @@ const ChangePassword = ({ navigation }: any) => {
             confirm: validateConfirmPassword(newPassword, text)
         }));
     };
-
+    const handleLogout = async () => {
+        try {
+            await logoutUser();
+            dispatch(logout());
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unable to logout.";
+            showError("Logout Failed", message);
+        }
+    };
     const isFormValid = useMemo(() => {
         return (
             currentPassword.trim() !== '' &&
@@ -64,13 +108,22 @@ const ChangePassword = ({ navigation }: any) => {
             errors.current === '' &&
             errors.new === '' &&
             errors.confirm === '' &&
-            newPassword === confirmPassword
+            newPassword === confirmPassword &&
+            currentPassword !== newPassword
         );
     }, [currentPassword, newPassword, confirmPassword, errors]);
 
     const handleChangePassword = async () => {
         const currentErr = currentPassword.trim() ? '' : 'Current password is required';
-        const newErr = validatePassword(newPassword).join(',');
+        // const
+        let newErr = '';
+        const validationErrors = validatePassword(newPassword);
+        if (validationErrors.length) {
+            newErr = validationErrors.join(',');
+        } else if (currentPassword && newPassword === currentPassword) {
+            newErr = 'New password cannot be the same as your current password';
+        }
+
         const confirmErr = validateConfirmPassword(newPassword, confirmPassword);
 
         setErrors({
@@ -84,22 +137,17 @@ const ChangePassword = ({ navigation }: any) => {
         }
 
         setLoading(true);
-
         try {
             await changeCurrentUserPassword({
                 currentPassword,
                 newPassword,
             });
-
-            showSuccess("Password changed successfully");
-            navigation.reset({
-                index: 0,
-                routes: [{ name: 'Profile' }],
-            });
+            showSuccess("Password changed successfully","Please Login with new password");
+            handleLogout()
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Unable to change password.";
-            showError("Change Password Failed", message);
+            showError("Change Password Failed", "Please verify your entered current password is correct?");
         } finally {
             setLoading(false);
         }
@@ -128,7 +176,6 @@ const ChangePassword = ({ navigation }: any) => {
                                 error={errors.current}
                                 secureTextEntry
                             />
-
                             <CustomInput
                                 label="New Password"
                                 placeholder="Enter new password"
@@ -137,7 +184,6 @@ const ChangePassword = ({ navigation }: any) => {
                                 error={errors.new}
                                 secureTextEntry
                             />
-
                             <CustomInput
                                 label="Confirm Password"
                                 placeholder="Confirm new password"
@@ -162,7 +208,6 @@ const ChangePassword = ({ navigation }: any) => {
                             disabled={!isFormValid}
                         />
                     )}
-                    {/* </View> */}
                 </ScrollView>
             </KeyboardAvoidingView>
         </SafeAreaView>
