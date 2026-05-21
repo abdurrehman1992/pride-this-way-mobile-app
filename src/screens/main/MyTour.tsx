@@ -406,12 +406,12 @@ const MyTour = () => {
 
     const pendingCreate = route.params?.pendingCreate as
         | {
-              status: 'active' | 'saved';
-              scheduledDate: string | null;
-              createdAt: string;
-              tourName: string;
-              recommendations: RecommendedRoute[];
-          }
+            status: 'active' | 'saved';
+            scheduledDate: string | null;
+            createdAt: string;
+            tourName: string;
+            recommendations: RecommendedRoute[];
+        }
         | undefined;
 
     useEffect(() => {
@@ -864,12 +864,18 @@ const MyTour = () => {
                                     Visit {locations.length} Locations
                                 </Text>
                             </View>
-
-                            {tour.route.dateRange?.startDate ? (
-                                <View style={styles.iconTextGroup}>
-                                    <TourDateIcon width={20} height={20} />
-                                    <Text style={styles.textInfo}>
-                                        {tour.route.dateRange.startDate}
+                            {badge ? (
+                                <View
+                                    style={[
+                                        styles.statusBadge,
+                                        {
+                                            backgroundColor: badge.color + '20',
+                                            borderColor: badge.color,
+                                        },
+                                    ]}
+                                >
+                                    <Text style={[styles.statusBadgeText, { color: badge.color }]}>
+                                        {badge.label}
                                     </Text>
                                 </View>
                             ) : null}
@@ -884,6 +890,7 @@ const MyTour = () => {
                                     Points
                                 </Text>
                             </View>
+
                         </View>
 
                         <View style={styles.cardActionRow}>
@@ -898,7 +905,7 @@ const MyTour = () => {
                                         <HeartIcon width={14} height={12} />
                                     )}
                                 </TouchableOpacity>
-                                {badge ? (
+                                {/* {badge ? (
                                     <View
                                         style={[
                                             styles.statusBadge,
@@ -912,7 +919,7 @@ const MyTour = () => {
                                             {badge.label}
                                         </Text>
                                     </View>
-                                ) : null}
+                                ) : null} */}
                             </View>
                             <TouchableOpacity
                                 style={styles.cardStartBtn}
@@ -1088,7 +1095,7 @@ const MyTour = () => {
                         onPress={goToCreateTour}
                         style={[
                             styles.fab,
-                            { bottom:  footerPadding },
+                            { bottom: footerPadding },
                         ]}
                     >
                         <IconPlus width={12} height={12} />
@@ -1282,6 +1289,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'nowrap',
+        justifyContent: 'space-between',
         gap: 12,
     },
     topIcons: {
@@ -1446,6 +1454,7 @@ const styles = StyleSheet.create({
         paddingVertical: 3,
         borderRadius: 10,
         borderWidth: 1,
+        // marginBottom:10,
     },
     statusBadgeText: {
         fontSize: 10,

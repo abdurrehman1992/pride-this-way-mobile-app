@@ -5,6 +5,8 @@ import {
     Platform,
     ScrollView,
     ActivityIndicator,
+    Keyboard,
+    StatusBar,
 } from "react-native";
 import React, { useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -39,6 +41,7 @@ const ForgetPassword = () => {
         setError(validateEmail(text));
     };
     const handleForget = async () => {
+        Keyboard.dismiss();
         if (!identifier.trim()) {
             setError("Field is required");
             return;
@@ -76,49 +79,56 @@ const ForgetPassword = () => {
         }
     };
     return (
-        <SafeAreaView style={styles.container}>
-            <KeyboardAvoidingView
-                style={styles.keyboardAvoidingView}
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-            >
-                <ScrollView
-                    contentContainerStyle={styles.scrollContainer}
-                    keyboardShouldPersistTaps="handled"
-                    showsVerticalScrollIndicator={false}
+        <>
+            <StatusBar
+                translucent
+                backgroundColor="transparent"
+                barStyle="light-content"
+            />
+            <SafeAreaView style={styles.container}>
+                <KeyboardAvoidingView
+                    style={styles.keyboardAvoidingView}
+                    behavior={Platform.OS === "ios" ? "padding" : "height"}
                 >
-                    {/* Header + Input */}
-                    <View>
-                        <ForgeTopHeader title="Forgot Password" />
+                    <ScrollView
+                        contentContainerStyle={styles.scrollContainer}
+                        keyboardShouldPersistTaps="handled"
+                        showsVerticalScrollIndicator={false}
+                    >
+                        {/* Header + Input */}
+                        <View>
+                            <ForgeTopHeader title="Forgot Password" />
 
-                        <View style={styles.inputWrapper}>
-                            <ForgetPasswordInput
-                                label="Email or Phone Number"
-                                placeholder="Enter your registered email or phone number"
-                                value={identifier}
-                                onChangeText={handleChange}
-                                error={error}
-                                keyboardType="email-address" // ✅ best universal keyboard
-                            />
+                            <View style={styles.inputWrapper}>
+                                <ForgetPasswordInput
+                                    label="Email or Phone Number"
+                                    placeholder="Enter your registered email or phone number"
+                                    value={identifier}
+                                    onChangeText={handleChange}
+                                    error={error}
+                                    keyboardType="email-address" // ✅ best universal keyboard
+                                />
+                            </View>
                         </View>
-                    </View>
-                    <View style={styles.buttonContainer}>
-                        {loading ? (
-                            <ActivityIndicator
-                                size="large"
-                                color="#0286FF"
-                                style={styles.loader}
-                            />
-                        ) : (
-                            <CustomButton
-                                title="Send Verification Code"
-                                onPress={handleForget}
-                                disabled={!identifier || !!error}
-                            />
-                        )}
-                    </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </SafeAreaView>
+                        <View style={styles.buttonContainer}>
+                            {loading ? (
+                                <ActivityIndicator
+                                    size="large"
+                                    color="#0286FF"
+                                    style={styles.loader}
+                                />
+                            ) : (
+                                <CustomButton
+                                    title="Send Verification Code"
+                                    onPress={handleForget}
+                                    disabled={!identifier || !!error}
+                                />
+                            )}
+                        </View>
+                    </ScrollView>
+                </KeyboardAvoidingView>
+            </SafeAreaView>
+        </>
     );
 };
 export default ForgetPassword;

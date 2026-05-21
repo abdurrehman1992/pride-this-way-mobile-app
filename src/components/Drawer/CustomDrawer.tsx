@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useState } from 'react';
-
 import {
   Alert,
   View,
@@ -28,8 +27,8 @@ import {
   TermsIcon,
 } from '../../constants/icons';
 
-import { useDispatch } from 'react-redux';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
+
 import { logout } from '../../Redux/slices/authSlice';
 import { RootState } from '../../Redux/store';
 import { logoutUser } from '../../services/authService';
@@ -40,6 +39,7 @@ import TabsButtons from '../common/TabsButtons';
 
 const CustomDrawer = ({ navigation }: any) => {
   const dispatch = useDispatch();
+
   const insets = useSafeAreaInsets();
   const user = useSelector((state: RootState) => state.auth.user);
   const [visitedPlacesCount, setVisitedPlacesCount] = useState(0);
@@ -111,15 +111,44 @@ const CustomDrawer = ({ navigation }: any) => {
     },
     [hasUnsavedTourSuggestion, navigation, resetMyToursToCreateTour],
   );
+  const resetToSupportScreen = useCallback(
+  (screenName: string) => {
+    navigation.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'Support',
+            params: {
+              screen: screenName,
+            },
+          },
+        ],
+      }),
+    );
+
+    requestAnimationFrame(() => {
+      navigation.closeDrawer();
+    });
+  },
+  [navigation]
+);
 
   const handleLogout = useCallback(async () => {
     try {
       await logoutUser();
       dispatch(logout());
-      showSuccess("Logout Success",'You have logged out successfully')
+
+      showSuccess(
+        'Logout Success',
+        'You have logged out successfully',
+      );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'Unable to logout.';
+        error instanceof Error
+          ? error.message
+          : 'Unable to logout.';
+
       showError('Logout Failed', message);
     }
   }, [dispatch]);
@@ -134,8 +163,10 @@ const CustomDrawer = ({ navigation }: any) => {
         }
 
         const visitedCount = summary.tours.reduce(
-          (sum, tour) => sum + tour.places.filter((place) => place.visited).length,
-          0
+          (sum, tour) =>
+            sum +
+            tour.places.filter((place) => place.visited).length,
+          0,
         );
         setRewardPoints(summary.totalPoints);
         setVisitedPlacesCount(visitedCount);
@@ -168,7 +199,11 @@ const CustomDrawer = ({ navigation }: any) => {
               onPress={() => navigateTo('Profile')}
             >
               <Image
-                source={{ uri: user?.profileImage || 'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png' }}
+                source={{
+                  uri:
+                    user?.profileImage ||
+                    'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png',
+                }}
                 style={styles.profilePhoto}
                 fadeDuration={0}
               />
@@ -197,7 +232,7 @@ const CustomDrawer = ({ navigation }: any) => {
           </TouchableOpacity>
         </View>
       </ImageBackground>
-      {/* CONTENT */}
+
       <DrawerContentScrollView
         showsVerticalScrollIndicator={false}
         bounces={false}
@@ -245,7 +280,7 @@ const CustomDrawer = ({ navigation }: any) => {
             title="Help & Support"
             Icon={HelpIcon}
             onPress={() =>
-              navigateTo('Support', { screen: 'Help_Support' })
+              resetToSupportScreen('Help_Support')
             }
           />
 
@@ -253,7 +288,7 @@ const CustomDrawer = ({ navigation }: any) => {
             title="Terms & Conditions"
             Icon={TermsIcon}
             onPress={() =>
-              navigateTo('Support', { screen: 'Terms_Conditions' })
+              resetToSupportScreen('Terms_Conditions')
             }
           />
         </View>
@@ -263,14 +298,21 @@ const CustomDrawer = ({ navigation }: any) => {
       <TouchableOpacity
         style={[
           styles.logoutBtn,
-          { marginBottom: Math.max(insets.bottom + 12, 24) },
+          {
+            marginBottom: Math.max(
+              insets.bottom + 12,
+              24,
+            ),
+          },
         ]}
         activeOpacity={0.8}
         onPress={handleLogout}
       >
         <LogoutIcon width={36} height={36} />
 
-        <Text style={styles.logoutText}>Logout</Text>
+        <Text style={styles.logoutText}>
+          Logout
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -289,10 +331,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
 
-  headerImage: {
-    // borderBottomLeftRadius: 16,
-    // borderBottomRightRadius: 16,
-  },
+  headerImage: {},
 
   headerRow: {
     flexDirection: 'row',

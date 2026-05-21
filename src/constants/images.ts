@@ -11,7 +11,6 @@ export { default as RoundedFrame } from "../assets/images/roundedFrame.png";
 export { default as MapBackground } from "../assets/images/mapBackground.png";
 export { default as GlobeImage } from "../assets/images/globeImage.png";
 export { default as CameraIcon } from "../assets/images/cameraIcon.png";
-// export { default as AppLogoImage } from "../assets/images/appLogoImage.png";
 
 
 export const PLACES_ARROUND="https://images.unsplash.com/photo-1517713982677-4b66332f98de?q=80&w=2070&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"

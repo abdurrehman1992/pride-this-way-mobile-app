@@ -38,7 +38,8 @@ export const toastConfig = {
 const styles = StyleSheet.create({
   container: {
     width: "90%",
-
+    borderRightWidth:10,
+    borderRightColor:COLORS.BUTTON_COLOR,
     paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 18,
@@ -50,7 +51,8 @@ const styles = StyleSheet.create({
   },
 
   title: {
-    color: COLORS.WHITE,
+    // color: COLORS.WHITE,
+    color:COLORS.TEXT_PRIMARY,
 
     fontSize: FONT_SIZE.TEXT,
 
@@ -58,24 +60,18 @@ const styles = StyleSheet.create({
   },
 
   message: {
-    color: COLORS.WHITE,
+    // color: COLORS.WHITE,
+    color:COLORS.TEXT_PRIMARY,
+
 
     fontSize: FONT_SIZE.SMALL_TEXT,
 
-    fontFamily: FONT_FAMILY.InterTight_Light,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
 
     marginTop: 3,
   },
 
   success: {
-    backgroundColor: "rgba(0,122,255,0.90)",
-  },
-
-  error: {
-    backgroundColor: "rgba(255,59,48,0.75)",
-  },
-
-  info: {
-    backgroundColor: "rgba(255, 204, 0, 0.75)",
+    backgroundColor:'rgba(29, 130, 221, 0.65)'
   },
 });

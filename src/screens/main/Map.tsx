@@ -1,3 +1,4 @@
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import {
@@ -332,63 +333,76 @@ const Map = () => {
     [filteredEvents]
   );
 
+
+
   const focusLocation = useCallback((location: LocationSuggestion) => {
-    if (!location.coordinates) {
-      return;
-    }
+  if (!location.coordinates) {
+    return;
+  }
 
-    const matchingEvents = events.filter(
-      (event) =>
-        eventMatchesFilter(event, location.label) &&
-        eventMatchesDateRange(event, startDateFilter, endDateFilter)
-    );
+  const matchingEvents = events.filter(
+    (event) =>
+      eventMatchesFilter(event, location.label) &&
+      eventMatchesDateRange(event, startDateFilter, endDateFilter)
+  );
 
-    if (matchingEvents.length === 0) {
-      cameraRef.current?.setCamera({
-        centerCoordinate: location.coordinates,
-        zoomLevel: 4.4,
-        pitch: 0,
-        heading: 0,
-        animationDuration: 1400,
-        animationMode: 'flyTo',
-      });
-      setZoomLevel(4.4);
-      return;
-    }
+  // CASE 1: No events → just move camera to city
+  if (matchingEvents.length === 0) {
+    cameraRef.current?.setCamera({
+      centerCoordinate: location.coordinates,
+      zoomLevel: 4.5,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 1200,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(4.5);
+    return;
+  }
 
-    const coordinates = matchingEvents.map(eventCoordinate);
-    const longitudes = coordinates.map(([longitude]) => longitude);
-    const latitudes = coordinates.map(([, latitude]) => latitude);
-    const minLongitude = Math.min(...longitudes);
-    const maxLongitude = Math.max(...longitudes);
-    const minLatitude = Math.min(...latitudes);
-    const maxLatitude = Math.max(...latitudes);
+  // CASE 2: Get all event coordinates
+  const coordinates = matchingEvents.map(eventCoordinate);
 
-    if (
-      minLongitude === maxLongitude &&
-      minLatitude === maxLatitude
-    ) {
-      cameraRef.current?.setCamera({
-        centerCoordinate: [minLongitude, minLatitude],
-        zoomLevel: 9,
-        pitch: 0,
-        heading: 0,
-        animationDuration: 1400,
-        animationMode: 'flyTo',
-      });
-      setZoomLevel(9);
-      return;
-    }
+  const longitudes = coordinates.map(([lng]) => lng);
+  const latitudes = coordinates.map(([, lat]) => lat);
 
-    cameraRef.current?.fitBounds(
-      [maxLongitude, maxLatitude],
-      [minLongitude, minLatitude],
-      [70, 20, 170, 20],
-      1400
-    );
-    setZoomLevel(10.5);
-  }, [endDateFilter, events, startDateFilter]);
+  const minLongitude = Math.min(...longitudes);
+  const maxLongitude = Math.max(...longitudes);
+  const minLatitude = Math.min(...latitudes);
+  const maxLatitude = Math.max(...latitudes);
 
+  // CASE 3: All events at same point → zoom in nicely
+  if (minLongitude === maxLongitude && minLatitude === maxLatitude) {
+    cameraRef.current?.setCamera({
+      centerCoordinate: [minLongitude, minLatitude],
+      zoomLevel: 13,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 1200,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(13);
+    return;
+  }
+
+  // CASE 4: FIT ALL MARKERS PROPERLY (MAIN FIX)
+  const padding = {
+    paddingLeft: 80,
+    paddingRight: 80,
+    paddingTop: 140,
+    paddingBottom: 140,
+  };
+
+  cameraRef.current?.fitBounds(
+    [minLongitude, minLatitude], // SW corner
+    [maxLongitude, maxLatitude], // NE corner
+    padding,
+    1400
+  );
+
+  // ❌ IMPORTANT: DO NOT manually set zoomLevel here
+  // setZoomLevel(...) removed because it breaks fitBounds accuracy
+}, [events, startDateFilter, endDateFilter]);
   const openCalendar = useCallback((field: DateField) => {
     const currentValue = field === 'start' ? startDateFilter : endDateFilter;
     const parsed = parseDateOnly(currentValue) || new Date();
@@ -882,6 +896,7 @@ const Map = () => {
 };
 
 export default Map;
+
 
 const styles = StyleSheet.create({
   container: {

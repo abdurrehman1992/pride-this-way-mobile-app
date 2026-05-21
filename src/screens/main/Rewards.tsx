@@ -8,6 +8,7 @@ import {
   ScrollView,
   Image,
   RefreshControl,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -55,7 +56,7 @@ const Rewards = () => {
 
   useFocusEffect(
     useCallback(() => {
-      loadRewards().catch(() => {});
+      loadRewards().catch(() => { });
     }, [loadRewards])
   );
 
@@ -79,139 +80,146 @@ const Rewards = () => {
   const visibleRewards = showAll ? rewards : rewards.slice(0, 2);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            tintColor={COLORS.BUTTON_COLOR}
-          />
-        }
-      >
-        <View style={styles.up}>
-          <ForgeTopHeader title="Rewards" />
-        </View>
-        <ImageBackground source={RewardsBackground} style={styles.bg}>
-          <View style={styles.contentTop}>
-            <RewardIcon width={33} height={33} />
-            <Text style={styles.cardTitle}>{totalPoints.toLocaleString()} Points</Text>
+    <>
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle="light-content"
+      />
+      <SafeAreaView style={styles.container}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={COLORS.BUTTON_COLOR}
+            />
+          }
+        >
+          <View style={styles.up}>
+            <ForgeTopHeader title="Rewards" />
           </View>
+          <ImageBackground source={RewardsBackground} style={styles.bg}>
+            <View style={styles.contentTop}>
+              <RewardIcon width={33} height={33} />
+              <Text style={styles.cardTitle}>{totalPoints.toLocaleString()} Points</Text>
+            </View>
 
-          <Text style={styles.textCongrats}>
-            Great job! Explore more tours to earn additional rewards.
-          </Text>
+            <Text style={styles.textCongrats}>
+              Great job! Explore more tours to earn additional rewards.
+            </Text>
 
-          <View style={styles.progressOuter}>
-            <View style={styles.progressInner} />
-          </View>
+            <View style={styles.progressOuter}>
+              <View style={styles.progressInner} />
+            </View>
 
-          <Text style={styles.textCongrats}>
-            Next Reward Unlock at {Math.max(1500, totalPoints + 250).toLocaleString()} Points.
-          </Text>
-        </ImageBackground>
-        <View style={styles.pointsTitleCont}>
-          <Text style={styles.pointsTitle} numberOfLines={2}>
-            Your Tours & Rewards
-          </Text>
+            <Text style={styles.textCongrats}>
+              Next Reward Unlock at {Math.max(1500, totalPoints + 250).toLocaleString()} Points.
+            </Text>
+          </ImageBackground>
+          <View style={styles.pointsTitleCont}>
+            <Text style={styles.pointsTitle} numberOfLines={2}>
+              Your Tours & Rewards
+            </Text>
 
-          {rewards.length > 2 ? (
-            <TouchableOpacity
-              onPress={() => setShowAll(!showAll)}
-              style={styles.seeAllButton}
-            >
-              <Text style={styles.seeAll}>
-                {showAll ? 'Show Less' : 'See All'}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        <View style={styles.listContainer}>
-          {visibleRewards.length === 0 ? (
-            <Text style={styles.emptyText}>No rewards earned yet.</Text>
-          ) : visibleRewards.map(item => (
-            <View key={item.id} style={styles.card}>
+            {rewards.length > 2 ? (
               <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => toggleCard(item.id)}
-                style={styles.cardTop}
+                onPress={() => setShowAll(!showAll)}
+                style={styles.seeAllButton}
               >
-                <Image
-                  source={{ uri: PLACES_ARROUND }}
-                  style={styles.imagePlaceholder}
-                />
+                <Text style={styles.seeAll}>
+                  {showAll ? 'Show Less' : 'See All'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <View style={styles.listContainer}>
+            {visibleRewards.length === 0 ? (
+              <Text style={styles.emptyText}>No rewards earned yet.</Text>
+            ) : visibleRewards.map(item => (
+              <View key={item.id} style={styles.card}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => toggleCard(item.id)}
+                  style={styles.cardTop}
+                >
+                  <Image
+                    source={{ uri: PLACES_ARROUND }}
+                    style={styles.imagePlaceholder}
+                  />
 
-                <View style={styles.cardInfo}>
-                  <View style={styles.titleRow}>
-                    <Text style={styles.tourTittle} numberOfLines={2}>
-                      {item.name}
-                    </Text>
+                  <View style={styles.cardInfo}>
+                    <View style={styles.titleRow}>
+                      <Text style={styles.tourTittle} numberOfLines={2}>
+                        {item.name}
+                      </Text>
 
-                    <View style={styles.expandIcon}>
-                      {item.isOpen ? (
-                        <IconUp width={16} height={16} />
-                      ) : (
-                        <DownArrow width={16} height={16} />
-                      )}
+                      <View style={styles.expandIcon}>
+                        {item.isOpen ? (
+                          <IconUp width={16} height={16} />
+                        ) : (
+                          <DownArrow width={16} height={16} />
+                        )}
+                      </View>
                     </View>
-                  </View>
 
-                  <View style={styles.metaInfoRow}>
+                    <View style={styles.metaInfoRow}>
+                      <View style={styles.metaInfoItem}>
+                        <TourLocationIcon height={20} width={20} />
+                        <Text style={styles.textInfo}>
+                          Visit {item.totalLocations} Locations
+                        </Text>
+                      </View>
+
+                      <View style={styles.metaInfoItem}>
+                        <TourDateIcon height={20} width={20} />
+                        <Text style={styles.textInfo}>{item.date}</Text>
+                      </View>
+                    </View>
+
+                    {/* POINTS */}
                     <View style={styles.metaInfoItem}>
-                      <TourLocationIcon height={20} width={20} />
+                      <EarnedPointIcon height={20} width={20} />
                       <Text style={styles.textInfo}>
-                        Visit {item.totalLocations} Locations
+                        Earn <Text style={styles.textGreen}>+{item.points}</Text>{' '}
+                        Points
                       </Text>
                     </View>
-
-                    <View style={styles.metaInfoItem}>
-                      <TourDateIcon height={20} width={20} />
-                      <Text style={styles.textInfo}>{item.date}</Text>
-                    </View>
                   </View>
+                </TouchableOpacity>
 
-                  {/* POINTS */}
-                  <View style={styles.metaInfoItem}>
-                    <EarnedPointIcon height={20} width={20} />
-                    <Text style={styles.textInfo}>
-                      Earn <Text style={styles.textGreen}>+{item.points}</Text>{' '}
-                      Points
-                    </Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
+                {item.isOpen && (
+                  <View style={styles.cardBottom}>
+                    <Text style={styles.breakDownTitle}>Points Breakdown</Text>
 
-              {item.isOpen && (
-                <View style={styles.cardBottom}>
-                  <Text style={styles.breakDownTitle}>Points Breakdown</Text>
-
-                  {(item.places || []).map((place: any) => (
-                    <View key={place.id} style={styles.locationCont}>
-                      <View style={styles.locationRow}>
-                        <CreatedTourLocationIcon width={18} height={18} />
-                        <Text style={styles.locationText}>{place.name}</Text>
+                    {(item.places || []).map((place: any) => (
+                      <View key={place.id} style={styles.locationCont}>
+                        <View style={styles.locationRow}>
+                          <CreatedTourLocationIcon width={18} height={18} />
+                          <Text style={styles.locationText}>{place.name}</Text>
+                        </View>
+                        <Text style={styles.arrow}>{`---->`}</Text>
+                        <Text style={styles.pointsText}>+{place.points} Points</Text>
                       </View>
-                      <Text style={styles.arrow}>{`---->`}</Text>
-                      <Text style={styles.pointsText}>+{place.points} Points</Text>
+                    ))}
+
+                    <View style={styles.divider} />
+
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalText}>Total Points</Text>
+                      <Text style={styles.totalPoints}>
+                        +{item.points} Points
+                      </Text>
                     </View>
-                  ))}
-
-                  <View style={styles.divider} />
-
-                  <View style={styles.totalRow}>
-                    <Text style={styles.totalText}>Total Points</Text>
-                    <Text style={styles.totalPoints}>
-                      +{item.points} Points
-                    </Text>
                   </View>
-                </View>
-              )}
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+                )}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </>
   );
 };
 

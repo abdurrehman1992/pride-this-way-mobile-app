@@ -9,6 +9,8 @@ import {
     KeyboardAvoidingView,
     Platform,
     ActivityIndicator,
+    Keyboard,
+    StatusBar,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -110,139 +112,147 @@ const EditProfile = () => {
         );
     }, [fullName, email, errors]);
     const handleUpdateProfile = async () => {
-    if (!isFormValid || loading || uploadingImage) return;
+        Keyboard.dismiss()
+        if (!isFormValid || loading || uploadingImage) return;
 
-    setLoading(true);
-    setIsSubmitting(true);
+        setLoading(true);
+        setIsSubmitting(true);
 
-    try {
-        const updatedUser = await updateCurrentUserProfile({
-            fullName,
-            email,
-            phone,
-            profileImage: image,
-        });
+        try {
+            const updatedUser = await updateCurrentUserProfile({
+                fullName,
+                email,
+                phone,
+                profileImage: image,
+            });
 
-        // 🔥 IMPORTANT: ensure backend returns FULL user object
-        dispatch(loginSuccess(updatedUser));
+            // 🔥 IMPORTANT: ensure backend returns FULL user object
+            dispatch(loginSuccess(updatedUser));
 
-        showSuccess("Profile updated successfully");
+            showSuccess("Profile updated", "You have updated your profile successfully");
 
-        navigation.reset({
-            index: 0,
-            routes: [{ name: "Profile" }],
-        });
+            navigation.reset({
+                index: 0,
+                routes: [{ name: "Profile" }],
+            });
 
-    } catch (error) {
-        const message =
-            error instanceof Error ? error.message : "Unable to update profile.";
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Unable to update profile.";
 
-        showError("Update Failed", message);
+            showError("Update Failed", message);
 
-    } finally {
-        setLoading(false);
-        setIsSubmitting(false);
-    }
-};
+        } finally {
+            setLoading(false);
+            setIsSubmitting(false);
+        }
+    };
 
     return (
-        <SafeAreaView style={styles.container} edges={["top"]}>
-            <KeyboardAvoidingView
-                style={styles.keyboardAvoidingView}
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-            >
-                <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
-                    contentContainerStyle={styles.scrollContent}
+        <>
+            <StatusBar
+                translucent
+                backgroundColor="transparent"
+                barStyle="light-content"
+            />
+            <SafeAreaView style={styles.container} edges={["top"]}>
+                <KeyboardAvoidingView
+                    style={styles.keyboardAvoidingView}
+                    behavior={Platform.OS === "ios" ? "padding" : "height"}
                 >
-                    {/* HEADER */}
-                    <View style={styles.up}>
-                        <ForgeTopHeader title="Edit Profile" />
-                    </View>
+                    <ScrollView
+                        showsVerticalScrollIndicator={false}
+                        keyboardShouldPersistTaps="handled"
+                        contentContainerStyle={styles.scrollContent}
+                    >
+                        {/* HEADER */}
+                        <View style={styles.up}>
+                            <ForgeTopHeader title="Edit Profile" />
+                        </View>
 
-                    {/* PROFILE IMAGE */}
-                    <View style={styles.profileSection}>
-                        <TouchableOpacity
-                            onPress={handlePickImage}
-                            activeOpacity={0.8}
-                            disabled={uploadingImage}
-                        >
-                            <Image
-                                source={{
-                                    uri:
-                                        image ||
-                                        "https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png",
-                                }}
-                                style={styles.profileImage}
+                        {/* PROFILE IMAGE */}
+                        <View style={styles.profileSection}>
+                            <TouchableOpacity
+                                onPress={handlePickImage}
+                                activeOpacity={0.8}
+                                disabled={uploadingImage}
+                            >
+                                <Image
+                                    source={{
+                                        uri:
+                                            image ||
+                                            "https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png",
+                                    }}
+                                    style={styles.profileImage}
+                                />
+
+                                {uploadingImage ? (
+                                    <View style={styles.uploadOverlay}>
+                                        <ActivityIndicator color={COLORS.WHITE} />
+                                    </View>
+                                ) : (
+                                    <CameraIcon
+                                        width={35}
+                                        height={35}
+                                        style={styles.iconOverlay}
+                                    />
+                                )}
+                            </TouchableOpacity>
+
+                            <Text style={styles.changeText}>
+                                {uploadingImage
+                                    ? "Uploading…"
+                                    : "Change Profile Picture"}
+                            </Text>
+                        </View>
+
+                        {/* INPUTS */}
+                        <View style={styles.inputs}>
+                            <CustomInput
+                                label="Full Name"
+                                placeholder="Enter Full Name"
+                                value={fullName}
+                                onChangeText={handleNameChange}
+                                error={errors.name}
                             />
 
-                            {uploadingImage ? (
-                                <View style={styles.uploadOverlay}>
-                                    <ActivityIndicator color={COLORS.WHITE} />
-                                </View>
-                            ) : (
-                                <CameraIcon
-                                    width={35}
-                                    height={35}
-                                    style={styles.iconOverlay}
-                                />
-                            )}
-                        </TouchableOpacity>
+                            <CustomInput
+                                label="Email Address"
+                                placeholder="Email Address"
+                                value={email}
+                                onChangeText={() => { }}
+                                editable={false}
+                            />
 
-                        <Text style={styles.changeText}>
-                            {uploadingImage
-                                ? "Uploading…"
-                                : "Change Profile Picture"}
-                        </Text>
-                    </View>
+                            <CustomInput
+                                label="Phone Number"
+                                placeholder="Enter Phone Number"
+                                value={phone}
+                                onChangeText={handlePhoneChange}
+                                keyboardType="phone-pad"
+                                error={errors.phone}
+                            />
+                        </View>
 
-                    {/* INPUTS */}
-                    <View style={styles.inputs}>
-                        <CustomInput
-                            label="Full Name"
-                            placeholder="Enter Full Name"
-                            value={fullName}
-                            onChangeText={handleNameChange}
-                            error={errors.name}
-                        />
-
-                        <CustomInput
-                            label="Email Address"
-                            placeholder="Email Address"
-                            value={email}
-                            onChangeText={() => {}}
-                            editable={false}
-                        />
-
-                        <CustomInput
-                            label="Phone Number"
-                            placeholder="Enter Phone Number"
-                            value={phone}
-                            onChangeText={handlePhoneChange}
-                            keyboardType="phone-pad"
-                            error={errors.phone}
-                        />
-                    </View>
-
-                    {/* BUTTON */}
-                    {loading ? (
-                        <ActivityIndicator
-                            size="large"
-                            color={COLORS.BUTTON_COLOR}
-                            style={styles.loader}
-                        />
-                    ) : (
-                        <CustomButton
-                            title="Update Profile"
-                            Icon={SinupIcon}
-                            onPress={handleUpdateProfile}
-                            disabled={!isFormValid || uploadingImage}
-                        />
-                    )}
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </SafeAreaView>
+                        {/* BUTTON */}
+                        {loading ? (
+                            <ActivityIndicator
+                                size="large"
+                                color={COLORS.BUTTON_COLOR}
+                                style={styles.loader}
+                            />
+                        ) : (
+                            <CustomButton
+                                title="Update Profile"
+                                Icon={SinupIcon}
+                                onPress={handleUpdateProfile}
+                                disabled={!isFormValid || uploadingImage}
+                            />
+                        )}
+                    </ScrollView>
+                </KeyboardAvoidingView>
+            </SafeAreaView>
+        </>
     );
 };
 

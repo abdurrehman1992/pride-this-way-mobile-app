@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native'
+import { View, Text, StyleSheet, Image, TouchableOpacity, StatusBar } from 'react-native'
 import React from 'react'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { COLORS } from '../../constants/colors'
@@ -34,47 +34,54 @@ const Profile = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.top}>
-        <ForgeTopHeader title="Profile" />
-      </View>
-      <View style={styles.profileContainer}>
-        <Image
-          source={{
-            uri: user?.profileImage || 'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png'
-          }}
-          style={styles.profileImage}
-        />
-        <Text style={styles.name}>{user?.name || "Guest User"}</Text>
-        <Text style={styles.email}>{user?.email || "guest@example.com"}</Text>
-      </View>
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity style={styles.button}
-          onPress={() => navigation.navigate('EditProfile')}
+    <>
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle="light-content"
+      />
+      <SafeAreaView style={styles.container}>
+        <View style={styles.top}>
+          <ForgeTopHeader title="Profile" />
+        </View>
+        <View style={styles.profileContainer}>
+          <Image
+            source={{
+              uri: user?.profileImage || 'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png'
+            }}
+            style={styles.profileImage}
+          />
+          <Text style={styles.name}>{user?.name || "Guest User"}</Text>
+          <Text style={styles.email}>{user?.email || "guest@example.com"}</Text>
+        </View>
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity style={styles.button}
+            onPress={() => navigation.navigate('EditProfile')}
+          >
+            <View style={styles.left}>
+              <EditProfileIcon width={46.94} height={46.94} />
+              <Text style={styles.buttonText}>Edit Profile</Text>
+            </View>
+            <Arrow width={18.25} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.button}
+            onPress={() => navigation.navigate('ChangePassword')}
+          >
+            <View style={styles.left}>
+              <ChangePasswordIcon width={46.94} height={46.94} />
+              <Text style={styles.buttonText}>Change Password</Text>
+            </View>
+            <Arrow width={18.25} />
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity style={styles.logoutBtn}
+          onPress={handleLogout}
         >
-          <View style={styles.left}>
-            <EditProfileIcon width={46.94} height={46.94} />
-            <Text style={styles.buttonText}>Edit Profile</Text>
-          </View>
-          <Arrow width={18.25} />
+          <LogoutIcon width={36} height={36} />
+          <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.button}
-          onPress={() => navigation.navigate('ChangePassword')}
-        >
-          <View style={styles.left}>
-            <ChangePasswordIcon width={46.94} height={46.94} />
-            <Text style={styles.buttonText}>Change Password</Text>
-          </View>
-          <Arrow width={18.25} />
-        </TouchableOpacity>
-      </View>
-      <TouchableOpacity style={styles.logoutBtn}
-        onPress={handleLogout}
-      >
-        <LogoutIcon width={36} height={36} />
-        <Text style={styles.logoutText}>Logout</Text>
-      </TouchableOpacity>
-    </SafeAreaView>
+      </SafeAreaView>
+    </>
   )
 }
 

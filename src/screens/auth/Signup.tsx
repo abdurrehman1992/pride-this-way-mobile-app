@@ -33,7 +33,7 @@ import {
   validatePassword,
   validateConfirmPassword,
 } from "../../utils/validation";
-import { AppLogoImage } from "../../constants/images";
+// import { AppLogoImage } from "../../constants/images";
 
 const Signup: React.FC = () => {
   const navigation = useNavigation<any>();
@@ -81,6 +81,7 @@ const Signup: React.FC = () => {
   }, [fullName, email, phone, password, confirmPassword]);
 
   const handleSignup = async () => {
+    Keyboard.dismiss()
     if (loading) return;
 
     const nextErrors = {
@@ -115,11 +116,13 @@ const Signup: React.FC = () => {
       });
 
       dispatch(loginSuccess(session));
+      // showSuccess("Account Created", "Welcome to Pride This Way!",'top');
       showSuccess("Account Created", "Welcome to Pride This Way!");
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to create account.";
       dispatch(loginFailure(message));
+      // showError("Signup Failed", message, 'top');
       showError("Signup Failed", message);
     } finally {
       setLoading(false);

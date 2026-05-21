@@ -6,6 +6,7 @@ import {
     KeyboardAvoidingView,
     Platform,
     ActivityIndicator,
+    Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
@@ -114,6 +115,7 @@ const ChangePassword = ({ navigation }: any) => {
     }, [currentPassword, newPassword, confirmPassword, errors]);
 
     const handleChangePassword = async () => {
+        Keyboard.dismiss();
         const currentErr = currentPassword.trim() ? '' : 'Current password is required';
         // const
         let newErr = '';

@@ -36,7 +36,7 @@ import {
 } from "../../utils/rememberMe";
 import { showError, showSuccess } from "../../components/common/AppToast";
 import { loginUser } from "../../services/authService";
-import { AppLogoImage } from "../../constants/images";
+// import { AppLogoImage } from "../../constants/images";
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, "Login">;
 
@@ -88,6 +88,7 @@ const Login: React.FC = () => {
   }, []);
 
   const handleLogin = async () => {
+    Keyboard.dismiss()
     if (loading) return;
 
     const emailError = validateLoginEmail(email);
@@ -115,12 +116,14 @@ const Login: React.FC = () => {
 
       dispatch(loginSuccess(session));
 
+      // showSuccess("Login Successful", "Welcome back to Pride this way!","top");
       showSuccess("Login Successful", "Welcome back to Pride this way!");
     } catch (error) {
       console.log("LOGIN ERROR:", error);
       const message =
         error instanceof Error ? error.message : "Unable to sign in.";
       dispatch(loginFailure(message));
+      // showError("Login Failed", message,'top');
       showError("Login Failed", message);
     } finally {
       setLoading(false);
