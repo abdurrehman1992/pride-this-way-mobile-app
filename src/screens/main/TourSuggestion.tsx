@@ -17,6 +17,7 @@ import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import {
     CreatedTourLocationIcon,
+    DownArrow,
     EarnedPointIcon,
     IconDelete,
     IconPlus,
@@ -57,6 +58,7 @@ const TourSuggestion: React.FC = () => {
     const events = primary?.events || [];
 
     const [places, setPlaces] = useState<FirebasePlace[]>(initialPlaces);
+    const [expandedLocations, setExpandedLocations] = useState<Record<string, boolean>>({});
 
     const totalPoints = useMemo(() => places.length * POINTS_PER_LOCATION, [places.length]);
 
@@ -66,7 +68,7 @@ const TourSuggestion: React.FC = () => {
         events[0]?.coverImage ||
         '';
 
-    const dateLabel = primary?.route?.dateRange?.startDate || 'Flexible';
+    const dateLabel = primary?.route?.dateRange?.startDate;
 
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
@@ -99,6 +101,13 @@ const TourSuggestion: React.FC = () => {
 
     const removePlace = (placeId: string) => {
         setPlaces((prev) => prev.filter((p) => p.id !== placeId));
+    };
+
+    const toggleLocationDetails = (placeId: string) => {
+        setExpandedLocations((prev) => ({
+            ...prev,
+            [placeId]: !prev[placeId],
+        }));
     };
 
     useEffect(() => {
@@ -239,10 +248,12 @@ const TourSuggestion: React.FC = () => {
                                     </Text>
                                 </View>
 
-                                <View style={styles.iconTextGroup}>
-                                    <TourDateIcon width={20} height={20} />
-                                    <Text style={styles.textInfo}>{dateLabel}</Text>
-                                </View>
+                                {dateLabel ? (
+                                    <View style={styles.iconTextGroup}>
+                                        <TourDateIcon width={20} height={20} />
+                                        <Text style={styles.textInfo}>{dateLabel}</Text>
+                                    </View>
+                                ) : null}
                             </View>
 
                             <View style={styles.iconInfoRow}>
@@ -265,20 +276,56 @@ const TourSuggestion: React.FC = () => {
                             </TouchableOpacity>
                         </View>
 
-                        {places.map((place) => (
-                            <View key={place.id} style={styles.locationRow}>
-                                <View style={styles.locationLeft}>
-                                    <CreatedTourLocationIcon width={20} height={20} />
-                                    <Text style={styles.locationText}>{place.name}</Text>
+                        {places.map((place) => {
+                            const isExpanded = Boolean(expandedLocations[place.id]);
+                            const hasDetails = Boolean(place.address || place.description);
+
+                            return (
+                                <View key={place.id} style={styles.locationCard}>
+                                    <View style={styles.locationRow}>
+                                        <View style={styles.locationLeft}>
+                                            <CreatedTourLocationIcon width={20} height={20} />
+                                            <Text style={styles.locationText}>{place.name}</Text>
+                                        </View>
+                                        <View style={styles.locationActions}>
+                                            {hasDetails ? (
+                                                <TouchableOpacity
+                                                    onPress={() => toggleLocationDetails(place.id)}
+                                                    hitSlop={8}
+                                                    style={styles.locationToggle}
+                                                >
+                                                    {isExpanded ? (
+                                                        <IconUp width={16} height={16} />
+                                                    ) : (
+                                                        <DownArrow width={16} height={16} />
+                                                    )}
+                                                </TouchableOpacity>
+                                            ) : null}
+                                            <TouchableOpacity
+                                                onPress={() => removePlace(place.id)}
+                                                hitSlop={8}
+                                            >
+                                                <IconDelete width={15} height={15} />
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                    {isExpanded ? (
+                                        <View style={styles.locationDetails}>
+                                            {place.address ? (
+                                                <Text style={styles.locationMetaText}>
+                                                    {place.address}
+                                                </Text>
+                                            ) : null}
+                                            {place.description ? (
+                                                <Text style={styles.locationDescription}>
+                                                    {place.description}
+                                                </Text>
+                                            ) : null}
+                                        </View>
+                                    ) : null}
                                 </View>
-                                <TouchableOpacity
-                                    onPress={() => removePlace(place.id)}
-                                    hitSlop={8}
-                                >
-                                    <IconDelete width={15} height={15} />
-                                </TouchableOpacity>
-                            </View>
-                        ))}
+                            );
+                        })}
 
                         {events.length > 0 ? (
                             <>
@@ -433,8 +480,10 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.InterTight_Medium,
         color: COLORS.BUTTON_COLOR,
     },
-    locationRow: {
+    locationCard: {
         paddingVertical: 6,
+    },
+    locationRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
@@ -450,6 +499,34 @@ const styles = StyleSheet.create({
         fontSize: FONT_SIZE.TEXT,
         fontFamily: FONT_FAMILY.InterTight_Regular,
         color: COLORS.TEXT_PRIMARY,
+    },
+    locationActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    locationToggle: {
+        width: 20,
+        height: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    locationDetails: {
+        marginTop: 8,
+        marginLeft: 29,
+        gap: 4,
+    },
+    locationMetaText: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Medium,
+        color: COLORS.TEXT_PRIMARY,
+        lineHeight: 18,
+    },
+    locationDescription: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+        lineHeight: 18,
     },
     eventsTitle: {
         marginTop: 10,

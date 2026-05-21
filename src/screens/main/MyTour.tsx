@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     View,
     Text,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     CreatedTourLocationIcon,
     DownArrow,
@@ -25,14 +26,15 @@ import {
     TourLocationIcon,
 } from '../../constants/icons';
 import TopHeader from '../../components/Home/TopHeader';
-import CustomButton from '../../components/common/CustomButton';
-import { COLORS } from '../../constants/colors';
-import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
+import TourIntro from '../../components/MyTour/TourIntro';
 import LocationModal from '../../components/modals/LocationModal';
 import PreferenceModal from '../../components/modals/PreferenceModal';
 import NameTourModal from '../../components/modals/NameTourModal';
+import { COLORS } from '../../constants/colors';
+import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { MyTourStackParamList } from '../../types/types';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Alert } from 'react-native';
 import { showError, showInfo, showSuccess } from '../../components/common/AppToast';
 import {
     deleteUserTour,
@@ -43,18 +45,17 @@ import {
     fetchRouteDetails,
     fetchTourTags,
     saveUserTour,
-    scheduleOtherActiveTours,
+    searchLocationSuggestions,
     FirebasePlace,
     FirebaseTag,
     RecommendedRoute,
     SavedTour,
-    searchLocationSuggestions,
 } from '../../services/myTourService';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../Redux/store';
 import { useFavorites } from '../../context/FavoritesContext';
 
-type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'AddLocations'>;
+type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'MyTour'>;
 
 type RouteCardState = RecommendedRoute & {
     cardId: string;
@@ -71,7 +72,7 @@ type RouteCardState = RecommendedRoute & {
     createdAt?: string;
 };
 
-type TourFilter = 'All' | 'Current' | 'Paused' | 'Scheduled' | 'Favourite' | 'Completed';
+type TourFilter = 'All' | 'Current' | 'Saved' | 'Completed';
 
 type TourStatusUpdate = {
     tourId?: string;
@@ -80,8 +81,8 @@ type TourStatusUpdate = {
     updatedAt?: string;
 };
 
-const buildTourIdentityKey = (tour: Pick<RouteCardState, 'displayName' | 'route'>) =>
-    `${tour.route.id}::${(tour.displayName || '').trim().toLowerCase()}`;
+const TOUR_FILTERS: TourFilter[] = ['All', 'Current', 'Saved', 'Completed'];
+const VALID_TOUR_STATUSES = new Set(['active', 'completed', 'paused', 'scheduled', 'saved']);
 
 const buildPlaceProgressFromSavedTour = (savedTour: SavedTour) =>
     savedTour.all_places.reduce<
@@ -110,17 +111,10 @@ const applyTourStatusUpdate = (
     item: RouteCardState,
     update?: TourStatusUpdate
 ): RouteCardState => {
-    if (!update) {
-        return item;
-    }
-
+    if (!update) return item;
     const matchesTourId = update.tourId && item.tourId === update.tourId;
     const matchesRouteId = update.routeId && item.route.id === update.routeId;
-
-    if (!matchesTourId && !matchesRouteId) {
-        return item;
-    }
-
+    if (!matchesTourId && !matchesRouteId) return item;
     return {
         ...item,
         status: (update.status as RouteCardState['status']) || item.status,
@@ -128,56 +122,78 @@ const applyTourStatusUpdate = (
     };
 };
 
+const normalizeTourCards = (cards: RouteCardState[]) => {
+    const normalized = cards.filter(
+        (card) => Boolean(card.status) && VALID_TOUR_STATUSES.has(card.status!)
+    );
+    const byKey = new Map<string, RouteCardState>();
+
+    normalized.forEach((card) => {
+        const key = card.tourId || `${card.route.id}:${card.displayName}`;
+        const existing = byKey.get(key);
+
+        if (!existing) {
+            byKey.set(key, card);
+            return;
+        }
+
+        if (card.tourId && !existing.tourId) {
+            byKey.set(key, card);
+            return;
+        }
+
+        const existingTime = existing.updatedAt || existing.createdAt || '';
+        const nextTime = card.updatedAt || card.createdAt || '';
+        if (nextTime > existingTime) {
+            byKey.set(key, card);
+        }
+    });
+
+    return Array.from(byKey.values());
+};
+
 const MyTour = () => {
     const route = useRoute<any>();
     const navigation = useNavigation<NavigationProp>();
     const bottomHeight = useBottomTabBarHeight();
+    const insets = useSafeAreaInsets();
     const authUser = useSelector((state: RootState) => state.auth.user);
     const userId = authUser?.id;
     const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
+
+    const [savedTourCards, setSavedTourCards] = useState<RouteCardState[]>([]);
+    const [expandedLocations, setExpandedLocations] = useState<Record<string, boolean>>({});
+    const [initialLoad, setInitialLoad] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [activeFilter, setActiveFilter] = useState<TourFilter>('All');
+
     const [modals, setModals] = useState({
         location: false,
         preference: false,
         name: false,
     });
-    const [pendingRecommendations, setPendingRecommendations] = useState<RecommendedRoute[]>([]);
+    const localStatusOverrides = useRef<Map<string, { status: string; updatedAt: string }>>(
+        new Map()
+    );
     const [tags, setTags] = useState<FirebaseTag[]>([]);
     const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
     const [tourName, setTourName] = useState('');
-    const [routeCards, setRouteCards] = useState<RouteCardState[]>([]);
     const [locationSearch, setLocationSearch] = useState('');
     const [selectedLocation, setSelectedLocation] = useState('');
     const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
     const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-    const [loadingRoutes, setLoadingRoutes] = useState(false);
-    const [initialLoad, setInitialLoad] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
-    const [savedTourCards, setSavedTourCards] = useState<RouteCardState[]>([]);
-    const [activeFilter, setActiveFilter] = useState<TourFilter>('All');
-    const addedRouteId = route.params?.routeId;
-    const addedPlaceId = route.params?.addedPlaceId;
-    const tourUpdate = route.params?.tourUpdate as TourStatusUpdate | undefined;
+    const [pendingRecommendations, setPendingRecommendations] = useState<RecommendedRoute[]>([]);
 
     const tagNames = useMemo(() => tags.map((tag) => tag.name), [tags]);
     const selectedTagIds = useMemo(
-        () =>
-            tags
-                .filter((tag) => selectedPrefs.includes(tag.name))
-                .map((tag) => tag.id),
+        () => tags.filter((tag) => selectedPrefs.includes(tag.name)).map((tag) => tag.id),
         [selectedPrefs, tags]
     );
 
     const openModal = (key: keyof typeof modals) =>
-        setModals((prev) => ({
-            ...prev,
-            [key]: true,
-        }));
-
+        setModals((prev) => ({ ...prev, [key]: true }));
     const closeModal = (key: keyof typeof modals) =>
-        setModals((prev) => ({
-            ...prev,
-            [key]: false,
-        }));
+        setModals((prev) => ({ ...prev, [key]: false }));
 
     const togglePreference = useCallback((item: string) => {
         setSelectedPrefs((prev) =>
@@ -185,18 +201,90 @@ const MyTour = () => {
         );
     }, []);
 
-    const loadTags = useCallback(async () => {
-        try {
-            const fetchedTags = await fetchTourTags();
-            setTags(fetchedTags);
-        } catch {
-            setTags([]);
-        }
+    const clearFlow = () => {
+        setSelectedPrefs([]);
+        setTourName('');
+        setLocationSearch('');
+        setSelectedLocation('');
+        setLocationSuggestions([]);
+    };
+
+    useEffect(() => {
+        fetchTourTags()
+            .then(setTags)
+            .catch(() => setTags([]));
     }, []);
+
+    useEffect(() => {
+        if (!modals.location) return;
+        if (locationSearch.trim().length < 2) {
+            setLocationSuggestions([]);
+            setLoadingSuggestions(false);
+            return;
+        }
+        setLoadingSuggestions(true);
+        const timeout = setTimeout(() => {
+            searchLocationSuggestions(locationSearch)
+                .then((results) => setLocationSuggestions(results.map((item) => item.label)))
+                .finally(() => setLoadingSuggestions(false));
+        }, 350);
+        return () => clearTimeout(timeout);
+    }, [locationSearch, modals.location]);
+
+    const handleOpenNameModal = async () => {
+        try {
+            const recommendations = await fetchRecommendedRoutes({
+                locationLabel: selectedLocation || locationSearch,
+                selectedTagIds,
+                userId,
+            });
+            if (recommendations.length === 0) {
+                setPendingRecommendations([]);
+                closeModal('preference');
+                showError('No Suggestions', 'We couldn\'t find a tour matching that location.');
+                return;
+            }
+            setPendingRecommendations(recommendations);
+            const suggestedName = recommendations[0]?.route?.name?.trim();
+            setTourName(suggestedName || '');
+            closeModal('preference');
+            openModal('name');
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'Unable to load recommendations.';
+            showError('Could not load tours', message);
+        }
+    };
+
+    const handleNameConfirm = () => {
+        const recommendationsSnapshot = pendingRecommendations;
+        const tourNameSnapshot = tourName.trim() || recommendationsSnapshot[0]?.route?.name || '';
+        const cityLabel =
+            [recommendationsSnapshot[0]?.route?.city_name, recommendationsSnapshot[0]?.route?.country]
+                .filter(Boolean)
+                .join(', ') ||
+            selectedLocation ||
+            locationSearch;
+
+        closeModal('name');
+        setPendingRecommendations([]);
+        clearFlow();
+
+        navigation.navigate('TourSuggestion', {
+            tourName: tourNameSnapshot,
+            cityLabel,
+            recommendations: recommendationsSnapshot,
+        });
+    };
+
+    const addedRouteId = route.params?.routeId;
+    const addedPlaceId = route.params?.addedPlaceId;
+    const tourUpdate = route.params?.tourUpdate as TourStatusUpdate | undefined;
 
     const loadSavedTours = useCallback(async () => {
         if (!userId) {
             setSavedTourCards([]);
+            setInitialLoad(false);
             return;
         }
 
@@ -207,12 +295,10 @@ const MyTour = () => {
                 return;
             }
 
-            // 1. PERFORMANCE WIN: Extract and deduplicate all place IDs from ALL tours up front
             const allPlaceIds = Array.from(
                 new Set(tours.flatMap((t) => t.all_places?.map((p) => p.place_id) || []))
             );
 
-            // 2. PERFORMANCE WIN: Run batch fetches in parallel for the entire screen data at once
             const [globalPlaces, ...allRouteDetails] = await Promise.all([
                 allPlaceIds.length > 0 ? fetchPlacesByIds(allPlaceIds) : Promise.resolve([]),
                 ...tours.map((t) =>
@@ -220,15 +306,11 @@ const MyTour = () => {
                 ),
             ]);
 
-            // Create a fast-lookup map for places: O(1) complexity instead of O(N) filtering inside array map
             const placesMap = new Map((globalPlaces || []).map((p) => [p.id, p]));
-
-            // Match route details array position back to its corresponding tour
             const routeDetailsMap = new Map(
                 tours.map((t, index) => [t.route_id, allRouteDetails[index]])
             );
 
-            // 3. Assemble the state cards instantly using the mapping cache
             const cards = tours.map((tour) => {
                 const details = routeDetailsMap.get(tour.route_id);
 
@@ -238,15 +320,15 @@ const MyTour = () => {
                         name: tour.title || 'Custom Tour',
                         city_name: tour.city_name || '',
                         country: tour.country || '',
-                        dateRange: { startDate: 'Flexible' }
+                        dateRange: {},
                     },
                     places: [],
                     events: [],
                     favoritePlace: null,
-                    favoritePlaces: []
+                    favoritePlaces: [],
+                    matchedTagCount: 0,
                 };
 
-                // Map internal IDs using our flat global memory array cache
                 const tourPlaces = (tour.all_places || [])
                     .map((p) => placesMap.get(p.place_id))
                     .filter((p): p is FirebasePlace => !!p);
@@ -260,11 +342,13 @@ const MyTour = () => {
                 return {
                     ...fallbackRoute,
                     cardId: `saved-${tour.id}`,
-                    isOpen: false, // Keeping it false speeds up initial structural UI rendering layouts
+                    isOpen: false,
                     displayName: tour.title || fallbackRoute.route.name,
                     cityLabel:
                         [tour.city_name, tour.country].filter(Boolean).join(', ') ||
-                        [fallbackRoute.route.city_name, fallbackRoute.route.country].filter(Boolean).join(', '),
+                        [fallbackRoute.route.city_name, fallbackRoute.route.country]
+                            .filter(Boolean)
+                            .join(', '),
                     extraPlaces,
                     removedPlaceIds: [],
                     tourId: tour.id,
@@ -277,17 +361,24 @@ const MyTour = () => {
                 } satisfies RouteCardState;
             });
 
-            setSavedTourCards(cards);
+            const reconciled = cards.map((card) => {
+                if (!card.tourId) return card;
+                const override = localStatusOverrides.current.get(card.tourId);
+                if (!override) return card;
+                if (override.updatedAt <= (card.updatedAt || '')) {
+                    localStatusOverrides.current.delete(card.tourId);
+                    return card;
+                }
+                return { ...card, status: override.status, updatedAt: override.updatedAt };
+            });
+
+            setSavedTourCards(normalizeTourCards(reconciled));
         } catch (error) {
-            console.error("Error inside optimized loadSavedTours runner:", error);
-            // Only clear if absolutely necessary to prevent layout blinking shifts
+            console.error('loadSavedTours failed:', error);
         } finally {
             setInitialLoad(false);
         }
     }, [userId]);
-    useEffect(() => {
-        loadTags();
-    }, [loadTags]);
 
     useEffect(() => {
         loadSavedTours();
@@ -300,253 +391,208 @@ const MyTour = () => {
     );
 
     useEffect(() => {
-        if (!tourUpdate?.status) {
-            return;
+        if (!tourUpdate?.status) return;
+        const updatedAt = tourUpdate.updatedAt || new Date().toISOString();
+        if (tourUpdate.tourId) {
+            localStatusOverrides.current.set(tourUpdate.tourId, {
+                status: tourUpdate.status,
+                updatedAt,
+            });
         }
-
-        setRouteCards((prev) => prev.map((item) => applyTourStatusUpdate(item, tourUpdate)));
-        setSavedTourCards((prev) => prev.map((item) => applyTourStatusUpdate(item, tourUpdate)));
+        setSavedTourCards((prev) =>
+            normalizeTourCards(prev.map((item) => applyTourStatusUpdate(item, tourUpdate)))
+        );
     }, [tourUpdate]);
+
+    const pendingCreate = route.params?.pendingCreate as
+        | {
+              status: 'active' | 'saved';
+              scheduledDate: string | null;
+              createdAt: string;
+              tourName: string;
+              recommendations: RecommendedRoute[];
+          }
+        | undefined;
+
+    useEffect(() => {
+        if (!pendingCreate?.recommendations?.length) return;
+
+        const { status, scheduledDate, createdAt, tourName: name, recommendations } = pendingCreate;
+        const cityLabel =
+            [recommendations[0]?.route?.city_name, recommendations[0]?.route?.country]
+                .filter(Boolean)
+                .join(', ') || '';
+
+        const optimisticCards: RouteCardState[] = recommendations.map((item, idx) => ({
+            ...item,
+            cardId: `optimistic-${createdAt}-${idx}`,
+            isOpen: false,
+            displayName: name || item.route.name,
+            cityLabel,
+            extraPlaces: [],
+            removedPlaceIds: [],
+            tourId: undefined,
+            status,
+            scheduledDate,
+            isSavedTour: true,
+            updatedAt: createdAt,
+            createdAt,
+        }));
+
+        setSavedTourCards((prev) => normalizeTourCards([...optimisticCards, ...prev]));
+        setActiveFilter(status === 'saved' ? 'Saved' : 'Current');
+
+        navigation.setParams({ pendingCreate: undefined } as any);
+
+        const retryTimer = setTimeout(() => {
+            loadSavedTours();
+        }, 1500);
+
+        return () => clearTimeout(retryTimer);
+    }, [pendingCreate, navigation, loadSavedTours]);
 
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
         try {
-            await Promise.all([loadTags(), loadSavedTours()]);
+            await loadSavedTours();
         } finally {
             setRefreshing(false);
         }
-    }, [loadSavedTours, loadTags]);
+    }, [loadSavedTours]);
 
     useEffect(() => {
-        if (!addedRouteId || !addedPlaceId) {
-            return;
-        }
+        if (!addedRouteId || !addedPlaceId) return;
 
         fetchPlacesByIds([addedPlaceId]).then((places) => {
             const addedPlace = places[0];
+            if (!addedPlace) return;
 
-            if (!addedPlace) {
-                return;
-            }
-
-            const applyAdd = (item: RouteCardState): RouteCardState => {
-                if (item.route.id !== addedRouteId) {
-                    return item;
-                }
-
-                if (
-                    item.places.some((place) => place.id === addedPlace.id) ||
-                    item.extraPlaces.some((place) => place.id === addedPlace.id)
-                ) {
-                    showInfo('Location already exists in this route');
-                    return item;
-                }
-
-                return {
-                    ...item,
-                    extraPlaces: [...item.extraPlaces, addedPlace],
-                    isOpen: true,
-                };
-            };
-
-            setRouteCards((prev) => prev.map(applyAdd));
-            setSavedTourCards((prev) => prev.map(applyAdd));
+            setSavedTourCards((prev) =>
+                normalizeTourCards(prev.map((item) => {
+                    if (item.route.id !== addedRouteId) return item;
+                    if (
+                        item.places.some((place) => place.id === addedPlace.id) ||
+                        item.extraPlaces.some((place) => place.id === addedPlace.id)
+                    ) {
+                        showInfo('Location already exists in this route');
+                        return item;
+                    }
+                    return {
+                        ...item,
+                        extraPlaces: [...item.extraPlaces, addedPlace],
+                        isOpen: true,
+                    };
+                }))
+            );
         });
     }, [addedPlaceId, addedRouteId, route.params?.timestamp]);
 
-    useEffect(() => {
-        if (!modals.location) {
-            return;
-        }
-
-        if (locationSearch.trim().length < 2) {
-            setLocationSuggestions([]);
-            setLoadingSuggestions(false);
-            return;
-        }
-
-        setLoadingSuggestions(true);
-
-        const timeout = setTimeout(() => {
-            searchLocationSuggestions(locationSearch)
-                .then((results) => {
-                    setLocationSuggestions(results.map((item) => item.label));
-                })
-                .finally(() => setLoadingSuggestions(false));
-        }, 350);
-
-        return () => clearTimeout(timeout);
-    }, [locationSearch, modals.location]);
-
-    const clearFlow = () => {
-        setSelectedPrefs([]);
-        setTourName('');
-        setLocationSearch('');
-        setSelectedLocation('');
-        setLocationSuggestions([]);
-    };
-
-    const handleOpenNameModal = async () => {
-        setLoadingRoutes(true);
-
-        try {
-            const recommendations = await fetchRecommendedRoutes({
-                locationLabel: selectedLocation || locationSearch,
-                selectedTagIds,
-                userId,
-            });
-
-            setPendingRecommendations(recommendations);
-            const suggestedName = recommendations[0]?.route?.name?.trim();
-            setTourName(suggestedName || '');
-            closeModal('preference');
-            openModal('name');
-        } finally {
-            setLoadingRoutes(false);
-        }
-    };
-
-    const handleNameConfirm = () => {
-        closeModal('name');
-        handleFinalConfirm();
-    };
-
-    const handleFinalConfirm = async (scheduledDate?: string) => {
-        if (pendingRecommendations.length === 0) return;
-        setLoadingRoutes(true);
-
-        try {
-            const now = new Date().toISOString();
-            const cards: RouteCardState[] = await Promise.all(
-                pendingRecommendations.map(async (item) => {
-                    const status = scheduledDate ? 'scheduled' : 'active';
-                    let savedTourId: string | undefined;
-
-                    if (scheduledDate && userId) {
-                        savedTourId = await saveUserTour({
-                            tourId: null,
-                            userId,
-                            userName: authUser?.name || '',
-                            userEmail: authUser?.email || '',
-                            route: item.route,
-                            title: tourName.trim() || item.route.name,
-                            places: item.places,
-                            events: item.events,
-                            placeProgress: {},
-                            currentStopIndex: 0,
-                            isEdited: false,
-                            status: 'scheduled',
-                            scheduledDate,
-                        });
-                    }
-
-                    return {
-                        ...item,
-                        cardId: savedTourId ? `saved-${savedTourId}` : `route-${item.route.id}`,
-                        isOpen: true,
-                        displayName: tourName.trim() || item.route.name,
-                        cityLabel:
-                            [item.route.city_name, item.route.country].filter(Boolean).join(', ') ||
-                            selectedLocation ||
-                            locationSearch,
-                        extraPlaces: [],
-                        removedPlaceIds: [],
-                        status,
-                        scheduledDate: scheduledDate || null,
-                        tourId: savedTourId,
-                        isSavedTour: Boolean(scheduledDate),
-                        updatedAt: now,
-                        createdAt: now,
-                    };
-                })
-            );
-
-            if (scheduledDate) {
-                setSavedTourCards((prev) => [...cards, ...prev]);
-            } else {
-                await scheduleOtherActiveTours({ userId, scheduledDate: now });
-                setSavedTourCards((prev) =>
-                    prev.map((tour) =>
-                        tour.status === 'active'
-                            ? {
-                                ...tour,
-                                status: 'scheduled',
-                                scheduledDate: tour.scheduledDate || now,
-                                updatedAt: now,
-                            }
-                            : tour
-                    )
-                );
-                setRouteCards((prev) => {
-                    const demoted = prev.map((tour) =>
-                        tour.status === 'active'
-                            ? {
-                                ...tour,
-                                status: 'scheduled',
-                                scheduledDate: tour.scheduledDate || now,
-                                updatedAt: now,
-                            }
-                            : tour
-                    );
-                    return [...cards, ...demoted];
-                });
-            }
-            clearFlow();
-            setPendingRecommendations([]);
-        } finally {
-            setLoadingRoutes(false);
-        }
-    };
-
-    const toggleTour = (routeId: string) => {
-        setRouteCards((prev) =>
-            prev.map((routeCard) =>
-                routeCard.cardId === routeId
-                    ? {
-                        ...routeCard,
-                        isOpen: !routeCard.isOpen,
-                    }
-                    : routeCard
-            )
+    const allRoutePlaces = (tour: RouteCardState) => {
+        const favoritePlaces =
+            tour.favoritePlaces.length > 0
+                ? tour.favoritePlaces
+                : tour.favoritePlace
+                    ? [tour.favoritePlace]
+                    : [];
+        const merged = [...tour.places, ...tour.extraPlaces, ...favoritePlaces].filter(
+            (place) => !tour.removedPlaceIds.includes(place.id)
         );
+        const seen = new Set<string>();
+        return merged.filter((place) => {
+            if (seen.has(place.id)) return false;
+            seen.add(place.id);
+            return true;
+        });
+    };
+
+    const toggleTour = (cardId: string) => {
         setSavedTourCards((prev) =>
-            prev.map((routeCard) =>
-                routeCard.cardId === routeId
-                    ? {
-                        ...routeCard,
-                        isOpen: !routeCard.isOpen,
-                    }
-                    : routeCard
+            normalizeTourCards(
+                prev.map((card) =>
+                    card.cardId === cardId ? { ...card, isOpen: !card.isOpen } : card
+                )
             )
         );
     };
+
+    const toggleLocationDetails = useCallback((key: string) => {
+        setExpandedLocations((prev) => ({
+            ...prev,
+            [key]: !prev[key],
+        }));
+    }, []);
 
     const deleteTour = useCallback(async (tour: RouteCardState) => {
-        try {
-            if (tour.tourId) {
-                await deleteUserTour(tour.tourId);
-            }
+        setSavedTourCards((prev) =>
+            normalizeTourCards(prev.filter((card) => card.cardId !== tour.cardId))
+        );
+        showInfo('Tour Removed', 'This tour has been removed.');
 
-            setRouteCards((prev) => prev.filter((routeCard) => routeCard.cardId !== tour.cardId));
-            setSavedTourCards((prev) => prev.filter((routeCard) => routeCard.cardId !== tour.cardId));
-            showInfo('Tour Removed', 'This tour has been removed.');
+        if (!tour.tourId) return;
+        try {
+            await deleteUserTour(tour.tourId);
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : 'Unable to remove this tour right now.';
             showError('Delete Failed', message);
+            loadSavedTours();
         }
-    }, []);
+    }, [loadSavedTours]);
 
     const handleStartTour = async (tour: RouteCardState) => {
-        let savedTourId = tour.tourId || null;
+        const now = new Date().toISOString();
 
-        // For non-completed tours, immediately persist as active before navigating
-        // so the user lands on MyTourStart in a started state.
-        if (userId && tour.status !== 'completed') {
+        if (tour.status !== 'completed' && tour.status !== 'active') {
+            const conflicting = savedTourCards.find(
+                (other) =>
+                    other.cardId !== tour.cardId &&
+                    (other.status === 'active' || other.status === 'paused')
+            );
+            if (conflicting) {
+                Alert.alert(
+                    'Another Tour In Progress',
+                    `You already have a tour in progress (“${conflicting.displayName}”). End it before starting a new one.`,
+                    [{ text: 'OK' }]
+                );
+                return;
+            }
+        }
+
+        if (tour.status !== 'completed') {
+            if (tour.tourId) {
+                localStatusOverrides.current.set(tour.tourId, { status: 'active', updatedAt: now });
+            }
+            setSavedTourCards((prev) =>
+                prev.map((item) =>
+                    item.cardId === tour.cardId
+                        ? { ...item, status: 'active', updatedAt: now, scheduledDate: null }
+                        : item
+                )
+            );
+            setActiveFilter('Current');
+        }
+
+        navigation.navigate('MyTourStart', {
+            routeId: tour.route.id,
+            routeName: tour.displayName,
+            tourName: tour.displayName,
+            cityLabel: tour.cityLabel,
+            extraPlaceIds: tour.extraPlaces.map((place) => place.id),
+            removedPlaceIds: tour.removedPlaceIds,
+            tourId: tour.tourId || undefined,
+            autoStart: tour.status !== 'completed',
+            isEdited:
+                Boolean(tour.isSavedTour) ||
+                tour.extraPlaces.length > 0 ||
+                tour.removedPlaceIds.length > 0,
+        });
+
+        if (!userId || tour.status === 'completed') return;
+
+        (async () => {
             try {
-                const now = new Date().toISOString();
-                const existingSavedTour = savedTourId
-                    ? await fetchUserTourById(savedTourId)
+                const existingSavedTour = tour.tourId
+                    ? await fetchUserTourById(tour.tourId)
                     : null;
                 const allPlaces = allRoutePlaces(tour);
                 let placesToPersist = allPlaces;
@@ -567,7 +613,7 @@ const MyTour = () => {
                         orderedPersistedPlaces.length > 0 ? orderedPersistedPlaces : allPlaces;
                 }
 
-                savedTourId = await saveUserTour({
+                await saveUserTour({
                     tourId: tour.tourId || null,
                     userId,
                     userName: authUser?.name || '',
@@ -578,7 +624,8 @@ const MyTour = () => {
                     events: tour.events,
                     placeProgress,
                     currentStopIndex: existingSavedTour?.currentStopIndex || 0,
-                    isEdited: existingSavedTour?.isEdited ||
+                    isEdited:
+                        existingSavedTour?.isEdited ||
                         Boolean(tour.isSavedTour) ||
                         tour.extraPlaces.length > 0 ||
                         tour.removedPlaceIds.length > 0,
@@ -587,67 +634,93 @@ const MyTour = () => {
                     completedAt: null,
                     scheduledDate: null,
                 });
-
-                setSavedTourCards((prev) =>
-                    prev.map((item) =>
-                        item.tourId === savedTourId
-                            ? {
-                                ...item,
-                                status: 'active',
-                                updatedAt: now,
-                                scheduledDate: null,
-                            }
-                            : item
-                    )
-                );
-                setRouteCards((prev) =>
-                    prev
-                        .filter((routeCard) => routeCard.cardId !== tour.cardId)
-                        .map((routeCard) =>
-                            routeCard.status === 'active'
-                                ? {
-                                    ...routeCard,
-                                    status: 'scheduled',
-                                    scheduledDate: routeCard.scheduledDate || now,
-                                    updatedAt: now,
-                                }
-                                : routeCard
-                        )
-                );
             } catch (error) {
                 const message =
                     error instanceof Error ? error.message : 'Unable to start this tour right now.';
                 showError('Start Tour Failed', message);
-                return;
             }
-        }
+        })();
+    };
 
-        navigation.navigate('MyTourStart', {
-            routeId: tour.route.id,
-            routeName: tour.displayName,
-            tourName: tour.displayName,
-            cityLabel: tour.cityLabel,
-            selectedTagIds,
-            extraPlaceIds: tour.extraPlaces.map((place) => place.id),
-            removedPlaceIds: tour.removedPlaceIds,
-            tourId: savedTourId || undefined,
-            autoStart: tour.status !== 'completed',
-            isEdited:
-                Boolean(tour.isSavedTour) ||
-                tour.extraPlaces.length > 0 ||
-                tour.removedPlaceIds.length > 0,
-        });
+    const handleEndTour = (tour: RouteCardState) => {
+        Alert.alert(
+            'End Tour?',
+            "You won't be able to resume this tour. You'll keep the points for the stops you've already visited.",
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'End Tour',
+                    style: 'destructive',
+                    onPress: () => {
+                        const now = new Date().toISOString();
+                        if (tour.tourId) {
+                            localStatusOverrides.current.set(tour.tourId, {
+                                status: 'completed',
+                                updatedAt: now,
+                            });
+                        }
+                        setSavedTourCards((prev) =>
+                            prev.map((item) =>
+                                item.cardId === tour.cardId
+                                    ? { ...item, status: 'completed', updatedAt: now }
+                                    : item
+                            )
+                        );
+                        setActiveFilter('Completed');
+
+                        if (!userId || !tour.tourId) return;
+
+                        (async () => {
+                            try {
+                                const existingSavedTour = await fetchUserTourById(tour.tourId!);
+                                if (!existingSavedTour) return;
+                                const placeProgress = buildPlaceProgressFromSavedTour(existingSavedTour);
+                                const persistedPlaces = await fetchPlacesByIds(
+                                    existingSavedTour.all_places.map((item) => item.place_id)
+                                );
+                                const persistedPlaceMap = new Map(
+                                    persistedPlaces.map((place) => [place.id, place])
+                                );
+                                const orderedPlaces = existingSavedTour.all_places
+                                    .map((item) => persistedPlaceMap.get(item.place_id))
+                                    .filter((p): p is FirebasePlace => Boolean(p));
+
+                                await saveUserTour({
+                                    tourId: tour.tourId,
+                                    userId,
+                                    userName: authUser?.name || '',
+                                    userEmail: authUser?.email || '',
+                                    route: tour.route,
+                                    title: tour.displayName,
+                                    places: orderedPlaces.length > 0 ? orderedPlaces : allRoutePlaces(tour),
+                                    events: tour.events,
+                                    placeProgress,
+                                    currentStopIndex: existingSavedTour.currentStopIndex,
+                                    isEdited: existingSavedTour.isEdited,
+                                    status: 'completed',
+                                    startedAt: existingSavedTour.startedAt,
+                                    completedAt: now,
+                                    scheduledDate: null,
+                                });
+                            } catch (error) {
+                                const message =
+                                    error instanceof Error
+                                        ? error.message
+                                        : 'Unable to end this tour right now.';
+                                showError('End Tour Failed', message);
+                            }
+                        })();
+                    },
+                },
+            ]
+        );
     };
 
     const handleToggleFavorite = async (tour: RouteCardState) => {
         const favoriteId = tour.tourId || tour.route.id;
         if (isFavorite(favoriteId)) {
             await removeFromFavorites(favoriteId, 'Route');
-            showInfo(
-                'Removed from Favorites',
-                `${tour.displayName} removed successfully`
-            );
-
+            showInfo('Removed from Favorites', `${tour.displayName} removed successfully`);
             return;
         }
 
@@ -678,10 +751,7 @@ const MyTour = () => {
             city_name: tour.route.city_name,
             country: tour.route.country,
         });
-        showSuccess(
-            'Added to Favorites',
-            `${tour.displayName} added successfully`
-        );
+        showSuccess('Added to Favorites', `${tour.displayName} added successfully`);
     };
 
     const allCards = useMemo(() => {
@@ -693,152 +763,60 @@ const MyTour = () => {
             return 4;
         };
 
-        const latestSavedByKey = new Map<string, string>();
-        savedTourCards.forEach((tour) => {
-            latestSavedByKey.set(
-                buildTourIdentityKey(tour),
-                tour.updatedAt || tour.createdAt || ''
-            );
-        });
-
-        const dedupedRouteCards = routeCards.filter((tour) => {
-            const savedTime = latestSavedByKey.get(buildTourIdentityKey(tour));
-            const localTime = tour.updatedAt || tour.createdAt || '';
-            return !savedTime || savedTime < localTime;
-        });
-
-    const merged = [...savedTourCards, ...dedupedRouteCards];
-    const seenCardIds = new Set<string>();
-    const uniqueMerged = merged.filter((card) => {
-      if (seenCardIds.has(card.cardId)) return false;
-      seenCardIds.add(card.cardId);
-      return true;
-    });
-
-    return uniqueMerged.sort((a, b) => {
-      const statusDiff = statusPriority(a.status) - statusPriority(b.status);
-      if (statusDiff !== 0) {
-        return statusDiff;
-      }
-
+        return [...savedTourCards].sort((a, b) => {
+            const statusDiff = statusPriority(a.status) - statusPriority(b.status);
+            if (statusDiff !== 0) return statusDiff;
             const aTime = a.updatedAt || a.createdAt || '';
             const bTime = b.updatedAt || b.createdAt || '';
             return bTime.localeCompare(aTime);
         });
-    }, [routeCards, savedTourCards]);
+    }, [savedTourCards]);
 
     const visibleCards = useMemo(() => {
         switch (activeFilter) {
             case 'Current':
-                return allCards.filter((tour) => tour.status === 'active');
-            case 'Paused':
-                return allCards.filter((tour) => tour.status === 'paused');
-            case 'Scheduled':
-                return allCards.filter((tour) => tour.status === 'scheduled');
-            case 'Favourite':
-                return allCards.filter((tour) => isFavorite(tour.tourId || tour.route.id));
+                return allCards.filter(
+                    (tour) => tour.status === 'active' || tour.status === 'paused'
+                );
+            case 'Saved':
+                return allCards.filter((tour) => tour.status === 'saved');
             case 'Completed':
                 return allCards.filter((tour) => tour.status === 'completed');
             default:
-                return allCards;
+                return allCards.filter((tour) => tour.status !== 'scheduled');
         }
-    }, [activeFilter, allCards, isFavorite]);
+    }, [activeFilter, allCards]);
 
-    const allRoutePlaces = (tour: RouteCardState) => {
-        const favoritePlaces =
-            tour.favoritePlaces.length > 0
-                ? tour.favoritePlaces
-                : tour.favoritePlace
-                    ? [tour.favoritePlace]
-                    : [];
-        const merged = [...tour.places, ...tour.extraPlaces, ...favoritePlaces].filter(
-            (place) => !tour.removedPlaceIds.includes(place.id)
-        );
-        const seen = new Set<string>();
-        return merged.filter((place) => {
-            if (seen.has(place.id)) {
-                return false;
-            }
-            seen.add(place.id);
-            return true;
-        });
-    };
-    const [isRefreshEnabled, setIsRefreshEnabled] = useState(true);
-    const handleScrollOffsetDetect = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-        const { contentOffset } = event.nativeEvent;
-        // Only enable pulling gestures when user explicitly drags significantly past the zero anchor limit
-        if (contentOffset.y <= -45) {
-            setIsRefreshEnabled(true);
-        } else if (contentOffset.y > 0) {
-            setIsRefreshEnabled(false);
-        }
-    };
-
-    const renderEmptyState = () => (
-        <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.emptyScrollContent}
-            refreshControl={
-                // <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={COLORS.BUTTON_COLOR} />
-                <RefreshControl
-                    refreshing={refreshing}
-                    onRefresh={handleRefresh}
-                    tintColor={COLORS.BUTTON_COLOR}
-                    enabled={isRefreshEnabled}
-                />
-            }
-        >
-            <View style={[styles.content, { paddingBottom: bottomHeight + 40 }]}>
-                <MapIconMain width={190} height={121.32} />
-
-                <Text style={styles.noTours}>No Tours Yet</Text>
-
-                <Text style={styles.desc}>
-                    You haven&apos;t planned any adventures. Create your first tour to start
-                    exploring the city.
-                </Text>
-
-                <TouchableOpacity style={styles.btnContainer} onPress={() => openModal('location')}>
-                    <Text style={styles.btn}>Create A Tour</Text>
-                </TouchableOpacity>
-            </View>
-        </ScrollView>
-    );
-
-    const renderFilteredEmptyState = () => {
-        const messageMap: Record<TourFilter, string> = {
-            All: 'No tours found right now.',
-            Current: 'No active tours right now.',
-            Paused: 'No paused tours right now.',
-            Scheduled: 'No scheduled tours yet.',
-            Favourite: 'No favourite tours yet.',
-            Completed: 'No completed tours yet.',
-        };
-
-        return (
-            <View style={styles.filteredEmptyWrap}>
-                <Text style={styles.filteredEmptyTitle}>{messageMap[activeFilter]}</Text>
-            </View>
-        );
-    };
+    const goToCreateTour = () => navigation.navigate('CreateTour');
 
     const getTourStatusBadge = (tour: RouteCardState): { label: string; color: string } | null => {
         if (tour.status === 'paused') return { label: 'Paused', color: '#F59E0B' };
-        if (tour.status === 'scheduled') {
-            const dateStr = tour.scheduledDate
-                ? new Date(tour.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                : 'Scheduled';
-            return { label: dateStr, color: COLORS.BUTTON_COLOR };
-        }
-        if (tour.status === 'completed') return { label: 'Completed', color: COLORS.TEXT_GREEN };
+        if (tour.status === 'saved') return { label: 'Saved', color: COLORS.BUTTON_COLOR };
+        if (tour.status === 'active') return { label: 'Active', color: COLORS.TEXT_GREEN };
+        if (tour.status === 'completed')
+            return { label: 'Completed', color: COLORS.TEXT_GREEN };
         return null;
     };
 
     const getStartBtnLabel = (tour: RouteCardState): string => {
         if (tour.status === 'paused') return 'Resume Tour';
         if (tour.status === 'completed') return 'View Tour';
-        if (tour.status === 'scheduled') return 'Start Tour';
         return 'Start Tour';
+    };
+
+    const renderFilteredEmptyState = () => {
+        const messageMap: Record<TourFilter, string> = {
+            All: 'No tours available yet. Create a new tour to get started.',
+            Current: 'No active tours right now.',
+            Saved: 'No saved tours yet.',
+            Completed: 'No completed tours yet.',
+        };
+        return (
+            <View style={styles.filteredEmptyWrap}>
+                <MapIconMain width={150} height={96} />
+                <Text style={styles.filteredEmptyTitle}>{messageMap[activeFilter]}</Text>
+            </View>
+        );
     };
 
     const renderTourCard = (tour: RouteCardState) => {
@@ -851,10 +829,7 @@ const MyTour = () => {
         const badge = getTourStatusBadge(tour);
 
         return (
-            <View
-                key={tour.cardId}
-                style={styles.tourCard}
-            >
+            <View key={tour.cardId} style={styles.tourCard}>
                 <View style={styles.cardTop}>
                     <Image source={{ uri: previewImage }} style={styles.imagePlaceholder} />
                     <View style={styles.cardInfo}>
@@ -862,18 +837,22 @@ const MyTour = () => {
                             <Text style={styles.tourTitle}>{tour.displayName}</Text>
 
                             <View style={styles.iconRow}>
-                                <TouchableOpacity style={styles.topIcons} onPress={() => deleteTour(tour)}>
+                                <TouchableOpacity
+                                    style={styles.topIcons}
+                                    onPress={() => deleteTour(tour)}
+                                >
                                     <IconDelete width={15} height={15} />
                                 </TouchableOpacity>
 
-                                <TouchableOpacity style={styles.topIcons} onPress={() => toggleTour(tour.cardId)}>
-                                    {
-                                        tour.isOpen ?
-                                            <IconUp width={16} height={16} />
-                                            :
-                                            <DownArrow width={16} height={16} />
-
-                                    }
+                                <TouchableOpacity
+                                    style={styles.topIcons}
+                                    onPress={() => toggleTour(tour.cardId)}
+                                >
+                                    {tour.isOpen ? (
+                                        <IconUp width={16} height={16} />
+                                    ) : (
+                                        <DownArrow width={16} height={16} />
+                                    )}
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -881,43 +860,66 @@ const MyTour = () => {
                         <View style={styles.iconInfoRow}>
                             <View style={styles.iconTextGroup}>
                                 <TourLocationIcon width={20} height={20} />
-                                <Text style={styles.textInfo}>Visit {locations.length} Locations</Text>
-                            </View>
-
-                            <View style={styles.iconTextGroup}>
-                                <TourDateIcon width={20} height={20} />
                                 <Text style={styles.textInfo}>
-                                    {tour.route.dateRange?.startDate || 'Flexible'}
+                                    Visit {locations.length} Locations
                                 </Text>
                             </View>
+
+                            {tour.route.dateRange?.startDate ? (
+                                <View style={styles.iconTextGroup}>
+                                    <TourDateIcon width={20} height={20} />
+                                    <Text style={styles.textInfo}>
+                                        {tour.route.dateRange.startDate}
+                                    </Text>
+                                </View>
+                            ) : null}
                         </View>
 
                         <View style={styles.iconInfoRow}>
                             <View style={styles.iconTextGroup}>
                                 <EarnedPointIcon width={20} height={20} />
                                 <Text style={styles.textInfo}>
-                                    Earn <Text style={styles.textGreen}>+{locations.length * 15}</Text> Points
+                                    Earn{' '}
+                                    <Text style={styles.textGreen}>+{locations.length * 15}</Text>{' '}
+                                    Points
                                 </Text>
                             </View>
                         </View>
 
                         <View style={styles.cardActionRow}>
+                            <View style={styles.cardMetaActions}>
+                                <TouchableOpacity
+                                    style={styles.cardFavoriteBtn}
+                                    onPress={() => handleToggleFavorite(tour)}
+                                >
+                                    {isFavorite(tour.tourId || tour.route.id) ? (
+                                        <RedHeartIcon width={14} height={12} />
+                                    ) : (
+                                        <HeartIcon width={14} height={12} />
+                                    )}
+                                </TouchableOpacity>
+                                {badge ? (
+                                    <View
+                                        style={[
+                                            styles.statusBadge,
+                                            {
+                                                backgroundColor: badge.color + '20',
+                                                borderColor: badge.color,
+                                            },
+                                        ]}
+                                    >
+                                        <Text style={[styles.statusBadgeText, { color: badge.color }]}>
+                                            {badge.label}
+                                        </Text>
+                                    </View>
+                                ) : null}
+                            </View>
                             <TouchableOpacity
-                                style={styles.cardFavoriteBtn}
-                                onPress={() => handleToggleFavorite(tour)}
+                                style={styles.cardStartBtn}
+                                onPress={() => handleStartTour(tour)}
                             >
-                                {isFavorite(tour.tourId || tour.route.id) ? (
-                                    <RedHeartIcon width={14} height={12} />
-                                ) : (
-                                    <HeartIcon width={14} height={12} />
-                                )}
+                                <Text style={styles.cardStartBtnText}>{getStartBtnLabel(tour)}</Text>
                             </TouchableOpacity>
-                            {badge ? (
-                                <View style={[styles.statusBadge, { backgroundColor: badge.color + '20', borderColor: badge.color }]}>
-                                    <Text style={[styles.statusBadgeText, { color: badge.color }]}>{badge.label}</Text>
-                                </View>
-                            ) : null}
-
                         </View>
                     </View>
                 </View>
@@ -935,13 +937,6 @@ const MyTour = () => {
                                             routeId: tour.route.id,
                                             cityLabel: tour.cityLabel,
                                             fromScreen: 'MyTour',
-                                            routeName: tour.displayName,
-                                            tourName: tour.displayName,
-                                            extraPlaceIds: tour.extraPlaces.map((place) => place.id),
-                                            removedPlaceIds: tour.removedPlaceIds,
-                                            isEdited:
-                                                tour.extraPlaces.length > 0 ||
-                                                tour.removedPlaceIds.length > 0,
                                         })
                                     }
                                 >
@@ -951,14 +946,49 @@ const MyTour = () => {
                             ) : null}
                         </View>
 
-                        {locations.map((loc) => (
-                            <View key={loc.id} style={styles.locationRow}>
-                                <View style={styles.locationLeft}>
-                                    <CreatedTourLocationIcon width={20} height={20} />
-                                    <Text style={styles.locationText}>{loc.name}</Text>
+                        {locations.map((loc) => {
+                            const detailKey = `${tour.cardId}:${loc.id}`;
+                            const isExpanded = Boolean(expandedLocations[detailKey]);
+                            const hasDetails = Boolean(loc.address || loc.description);
+
+                            return (
+                                <View key={loc.id} style={styles.locationCard}>
+                                    <View style={styles.locationRow}>
+                                        <View style={styles.locationLeft}>
+                                            <CreatedTourLocationIcon width={20} height={20} />
+                                            <Text style={styles.locationText}>{loc.name}</Text>
+                                        </View>
+                                        {hasDetails ? (
+                                            <TouchableOpacity
+                                                hitSlop={8}
+                                                style={styles.locationToggle}
+                                                onPress={() => toggleLocationDetails(detailKey)}
+                                            >
+                                                {isExpanded ? (
+                                                    <IconUp width={16} height={16} />
+                                                ) : (
+                                                    <DownArrow width={16} height={16} />
+                                                )}
+                                            </TouchableOpacity>
+                                        ) : null}
+                                    </View>
+                                    {isExpanded ? (
+                                        <View style={styles.locationDetails}>
+                                            {loc.address ? (
+                                                <Text style={styles.locationMetaText}>
+                                                    {loc.address}
+                                                </Text>
+                                            ) : null}
+                                            {loc.description ? (
+                                                <Text style={styles.locationDescription}>
+                                                    {loc.description}
+                                                </Text>
+                                            ) : null}
+                                        </View>
+                                    ) : null}
                                 </View>
-                            </View>
-                        ))}
+                            );
+                        })}
 
                         {tour.events.length > 0 ? (
                             <>
@@ -973,38 +1003,45 @@ const MyTour = () => {
                                 ))}
                             </>
                         ) : null}
-                        <TouchableOpacity
-                            style={styles.cardStartBtn}
-                            onPress={() => handleStartTour(tour)}
-                        >
-                            <Text style={styles.cardStartBtnText}>
-                                {getStartBtnLabel(tour)}
-                            </Text>
-                        </TouchableOpacity>
+                        {tour.status === 'active' || tour.status === 'paused' ? (
+                            <View style={styles.actionRow}>
+                                <TouchableOpacity
+                                    style={styles.cardEndBtn}
+                                    onPress={() => handleEndTour(tour)}
+                                >
+                                    <Text style={styles.cardEndBtnText}>End Tour</Text>
+                                </TouchableOpacity>
+                            </View>
+                        ) : null}
                     </View>
                 )}
             </View>
         );
     };
 
+    const footerPadding = Math.max(insets.bottom, 10);
+
     return (
         <View style={styles.container}>
             <TopHeader title="My Tours" />
 
-            {loadingRoutes || initialLoad ? (
+            {initialLoad ? (
                 <View style={styles.loaderWrap}>
                     <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
                 </View>
             ) : allCards.length === 0 ? (
-                renderEmptyState()
+                <TourIntro
+                    onCreate={() => openModal('location')}
+                    refreshing={refreshing}
+                    onRefresh={handleRefresh}
+                    bottomInset={bottomHeight + 40}
+                />
             ) : (
                 <View style={styles.mainContent}>
                     <ScrollView
+                        style={styles.listScroll}
                         showsVerticalScrollIndicator={false}
-                        contentContainerStyle={[
-                            styles.scrollGrow,
-                            { paddingBottom: bottomHeight - 55 },
-                        ]}
+                        contentContainerStyle={styles.scrollGrow}
                         refreshControl={
                             <RefreshControl
                                 refreshing={refreshing}
@@ -1018,7 +1055,7 @@ const MyTour = () => {
                             showsHorizontalScrollIndicator={false}
                             contentContainerStyle={styles.filterRow}
                         >
-                            {(['All', 'Current', 'Paused', 'Scheduled', 'Favourite', 'Completed'] as TourFilter[]).map((item) => (
+                            {TOUR_FILTERS.map((item) => (
                                 <TouchableOpacity
                                     key={item}
                                     style={[
@@ -1046,11 +1083,17 @@ const MyTour = () => {
                         )}
                     </ScrollView>
 
-                    <View
-                        style={styles.bottomBtn}
+                    <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={goToCreateTour}
+                        style={[
+                            styles.fab,
+                            { bottom:  footerPadding },
+                        ]}
                     >
-                        <CustomButton title="Create New Tour" onPress={() => openModal('location')} />
-                    </View>
+                        <IconPlus width={12} height={12} />
+                        <Text style={styles.fabText}>Create Tour</Text>
+                    </TouchableOpacity>
                 </View>
             )}
 
@@ -1111,60 +1154,39 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    emptyScrollContent: {
-        flexGrow: 1,
-    },
     mainContent: {
         flex: 1,
     },
-    content: {
+    listScroll: {
         flex: 1,
-        marginTop: 149,
-        justifyContent: 'center',
-        alignItems: 'center',
     },
-    noTours: {
-        marginTop: 30,
-        fontSize: FONT_SIZE.LARGE_TEXT,
-        fontFamily: FONT_FAMILY.Poppins_SemiBold,
-        color: COLORS.TEXT_PRIMARY,
-    },
-    desc: {
-        marginTop: 14,
-        width: 327,
-        textAlign: 'center',
-        fontSize: FONT_SIZE.TEXT,
-        fontFamily: FONT_FAMILY.InterTight_Regular,
-        color: COLORS.TEXT_SECONDARY,
-    },
-    btnContainer: {
-        marginTop: 28,
-        paddingHorizontal: 52,
-        height: 50,
-        borderRadius: 40,
-        backgroundColor: COLORS.BUTTON_COLOR,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    btn: {
-        color: COLORS.WHITE,
-        fontSize: FONT_SIZE.TEXT,
-        fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    scrollGrow: {
+        paddingBottom: 12,
     },
     tourList: {
         paddingHorizontal: 23,
         paddingTop: 8,
     },
-    bottomBtn: {
-        width: '100%',
-        paddingHorizontal: 23,
+    fab: {
         position: 'absolute',
-        bottom: 10,
-        left: 0,
-        right: 0,
+        right: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 16,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: COLORS.BUTTON_COLOR,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.18,
+        shadowRadius: 6,
+        elevation: 5,
     },
-    scrollGrow: {
-        paddingBottom: 12,
+    fabText: {
+        color: COLORS.WHITE,
+        fontSize: FONT_SIZE.SMALL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_SemiBold,
     },
     filteredEmptyWrap: {
         flex: 1,
@@ -1176,6 +1198,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     filteredEmptyTitle: {
+        marginTop: 18,
         fontSize: FONT_SIZE.LARGE_TEXT,
         fontFamily: FONT_FAMILY.InterTight_Medium,
         color: COLORS.TEXT_SECONDARY,
@@ -1226,7 +1249,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         padding: 16,
         alignItems: 'center',
-        justifyContent: 'space-between'
+        justifyContent: 'space-between',
     },
     imagePlaceholder: {
         width: 70,
@@ -1283,11 +1306,16 @@ const styles = StyleSheet.create({
         color: COLORS.TEXT_GREEN,
     },
     cardActionRow: {
-        // marginTop: 8,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 10,
+    },
+    cardMetaActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        flexShrink: 1,
     },
     cardFavoriteBtn: {
         width: 34,
@@ -1299,6 +1327,12 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         backgroundColor: COLORS.WHITE,
     },
+    actionRow: {
+        marginTop: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+    },
     cardStartBtn: {
         height: 36,
         minWidth: 112,
@@ -1307,10 +1341,24 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.BUTTON_COLOR,
         alignItems: 'center',
         justifyContent: 'center',
-        marginTop: 10
     },
     cardStartBtnText: {
         color: COLORS.WHITE,
+        fontSize: FONT_SIZE.TEXT,
+        fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    },
+    cardEndBtn: {
+        height: 36,
+        paddingHorizontal: 16,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: COLORS.LOGOUT_TEXT,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: COLORS.LOUGOUT_COLOR,
+    },
+    cardEndBtnText: {
+        color: COLORS.LOGOUT_TEXT,
         fontSize: FONT_SIZE.TEXT,
         fontFamily: FONT_FAMILY.InterTight_SemiBold,
     },
@@ -1343,21 +1391,48 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.InterTight_Medium,
         color: COLORS.BUTTON_COLOR,
     },
-    locationRow: {
+    locationCard: {
         paddingVertical: 6,
+    },
+    locationRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
     },
     locationLeft: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 9,
     },
     locationText: {
+        flex: 1,
         fontSize: FONT_SIZE.TEXT,
         fontFamily: FONT_FAMILY.InterTight_Regular,
         color: COLORS.TEXT_PRIMARY,
+    },
+    locationToggle: {
+        width: 20,
+        height: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    locationDetails: {
+        marginTop: 8,
+        marginLeft: 29,
+        gap: 4,
+    },
+    locationMetaText: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Medium,
+        color: COLORS.TEXT_PRIMARY,
+        lineHeight: 18,
+    },
+    locationDescription: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+        lineHeight: 18,
     },
     eventsTitle: {
         marginTop: 10,

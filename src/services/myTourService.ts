@@ -108,7 +108,7 @@ export type SavedTour = {
   route_id: string;
   city_name?: string;
   country?: string;
-  status: 'active' | 'completed' | 'paused' | 'scheduled';
+  status: 'active' | 'completed' | 'paused' | 'scheduled' | 'saved';
   scheduledDate?: string | null;
   isEdited: boolean;
   currentStopIndex: number;
@@ -188,7 +188,11 @@ const toArray = <T,>(value: unknown): T[] => {
 };
 
 const normalizeText = (value?: string | null) =>
-  (value || '').trim().toLowerCase();
+  (value || '')
+    .toLowerCase()
+    .replace(/[,\-_/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const normalizeTagId = (value?: string | null) => (value || '').trim();
 
@@ -299,8 +303,53 @@ const locationMatches = (
     return true;
   }
 
-  const hay = [city, country].filter(Boolean).join(' ').toLowerCase();
+  const hay = normalizeText([city, country].filter(Boolean).join(' '));
   return hay.includes(normalizedLocation);
+};
+
+const routeMatchesLocation = (
+  locationLabel: string,
+  route: FirebaseRoute,
+  places: FirebasePlace[],
+  events: FirebaseEvent[]
+) => {
+  const normalizedLocation = normalizeText(locationLabel);
+  if (!normalizedLocation) {
+    return true;
+  }
+
+  if (locationMatches(locationLabel, route.city_name, route.country)) {
+    return true;
+  }
+
+  const cityOnly = normalizeText(locationLabel.split(',')[0]);
+  if (cityOnly) {
+    if (normalizeText(route.city_name) === cityOnly) {
+      return true;
+    }
+
+    if (
+      places.some((place) => normalizeText(place.city_name) === cityOnly) ||
+      events.some((event) => normalizeText(event.city_name) === cityOnly)
+    ) {
+      return true;
+    }
+  }
+
+  const routeHay = normalizeText(
+    [
+      route.city_name,
+      route.country,
+      ...places.map((place) => place.city_name),
+      ...places.map((place) => place.country),
+      ...events.map((event) => event.city_name),
+      ...events.map((event) => event.country),
+    ]
+      .filter(Boolean)
+      .join(' ')
+  );
+
+  return routeHay.includes(normalizedLocation);
 };
 
 const extractRouteTagIds = (
@@ -565,18 +614,6 @@ export const fetchRecommendedRoutes = async ({
         selectedTagIdSet.has(normalizeTagId(tagId))
       ).length;
 
-      const locationHay = [
-        route.city_name,
-        route.country,
-        ...places.map((place) => place.city_name),
-        ...places.map((place) => place.country),
-        ...events.map((event) => event.city_name),
-        ...events.map((event) => event.country),
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-
       return {
         route,
         places,
@@ -584,32 +621,44 @@ export const fetchRecommendedRoutes = async ({
         favoritePlace: favoritePlaces[0] || fallbackPlace,
         favoritePlaces,
         matchedTagCount,
-        locationMatched:
-          !normalizeText(locationLabel) ||
-          locationHay.includes(normalizeText(locationLabel)),
+        locationMatched: routeMatchesLocation(locationLabel, route, places, events),
       };
-    })
-    .filter(
-      (item) => item.matchedTagCount > 0 || normalizedSelectedTagIds.length === 0
-    );
+    });
 
-  const locationMatchedRoutes = scoredRoutes.filter((item) => item.locationMatched);
-  const pool =
-    locationMatchedRoutes.length > 0 ? locationMatchedRoutes : scoredRoutes;
+  const cityMatchedRoutes = scoredRoutes.filter((item) => item.locationMatched);
 
-  const sorted = pool
+  if (cityMatchedRoutes.length === 0) {
+    return [];
+  }
+
+  const cityPool =
+    normalizedSelectedTagIds.length > 0
+      ? cityMatchedRoutes.filter((item) => item.matchedTagCount > 0)
+      : cityMatchedRoutes;
+
+  if (cityPool.length === 0) {
+    return [];
+  }
+
+  const maxMatchedTags = cityPool.reduce(
+    (max, item) => Math.max(max, item.matchedTagCount),
+    0
+  );
+
+  const bestTagMatchedRoutes = cityPool.filter(
+    (item) => item.matchedTagCount === maxMatchedTags
+  );
+
+  const sorted = bestTagMatchedRoutes
     .sort((a, b) => {
-      if (b.matchedTagCount !== a.matchedTagCount) {
-        return b.matchedTagCount - a.matchedTagCount;
+      const stopDiff = (b.route.totalStops || b.places.length || 0) - (a.route.totalStops || a.places.length || 0);
+      if (stopDiff !== 0) {
+        return stopDiff;
       }
 
-      return (b.route.totalStops || 0) - (a.route.totalStops || 0);
+      return b.places.length - a.places.length;
     })
     .map(({ locationMatched: _locationMatched, ...item }) => item);
-
-  if (normalizedSelectedTagIds.length > 0 && sorted.length > 0) {
-    return [sorted[0]];
-  }
 
   return sorted.slice(0, 1);
 };
@@ -762,7 +811,7 @@ export const saveUserTour = async ({
   >;
   currentStopIndex: number;
   isEdited: boolean;
-  status: 'active' | 'completed' | 'paused' | 'scheduled';
+  status: 'active' | 'completed' | 'paused' | 'scheduled' | 'saved';
   startedAt?: string;
   completedAt?: string | null;
   scheduledDate?: string | null;
@@ -997,7 +1046,7 @@ export const fetchRewardsSummary = async (
       totalLocations: tour.all_places.length,
       places,
     };
-  });
+  }).filter((tour) => tour.points > 0 || tour.places.some((place) => place.visited));
 
   return {
     totalPoints: rewardTours.reduce((sum, tour) => sum + tour.points, 0),

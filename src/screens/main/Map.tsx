@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import {
   Keyboard,
   Modal,
@@ -30,12 +31,6 @@ const INITIAL_CAMERA_CENTER: [number, number] = [-18, 18];
 const INITIAL_CAMERA_ZOOM = 0.8;
 const SEARCH_DEBOUNCE_MS = 350;
 
-type QuickCity = {
-  id: string;
-  label: string;
-  coordinates: [number, number];
-};
-
 type EventGroup = {
   id: string;
   coordinate: [number, number];
@@ -46,34 +41,6 @@ type DateField = 'start' | 'end';
 
 const isPodcastEvent = (event: FirebaseEvent) =>
   (event.event_type || '').toLowerCase().trim() === 'podcast_event';
-
-const QUICK_CITIES: QuickCity[] = [
-  {
-    id: 'new-york',
-    label: 'New York, USA',
-    coordinates: [-74.006, 40.7128],
-  },
-  {
-    id: 'los-angeles',
-    label: 'Los Angeles, USA',
-    coordinates: [-118.2437, 34.0522],
-  },
-  {
-    id: 'london',
-    label: 'London, UK',
-    coordinates: [-0.1276, 51.5072],
-  },
-  {
-    id: 'dubai',
-    label: 'Dubai, UAE',
-    coordinates: [55.2708, 25.2048],
-  },
-  {
-    id: 'toronto',
-    label: 'Toronto, Canada',
-    coordinates: [-79.3832, 43.6532],
-  },
-];
 
 const PRIDE_BANDS: { color: string; minLon: number; maxLon: number }[] = [
 { color: '#FF5C0A', minLon: -180, maxLon: -120 },
@@ -270,6 +237,7 @@ const groupEventsByCoordinate = (events: FirebaseEvent[]): EventGroup[] => {
 };
 
 const Map = () => {
+  const bottomTabBarHeight = useBottomTabBarHeight();
   const cameraRef = useRef<Mapbox.Camera>(null);
   const [mapReady, setMapReady] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(INITIAL_CAMERA_ZOOM);
@@ -443,26 +411,6 @@ const Map = () => {
     setCalendarVisible(false);
   }, [activeDateField]);
 
-  const handleQuickCityPress = useCallback(
-    (city: QuickCity) => {
-      const nextSelection: LocationSuggestion = {
-        id: city.id,
-        label: city.label,
-        city: city.label.split(',')[0]?.trim(),
-        country: city.label.split(',').slice(1).join(',').trim(),
-        coordinates: city.coordinates,
-      };
-
-      setSelectedLocation(nextSelection);
-      setSearchText(city.label);
-      setShowSuggestions(false);
-      setSearchSuggestions([]);
-      Keyboard.dismiss();
-      focusLocation(nextSelection);
-    },
-    [focusLocation]
-  );
-
   const handleSuggestionPress = useCallback(
     (suggestion: LocationSuggestion) => {
       setSelectedLocation(suggestion);
@@ -520,32 +468,11 @@ const Map = () => {
 
   const handleMarkerPress = useCallback((event: FirebaseEvent) => {
     setSelectedEvent(event);
-    cameraRef.current?.setCamera({
-      centerCoordinate: eventCoordinate(event),
-      zoomLevel: 5.2,
-      pitch: 0,
-      heading: 0,
-      animationDuration: 1200,
-      animationMode: 'flyTo',
-    });
-    setZoomLevel(5.2);
   }, []);
 
   const handleCloseSelectedEvent = useCallback(() => {
-    if (selectedEvent) {
-      cameraRef.current?.setCamera({
-        centerCoordinate: eventCoordinate(selectedEvent),
-        zoomLevel: 5.2,
-        pitch: 0,
-        heading: 0,
-        animationDuration: 600,
-        animationMode: 'easeTo',
-      });
-      setZoomLevel(5.2);
-    }
-
     setSelectedEvent(null);
-  }, [selectedEvent]);
+  }, []);
 
   const handleGroupPress = useCallback((group: EventGroup) => {
     if (group.events.length === 1) {
@@ -849,7 +776,7 @@ const Map = () => {
         </View>
       </View>
 
-      <View style={[styles.legendCard]}>
+      <View style={[styles.legendCard, { marginBottom: 5 }]}>
         {/* <Text style={styles.legendTitle}>Map Legend</Text> */}
         <View style={styles.legendRow}>
           <View style={[styles.legendDot, styles.legendDotRed]} />
@@ -966,7 +893,7 @@ const styles = StyleSheet.create({
   },
   controlsWrap: {
     marginHorizontal: 20,
-    marginTop: 10,
+    marginTop: 6,
     zIndex: 50,
     elevation: 20,
   },
@@ -974,7 +901,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 6,
   },
   controlsTitle: {
     color: COLORS.WHITE,
@@ -1035,14 +962,14 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   searchBlock: {
-    marginTop: 14,
+    marginTop: 8,
     position: 'relative',
     zIndex: 60,
   },
   dateFiltersRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 12,
+    marginVertical: 8,
   },
   dateInputWrap: {
     flex: 1,
@@ -1187,14 +1114,12 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.InterTight_Medium,
   },
   legendCard: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-    bottom: -10,
+    marginTop: 12,
+    marginHorizontal: 20,
     paddingHorizontal: 18,
-    paddingVertical: 18,
+   
     borderRadius: 24,
-    backgroundColor: 'transparent',
+  
   },
   legendTitle: {
     color: COLORS.TEXT_PRIMARY,

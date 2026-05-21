@@ -1,6 +1,7 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { StyleSheet, Text, View } from "react-native";
+import { Alert, StyleSheet, Text, View } from "react-native";
+import { CommonActions } from "@react-navigation/native";
 import { TabParamList } from "../types/types";
 import { COLORS } from "../constants/colors";
 
@@ -21,6 +22,20 @@ import {
 } from "../constants/icons";
 
 const Tab = createBottomTabNavigator<TabParamList>();
+const VALID_TABS = new Set(["MyTours", "Map", "ForYou", "Favorites"]);
+
+const getDeepestActiveRoute = (state: any): any => {
+  if (!state?.routes?.length) {
+    return null;
+  }
+
+  const activeRoute = state.routes[state.index ?? 0];
+  if (activeRoute?.state) {
+    return getDeepestActiveRoute(activeRoute.state);
+  }
+
+  return activeRoute;
+};
 
 const TAB_ICONS = {
   Favorites: {
@@ -47,6 +62,57 @@ const TabNavigator: React.FC = () => {
     <Tab.Navigator
       initialRouteName="MyTours"
       backBehavior="history"
+      screenListeners={({ navigation }) => ({
+        tabPress: (event) => {
+          const state = navigation.getState();
+          const currentTab = state.routes[state.index ?? 0];
+          const targetTab = state.routes.find((route) => route.key === event.target);
+
+          if (!targetTab || !VALID_TABS.has(targetTab.name) || targetTab.name === "MyTours") {
+            return;
+          }
+
+          if (currentTab?.name !== "MyTours") {
+            return;
+          }
+
+          const activeNestedRoute = getDeepestActiveRoute(currentTab.state);
+          const hasUnsavedTourSuggestion =
+            activeNestedRoute?.name === "TourSuggestion" &&
+            activeNestedRoute?.params?.hasUnsavedChanges;
+
+          if (!hasUnsavedTourSuggestion) {
+            return;
+          }
+
+          event.preventDefault();
+          Alert.alert(
+            "Discard Tour?",
+            "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
+            [
+              { text: "Stay", style: "cancel" },
+              {
+                text: "Discard",
+                style: "destructive",
+                onPress: () => {
+                  navigation.dispatch(
+                    CommonActions.navigate({
+                      name: "MyTours",
+                      params: {
+                        screen: "CreateTour",
+                      },
+                    })
+                  );
+
+                  requestAnimationFrame(() => {
+                    navigation.navigate(targetTab.name as never);
+                  });
+                },
+              },
+            ]
+          );
+        },
+      })}
       screenOptions={({ route }) => {
         const icons = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
 

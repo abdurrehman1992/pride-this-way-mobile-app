@@ -30,38 +30,6 @@ import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { fetchRewardsSummary } from '../../services/myTourService';
 import { RootState } from '../../Redux/store';
 
-const STATIC_REWARDS = {
-  totalPoints: 1250,
-  tours: [
-    {
-      id: 'static-tour-1',
-      title: 'Kansas City Explorer',
-      date: 'May 06, 2026',
-      points: 75,
-      totalLocations: 5,
-      places: [
-        { id: 's1', name: 'Clifton Beach', points: 15, visited: true },
-        { id: 's2', name: 'Boat Basin', points: 15, visited: true },
-        { id: 's3', name: 'Frere Hall', points: 15, visited: true },
-        { id: 's4', name: 'Dolmen Mall', points: 15, visited: true },
-        { id: 's5', name: 'Defense Block H', points: 15, visited: true },
-      ],
-    },
-    {
-      id: 'static-tour-2',
-      title: 'Austin City Explorer',
-      date: 'May 02, 2026',
-      points: 45,
-      totalLocations: 3,
-      places: [
-        { id: 's6', name: 'Lost Road', points: 15, visited: true },
-        { id: 's7', name: 'Bryant Park', points: 15, visited: true },
-        { id: 's8', name: 'Country Crossing', points: 15, visited: true },
-      ],
-    },
-  ],
-};
-
 const Rewards = () => {
   const userId = useSelector((state: RootState) => state.auth.user?.id);
   const [showAll, setShowAll] = useState(false);
@@ -71,12 +39,9 @@ const Rewards = () => {
 
   const loadRewards = useCallback(async () => {
     const summary = await fetchRewardsSummary(userId);
-    const source =
-      summary.tours.length > 0 ? summary : STATIC_REWARDS;
-
-    setTotalPoints(source.totalPoints);
+    setTotalPoints(summary.totalPoints);
     setRewards(
-      source.tours.map((tour, index) => ({
+      summary.tours.map((tour, index) => ({
         id: tour.id,
         name: tour.title,
         points: tour.points,
@@ -151,17 +116,21 @@ const Rewards = () => {
             Your Tours & Rewards
           </Text>
 
-          <TouchableOpacity
-            onPress={() => setShowAll(!showAll)}
-            style={styles.seeAllButton}
-          >
-            <Text style={styles.seeAll}>
-              {showAll ? 'Show Less' : 'See All'}
-            </Text>
-          </TouchableOpacity>
+          {rewards.length > 2 ? (
+            <TouchableOpacity
+              onPress={() => setShowAll(!showAll)}
+              style={styles.seeAllButton}
+            >
+              <Text style={styles.seeAll}>
+                {showAll ? 'Show Less' : 'See All'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
         <View style={styles.listContainer}>
-          {visibleRewards.map(item => (
+          {visibleRewards.length === 0 ? (
+            <Text style={styles.emptyText}>No rewards earned yet.</Text>
+          ) : visibleRewards.map(item => (
             <View key={item.id} style={styles.card}>
               <TouchableOpacity
                 activeOpacity={0.8}
@@ -459,6 +428,13 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_GREEN,
     fontFamily: FONT_FAMILY.Poppins_Medium,
     fontSize: FONT_SIZE.CARD_TEXT,
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: COLORS.TEXT_SECONDARY,
+    fontSize: FONT_SIZE.TEXT,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    paddingVertical: 24,
   },
   locationCont: {
     flexDirection: 'row',

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -10,12 +11,13 @@ import {
 } from 'react-native';
 
 import { DrawerContentScrollView } from '@react-navigation/drawer';
+import { CommonActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 
-import { BgFrame, PROFILE_IMAGE } from '../../constants/images';
+import { BgFrame } from '../../constants/images';
 
 import {
   BottomProfileIcon,
@@ -41,14 +43,73 @@ const CustomDrawer = ({ navigation }: any) => {
   const insets = useSafeAreaInsets();
   const user = useSelector((state: RootState) => state.auth.user);
   const [visitedPlacesCount, setVisitedPlacesCount] = useState(0);
+  const [rewardPoints, setRewardPoints] = useState(0);
+  const getDeepestActiveRoute = useCallback((state: any): any => {
+    if (!state?.routes?.length) {
+      return null;
+    }
+
+    const activeRoute = state.routes[state.index ?? 0];
+    if (activeRoute?.state) {
+      return getDeepestActiveRoute(activeRoute.state);
+    }
+
+    return activeRoute;
+  }, []);
+
+  const hasUnsavedTourSuggestion = useCallback(() => {
+    const activeRoute = getDeepestActiveRoute(navigation.getState());
+    return Boolean(
+      activeRoute?.name === 'TourSuggestion' && activeRoute?.params?.hasUnsavedChanges
+    );
+  }, [getDeepestActiveRoute, navigation]);
+
+  const resetMyToursToCreateTour = useCallback(() => {
+    navigation.dispatch(
+      CommonActions.navigate({
+        name: 'Tabs',
+        params: {
+          screen: 'MyTours',
+          params: {
+            screen: 'CreateTour',
+          },
+        },
+      })
+    );
+  }, [navigation]);
+
   const navigateTo = useCallback(
     (screen: string, params?: any) => {
-      navigation.navigate(screen, params);
-      requestAnimationFrame(() => {
-        navigation.closeDrawer();
-      });
+      const finishNavigation = () => {
+        navigation.navigate(screen, params);
+
+        requestAnimationFrame(() => {
+          navigation.closeDrawer();
+        });
+      };
+
+      if (!hasUnsavedTourSuggestion()) {
+        finishNavigation();
+        return;
+      }
+
+      Alert.alert(
+        'Discard Tour?',
+        "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
+        [
+          { text: 'Stay', style: 'cancel' },
+          {
+            text: 'Discard',
+            style: 'destructive',
+            onPress: () => {
+              resetMyToursToCreateTour();
+              requestAnimationFrame(finishNavigation);
+            },
+          },
+        ]
+      );
     },
-    [navigation],
+    [hasUnsavedTourSuggestion, navigation, resetMyToursToCreateTour],
   );
 
   const handleLogout = useCallback(async () => {
@@ -76,10 +137,12 @@ const CustomDrawer = ({ navigation }: any) => {
           (sum, tour) => sum + tour.places.filter((place) => place.visited).length,
           0
         );
+        setRewardPoints(summary.totalPoints);
         setVisitedPlacesCount(visitedCount);
       })
       .catch(() => {
         if (isMounted) {
+          setRewardPoints(0);
           setVisitedPlacesCount(0);
         }
       });
@@ -144,7 +207,7 @@ const CustomDrawer = ({ navigation }: any) => {
         <View style={styles.itemsRow}>
           <View style={[styles.menuCard, styles.rewardsCard]}>
             <Text style={styles.cardTitle} numberOfLines={1}>
-              {(user?.points || 0).toLocaleString()}
+              {rewardPoints.toLocaleString()}
             </Text>
 
             <Text style={styles.cardText} numberOfLines={1}>

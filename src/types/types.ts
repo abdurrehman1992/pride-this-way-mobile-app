@@ -7,6 +7,13 @@ export type AuthStackParamList = {
 };
 
 export type MyTourStackParamList = {
+  CreateTour: undefined;
+  TourSuggestion: {
+    tourName: string;
+    cityLabel: string;
+    recommendations: any[];
+    hasUnsavedChanges?: boolean;
+  };
   AddLocations: {
     routeId?: string;
     cityLabel?: string;
@@ -16,6 +23,13 @@ export type MyTourStackParamList = {
     addedPlaceId?: string;
     routeId?: string;
     timestamp?: number;
+    pendingCreate?: {
+      status: 'active' | 'saved';
+      scheduledDate: string | null;
+      createdAt: string;
+      tourName: string;
+      recommendations: any[];
+    };
   } | undefined,
   MyTourStart: {
     routeId?: string;
