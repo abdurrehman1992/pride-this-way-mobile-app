@@ -11,12 +11,17 @@ import {
   setAuthInitialized,
 } from "../Redux/slices/authSlice";
 import { subscribeToAuthState } from "../services/authService";
+import { getActiveTour } from "../services/myTourService";
+
 const RootNavigator: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
+  const [initialNavState, setInitialNavState] = useState<any>(undefined);
+  const [navStateResolved, setNavStateResolved] = useState(false);
   const dispatch = useDispatch();
-  const { isLoggedIn, initialized } = useSelector(
+  const { isLoggedIn, initialized, user } = useSelector(
     (state: RootState) => state.auth
   );
+  const userId = user?.id;
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -46,9 +51,82 @@ const RootNavigator: React.FC = () => {
     return () => clearTimeout(bootstrapTimeout);
   }, [dispatch]);
 
-  if (showSplash || !initialized) return <Splash />;
+  // Resolve "resume active tour on cold start" before mounting the navigator.
+  // If the user has a tour with status='active' in Firestore, deep-route them
+  // into MyTourStart so they land back where they left off.
+  useEffect(() => {
+    if (!initialized) return;
+    if (!isLoggedIn || !userId) {
+      setNavStateResolved(true);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const active = await Promise.race([
+          getActiveTour(userId),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+        ]);
+        if (cancelled) return;
+        if (active) {
+          setInitialNavState({
+            routes: [
+              {
+                name: "Main",
+                state: {
+                  routes: [
+                    {
+                      name: "Tabs",
+                      state: {
+                        index: 0,
+                        routes: [
+                          {
+                            name: "MyTours",
+                            state: {
+                              index: 1,
+                              routes: [
+                                { name: "MyTour" },
+                                {
+                                  name: "MyTourStart",
+                                  params: {
+                                    tourId: active.id,
+                                    routeId: active.route_id,
+                                    tourName: active.title,
+                                    autoStart: true,
+                                    tourActive: true,
+                                  },
+                                },
+                              ],
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+        }
+      } catch {
+        // fall through to default landing
+      } finally {
+        if (!cancelled) setNavStateResolved(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialized, isLoggedIn, userId]);
+
+  if (showSplash || !initialized || (isLoggedIn && !navStateResolved)) {
+    return <Splash />;
+  }
+
   return (
-    <NavigationContainer>
+    <NavigationContainer initialState={initialNavState}>
       {isLoggedIn ? <AppNavigator /> : <AuthNavigator />}
     </NavigationContainer>
   );

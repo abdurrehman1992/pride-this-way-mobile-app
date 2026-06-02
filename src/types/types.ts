@@ -13,11 +13,13 @@ export type MyTourStackParamList = {
     cityLabel: string;
     recommendations: any[];
     hasUnsavedChanges?: boolean;
+    addedPlaceId?: string;
+    timestamp?: number;
   };
   AddLocations: {
     routeId?: string;
     cityLabel?: string;
-    fromScreen?: 'MyTour' | 'MyTourStart';
+    fromScreen?: 'MyTour' | 'MyTourStart' | 'TourSuggestion';
   };
   MyTour: {
     addedPlaceId?: string;
@@ -43,6 +45,8 @@ export type MyTourStackParamList = {
     tourId?: string;
     isEdited?: boolean;
     autoStart?: boolean;
+    tourActive?: boolean;
+    pauseAndLeave?: number;
   } | undefined,
   RecommendationDetials: undefined
 };

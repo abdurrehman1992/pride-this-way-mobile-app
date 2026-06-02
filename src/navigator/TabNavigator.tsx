@@ -68,7 +68,55 @@ const TabNavigator: React.FC = () => {
           const currentTab = state.routes[state.index ?? 0];
           const targetTab = state.routes.find((route) => route.key === event.target);
 
-          if (!targetTab || !VALID_TABS.has(targetTab.name) || targetTab.name === "MyTours") {
+          if (!targetTab || !VALID_TABS.has(targetTab.name)) {
+            return;
+          }
+
+          // Active-tour guard: if the user is currently on MyTourStart with a
+          // running tour, block ALL tab switches (including back to MyTours
+          // itself) until they explicitly pause. The MyTourStart screen sets
+          // `tourActive: true` on its route params while the tour is running.
+          const activeNestedRoute = getDeepestActiveRoute(currentTab?.state);
+          const tourIsActive =
+            currentTab?.name === "MyTours" &&
+            activeNestedRoute?.name === "MyTourStart" &&
+            activeNestedRoute?.params?.tourActive === true;
+
+          if (tourIsActive) {
+            event.preventDefault();
+            Alert.alert(
+              "Leave Tour?",
+              "Your tour is in progress. Pause it before leaving — you can resume from where you left off.",
+              [
+                { text: "Stay on Tour", style: "cancel" },
+                {
+                  text: "Pause & Leave",
+                  onPress: () => {
+                    // Tell MyTourStart to persist the paused state. Once it
+                    // clears tourActive on its params, the user can navigate
+                    // freely. We re-dispatch the tab press after a beat so
+                    // the pause-save round-trip can finish.
+                    navigation.dispatch(
+                      CommonActions.navigate({
+                        name: "MyTours",
+                        params: {
+                          screen: "MyTourStart",
+                          params: { pauseAndLeave: Date.now() },
+                        },
+                      })
+                    );
+
+                    setTimeout(() => {
+                      navigation.navigate(targetTab.name as never);
+                    }, 350);
+                  },
+                },
+              ]
+            );
+            return;
+          }
+
+          if (targetTab.name === "MyTours") {
             return;
           }
 
@@ -76,7 +124,6 @@ const TabNavigator: React.FC = () => {
             return;
           }
 
-          const activeNestedRoute = getDeepestActiveRoute(currentTab.state);
           const hasUnsavedTourSuggestion =
             activeNestedRoute?.name === "TourSuggestion" &&
             activeNestedRoute?.params?.hasUnsavedChanges;

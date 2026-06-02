@@ -30,6 +30,7 @@ import { MyTourStackParamList } from '../../types/types';
 import { RootState } from '../../Redux/store';
 import {
     FirebasePlace,
+    fetchPlacesByIds,
     RecommendedRoute,
     saveUserTour,
 } from '../../services/myTourService';
@@ -49,10 +50,13 @@ const TourSuggestion: React.FC = () => {
         tourName?: string;
         cityLabel?: string;
         recommendations?: RecommendedRoute[];
+        addedPlaceId?: string;
+        timestamp?: number;
     } | undefined;
 
     const recommendations = params?.recommendations || [];
     const tourName = params?.tourName || recommendations[0]?.route?.name || 'Custom Tour';
+    const cityLabel = params?.cityLabel || '';
     const primary = recommendations[0];
     const initialPlaces: FirebasePlace[] = primary?.places || [];
     const events = primary?.events || [];
@@ -102,6 +106,30 @@ const TourSuggestion: React.FC = () => {
     const removePlace = (placeId: string) => {
         setPlaces((prev) => prev.filter((p) => p.id !== placeId));
     };
+
+    useEffect(() => {
+        const addedPlaceId = params?.addedPlaceId;
+        if (!addedPlaceId) {
+            return;
+        }
+
+        fetchPlacesByIds([addedPlaceId]).then((fetchedPlaces) => {
+            const addedPlace = fetchedPlaces[0];
+            if (!addedPlace) {
+                return;
+            }
+
+            setPlaces((prev) => {
+                if (prev.some((place) => place.id === addedPlace.id)) {
+                    return prev;
+                }
+
+                return [...prev, addedPlace];
+            });
+        });
+
+        navigation.setParams({ addedPlaceId: undefined, timestamp: undefined });
+    }, [navigation, params?.addedPlaceId, params?.timestamp]);
 
     const toggleLocationDetails = (placeId: string) => {
         setExpandedLocations((prev) => ({
@@ -270,7 +298,16 @@ const TourSuggestion: React.FC = () => {
                     <View style={styles.cardBottom}>
                         <View style={styles.locationHeader}>
                             <Text style={styles.locationTitle}>Locations</Text>
-                            <TouchableOpacity style={styles.addLocBtn}>
+                            <TouchableOpacity
+                                style={styles.addLocBtn}
+                                onPress={() =>
+                                    navigation.navigate('AddLocations', {
+                                        routeId: primary?.route?.id,
+                                        cityLabel,
+                                        fromScreen: 'TourSuggestion',
+                                    })
+                                }
+                            >
                                 <IconPlus width={11} height={11} />
                                 <Text style={styles.addLocation}>Add Locations</Text>
                             </TouchableOpacity>

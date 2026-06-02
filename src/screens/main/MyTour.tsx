@@ -72,7 +72,7 @@ type RouteCardState = RecommendedRoute & {
     createdAt?: string;
 };
 
-type TourFilter = 'All' | 'Current' | 'Saved' | 'Completed';
+type TourFilter = 'All' | 'Current' | 'Saved' | 'Completed' | 'Favourite';
 
 type TourStatusUpdate = {
     tourId?: string;
@@ -81,7 +81,7 @@ type TourStatusUpdate = {
     updatedAt?: string;
 };
 
-const TOUR_FILTERS: TourFilter[] = ['All', 'Current', 'Saved', 'Completed'];
+const TOUR_FILTERS: TourFilter[] = ['All', 'Current', 'Saved', 'Completed', 'Favourite'];
 const VALID_TOUR_STATUSES = new Set(['active', 'completed', 'paused', 'scheduled', 'saved']);
 
 const buildPlaceProgressFromSavedTour = (savedTour: SavedTour) =>
@@ -522,21 +522,35 @@ const MyTour = () => {
         }));
     }, []);
 
-    const deleteTour = useCallback(async (tour: RouteCardState) => {
-        setSavedTourCards((prev) =>
-            normalizeTourCards(prev.filter((card) => card.cardId !== tour.cardId))
-        );
-        showInfo('Tour Removed', 'This tour has been removed.');
+    const deleteTour = useCallback((tour: RouteCardState) => {
+        const isInProgress = tour.status === 'active' || tour.status === 'paused';
+        const message = isInProgress
+            ? 'This will end your current tour and remove it. This cannot be undone.'
+            : 'This will remove this tour. This cannot be undone.';
 
-        if (!tour.tourId) return;
-        try {
-            await deleteUserTour(tour.tourId);
-        } catch (error) {
-            const message =
-                error instanceof Error ? error.message : 'Unable to remove this tour right now.';
-            showError('Delete Failed', message);
-            loadSavedTours();
-        }
+        Alert.alert('Delete Tour?', message, [
+            { text: 'Cancel', style: 'cancel' },
+            {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: async () => {
+                    setSavedTourCards((prev) =>
+                        normalizeTourCards(prev.filter((card) => card.cardId !== tour.cardId))
+                    );
+                    showInfo('Tour Removed', 'This tour has been removed.');
+
+                    if (!tour.tourId) return;
+                    try {
+                        await deleteUserTour(tour.tourId);
+                    } catch (error) {
+                        const errorMessage =
+                            error instanceof Error ? error.message : 'Unable to remove this tour right now.';
+                        showError('Delete Failed', errorMessage);
+                        loadSavedTours();
+                    }
+                },
+            },
+        ]);
     }, [loadSavedTours]);
 
     const handleStartTour = async (tour: RouteCardState) => {
@@ -581,6 +595,11 @@ const MyTour = () => {
             removedPlaceIds: tour.removedPlaceIds,
             tourId: tour.tourId || undefined,
             autoStart: tour.status !== 'completed',
+            // Synchronous hint for TabNavigator's tabPress guard so the
+            // alert fires on the very first tab tap after opening an
+            // already-active tour. The effect in MyTourStart keeps this
+            // param in sync as tourStarted toggles afterwards.
+            tourActive: tour.status === 'active',
             isEdited:
                 Boolean(tour.isSavedTour) ||
                 tour.extraPlaces.length > 0 ||
@@ -782,10 +801,14 @@ const MyTour = () => {
                 return allCards.filter((tour) => tour.status === 'saved');
             case 'Completed':
                 return allCards.filter((tour) => tour.status === 'completed');
+            case 'Favourite':
+                return allCards.filter((tour) =>
+                    isFavorite(tour.tourId || tour.route.id)
+                );
             default:
                 return allCards.filter((tour) => tour.status !== 'scheduled');
         }
-    }, [activeFilter, allCards]);
+    }, [activeFilter, allCards, isFavorite]);
 
     const goToCreateTour = () => navigation.navigate('CreateTour');
 
@@ -810,6 +833,7 @@ const MyTour = () => {
             Current: 'No active tours right now.',
             Saved: 'No saved tours yet.',
             Completed: 'No completed tours yet.',
+            Favourite: 'No favourite tours yet. Tap the heart on a tour to add it here.',
         };
         return (
             <View style={styles.filteredEmptyWrap}>

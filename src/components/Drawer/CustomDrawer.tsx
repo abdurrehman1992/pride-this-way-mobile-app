@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback } from 'react';
 import {
   Alert,
   View,
@@ -32,8 +32,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { logout } from '../../Redux/slices/authSlice';
 import { RootState } from '../../Redux/store';
 import { logoutUser } from '../../services/authService';
-import { fetchRewardsSummary } from '../../services/myTourService';
 import { showError, showSuccess } from '../common/AppToast';
+import { useDrawerRewardsRefresh } from '../../hooks/useDrawerRewardsRefresh';
 
 import TabsButtons from '../common/TabsButtons';
 
@@ -42,8 +42,7 @@ const CustomDrawer = ({ navigation }: any) => {
 
   const insets = useSafeAreaInsets();
   const user = useSelector((state: RootState) => state.auth.user);
-  const [visitedPlacesCount, setVisitedPlacesCount] = useState(0);
-  const [rewardPoints, setRewardPoints] = useState(0);
+  const { rewardPoints, visitedPlacesCount } = useDrawerRewardsRefresh(user?.id);
   const getDeepestActiveRoute = useCallback((state: any): any => {
     if (!state?.routes?.length) {
       return null;
@@ -64,6 +63,48 @@ const CustomDrawer = ({ navigation }: any) => {
     );
   }, [getDeepestActiveRoute, navigation]);
 
+  const hasActiveTour = useCallback((): boolean => {
+    const activeRoute = getDeepestActiveRoute(navigation.getState());
+    return Boolean(
+      activeRoute?.name === 'MyTourStart' && activeRoute?.params?.tourActive === true
+    );
+  }, [getDeepestActiveRoute, navigation]);
+
+  const guardActiveTour = useCallback(
+    (proceed: () => void) => {
+      if (!hasActiveTour()) {
+        proceed();
+        return;
+      }
+      Alert.alert(
+        'Leave Tour?',
+        'Your tour is in progress. Pause it before leaving — you can resume from where you left off.',
+        [
+          { text: 'Stay on Tour', style: 'cancel' },
+          {
+            text: 'Pause & Leave',
+            onPress: () => {
+              navigation.dispatch(
+                CommonActions.navigate({
+                  name: 'Tabs',
+                  params: {
+                    screen: 'MyTours',
+                    params: {
+                      screen: 'MyTourStart',
+                      params: { pauseAndLeave: Date.now() },
+                    },
+                  },
+                })
+              );
+              setTimeout(proceed, 350);
+            },
+          },
+        ]
+      );
+    },
+    [hasActiveTour, navigation]
+  );
+
   const resetMyToursToCreateTour = useCallback(() => {
     navigation.dispatch(
       CommonActions.navigate({
@@ -80,108 +121,85 @@ const CustomDrawer = ({ navigation }: any) => {
 
   const navigateTo = useCallback(
     (screen: string, params?: any) => {
-      const finishNavigation = () => {
-        navigation.navigate(screen, params);
+      guardActiveTour(() => {
+        const finishNavigation = () => {
+          navigation.navigate(screen, params);
 
-        requestAnimationFrame(() => {
-          navigation.closeDrawer();
-        });
-      };
+          requestAnimationFrame(() => {
+            navigation.closeDrawer();
+          });
+        };
 
-      if (!hasUnsavedTourSuggestion()) {
-        finishNavigation();
-        return;
-      }
-
-      Alert.alert(
-        'Discard Tour?',
-        "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
-        [
-          { text: 'Stay', style: 'cancel' },
-          {
-            text: 'Discard',
-            style: 'destructive',
-            onPress: () => {
-              resetMyToursToCreateTour();
-              requestAnimationFrame(finishNavigation);
-            },
-          },
-        ]
-      );
-    },
-    [hasUnsavedTourSuggestion, navigation, resetMyToursToCreateTour],
-  );
-  const resetToSupportScreen = useCallback(
-  (screenName: string) => {
-    navigation.dispatch(
-      CommonActions.reset({
-        index: 0,
-        routes: [
-          {
-            name: 'Support',
-            params: {
-              screen: screenName,
-            },
-          },
-        ],
-      }),
-    );
-
-    requestAnimationFrame(() => {
-      navigation.closeDrawer();
-    });
-  },
-  [navigation]
-);
-
-  const handleLogout = useCallback(async () => {
-    try {
-      await logoutUser();
-      dispatch(logout());
-
-      showSuccess(
-        'Logout Success',
-        'You have logged out successfully',
-      );
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Unable to logout.';
-
-      showError('Logout Failed', message);
-    }
-  }, [dispatch]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    fetchRewardsSummary(user?.id)
-      .then((summary) => {
-        if (!isMounted) {
+        if (!hasUnsavedTourSuggestion()) {
+          finishNavigation();
           return;
         }
 
-        const visitedCount = summary.tours.reduce(
-          (sum, tour) =>
-            sum +
-            tour.places.filter((place) => place.visited).length,
-          0,
+        Alert.alert(
+          'Discard Tour?',
+          "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
+          [
+            { text: 'Stay', style: 'cancel' },
+            {
+              text: 'Discard',
+              style: 'destructive',
+              onPress: () => {
+                resetMyToursToCreateTour();
+                requestAnimationFrame(finishNavigation);
+              },
+            },
+          ]
         );
-        setRewardPoints(summary.totalPoints);
-        setVisitedPlacesCount(visitedCount);
-      })
-      .catch(() => {
-        if (isMounted) {
-          setRewardPoints(0);
-          setVisitedPlacesCount(0);
-        }
       });
+    },
+    [guardActiveTour, hasUnsavedTourSuggestion, navigation, resetMyToursToCreateTour],
+  );
+  const resetToSupportScreen = useCallback(
+  (screenName: string) => {
+    guardActiveTour(() => {
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [
+            {
+              name: 'Support',
+              params: {
+                screen: screenName,
+              },
+            },
+          ],
+        }),
+      );
 
-    return () => {
-      isMounted = false;
-    };
-  }, [user?.id]);
+      requestAnimationFrame(() => {
+        navigation.closeDrawer();
+      });
+    });
+  },
+  [guardActiveTour, navigation]
+);
+
+  const handleLogout = useCallback(() => {
+    guardActiveTour(async () => {
+      try {
+        await logoutUser();
+        dispatch(logout());
+
+        showSuccess(
+          'Logout Success',
+          'You have logged out successfully',
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unable to logout.';
+
+        showError('Logout Failed', message);
+      }
+    });
+  }, [dispatch, guardActiveTour]);
+
 
   return (
     <View style={styles.container}>

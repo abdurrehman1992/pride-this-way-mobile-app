@@ -25,7 +25,7 @@ import { showInfo } from '../../components/common/AppToast';
 type RouteParams = {
   routeId?: string;
   cityLabel?: string;
-  fromScreen?: 'MyTour' | 'MyTourStart';
+  fromScreen?: 'MyTour' | 'MyTourStart' | 'TourSuggestion';
   routeName?: string;
   tourName?: string;
   extraPlaceIds?: string[];
@@ -136,6 +136,18 @@ const AddLocations = () => {
                     navigation.goBack();
 
                     setTimeout(() => {
+                      if (fromScreen === 'TourSuggestion') {
+                        navigation.navigate({
+                          name: 'TourSuggestion',
+                          params: {
+                            addedPlaceId: item.id,
+                            timestamp: Date.now(),
+                          },
+                          merge: true,
+                        });
+                        return;
+                      }
+
                       if (fromScreen === 'MyTourStart') {
                         navigation.navigate('MyTourStart', {
                           routeId,

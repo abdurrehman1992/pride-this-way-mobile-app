@@ -4,6 +4,8 @@ import firestore, {
 } from '@react-native-firebase/firestore';
 
 const USERS_COLLECTION = 'users';
+const DEFAULT_PROFILE_IMAGE =
+  'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png';
 
 export type AuthUserProfile = {
   id: string;
@@ -174,6 +176,7 @@ export const signupUser = async (data: SignupPayload): Promise<AuthSession> => {
       fullName,
       email,
       phone,
+      profileImage: DEFAULT_PROFILE_IMAGE,
     });
 
     return buildAuthSession(credential.user, profile);
@@ -190,6 +193,11 @@ export const loginUser = async (data: LoginPayload): Promise<AuthSession> => {
     );
 
     const profile = await getUserDocument(credential.user.uid);
+    if (!profile) {
+      await auth().signOut().catch(() => {});
+      throw new Error('This account is no longer available.');
+    }
+
     return buildAuthSession(credential.user, profile);
   } catch (error) {
     throw new Error(getFriendlyAuthMessage(error));
@@ -279,17 +287,51 @@ export const logoutUser = async () => {
 
 export const subscribeToAuthState = (
   callback: (session: AuthSession | null) => void
-) =>
-  auth().onAuthStateChanged(async (firebaseUser) => {
+) => {
+  let unsubscribeProfile: (() => void) | null = null;
+
+  const unsubscribeAuth = auth().onAuthStateChanged(async (firebaseUser) => {
+    if (unsubscribeProfile) {
+      unsubscribeProfile();
+      unsubscribeProfile = null;
+    }
+
     if (!firebaseUser) {
       callback(null);
       return;
     }
 
-    try {
-      const profile = await getUserDocument(firebaseUser.uid);
-      callback(await buildAuthSession(firebaseUser, profile));
-    } catch {
-      callback(await buildAuthSession(firebaseUser));
-    }
+    unsubscribeProfile = getUserDocumentRef(firebaseUser.uid).onSnapshot(
+      async (snapshot) => {
+        if (!snapshot.exists) {
+          await auth().signOut().catch(() => {});
+          callback(null);
+          return;
+        }
+
+        callback(await buildAuthSession(firebaseUser, snapshot.data()));
+      },
+      async () => {
+        try {
+          const profile = await getUserDocument(firebaseUser.uid);
+          if (!profile) {
+            await auth().signOut().catch(() => {});
+            callback(null);
+            return;
+          }
+
+          callback(await buildAuthSession(firebaseUser, profile));
+        } catch {
+          callback(await buildAuthSession(firebaseUser));
+        }
+      }
+    );
   });
+
+  return () => {
+    if (unsubscribeProfile) {
+      unsubscribeProfile();
+    }
+    unsubscribeAuth();
+  };
+};

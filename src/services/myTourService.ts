@@ -119,6 +119,9 @@ export type SavedTour = {
   createdAt?: string;
   all_places: SavedTourPlace[];
   event_ids: string[];
+  // GPS anchor used for the Mapbox Optimization API. Persisted so the
+  // stop order stays identical across pause/resume and app restarts.
+  tourOrigin?: [number, number] | null;
 };
 
 export type RewardsSummary = {
@@ -287,6 +290,10 @@ const parseSavedTour = (
     proofImageUri: item.proofImageUri || null,
     addedByUser: Boolean(item.addedByUser),
   })),
+  tourOrigin:
+    Array.isArray(data?.tourOrigin) && data.tourOrigin.length === 2
+      ? [Number(data.tourOrigin[0]), Number(data.tourOrigin[1])]
+      : null,
 });
 
 const buildLocationLabel = (city?: string, country?: string) => {
@@ -322,15 +329,46 @@ const routeMatchesLocation = (
     return true;
   }
 
+  const routeCity = normalizeText(route.city_name);
+  const addressParts = locationLabel
+    .split(',')
+    .map((part) => normalizeText(part))
+    .filter(Boolean);
+  const knownCityParts = new Set<string>(
+    [
+      route.city_name,
+      ...places.map((place) => place.city_name),
+      ...events.map((event) => event.city_name),
+    ]
+      .map((value) => normalizeText(value))
+      .filter(Boolean)
+  );
+
+  if (routeCity && addressParts.includes(routeCity)) {
+    return true;
+  }
+
+  if (
+    addressParts.some((part) => knownCityParts.has(part))
+  ) {
+    return true;
+  }
+
   const cityOnly = normalizeText(locationLabel.split(',')[0]);
   if (cityOnly) {
-    if (normalizeText(route.city_name) === cityOnly) {
+    if (routeCity === cityOnly) {
       return true;
     }
 
     if (
-      places.some((place) => normalizeText(place.city_name) === cityOnly) ||
-      events.some((event) => normalizeText(event.city_name) === cityOnly)
+      places.some((place) =>
+        addressParts.includes(normalizeText(place.city_name)) ||
+        normalizeText(place.city_name) === cityOnly
+      ) ||
+      events.some((event) =>
+        addressParts.includes(normalizeText(event.city_name)) ||
+        normalizeText(event.city_name) === cityOnly
+      )
     ) {
       return true;
     }
@@ -790,6 +828,7 @@ export const saveUserTour = async ({
   startedAt,
   completedAt,
   scheduledDate,
+  tourOrigin,
 }: {
   tourId?: string | null;
   userId: string;
@@ -815,6 +854,7 @@ export const saveUserTour = async ({
   startedAt?: string;
   completedAt?: string | null;
   scheduledDate?: string | null;
+  tourOrigin?: [number, number] | null;
 }) => {
   const now = new Date().toISOString();
   if (status === 'active') {
@@ -857,6 +897,7 @@ export const saveUserTour = async ({
     scheduledDate: scheduledDate || null,
     all_places: allPlaces,
     event_ids: events.map((event) => event.id),
+    tourOrigin: tourOrigin ?? null,
     updatedAt: now,
   };
 
@@ -983,6 +1024,24 @@ export const fetchUserTours = async (userId?: string): Promise<SavedTour[]> => {
   return snapshot.docs
     .map((doc) => parseSavedTour(doc.id, doc.data()))
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+};
+
+export const getActiveTour = async (userId?: string): Promise<SavedTour | null> => {
+  if (!userId) return null;
+
+  const snapshot = await firestore()
+    .collection(TOURS_COLLECTION)
+    .where('user_id', '==', userId)
+    .where('status', '==', 'active')
+    .get();
+
+  if (snapshot.empty) return null;
+
+  const tours = snapshot.docs
+    .map((doc) => parseSavedTour(doc.id, doc.data()))
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+
+  return tours[0];
 };
 
 export const scheduleOtherActiveTours = async ({

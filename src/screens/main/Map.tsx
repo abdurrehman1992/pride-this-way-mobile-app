@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import Mapbox, { type FillLayerStyle, type LineLayerStyle } from '@rnmapbox/maps';
 import Config from 'react-native-config';
-import type { FeatureCollection, Polygon } from 'geojson';
+import type { FeatureCollection, Point, Polygon } from 'geojson';
 import EventDetailModal from '../../components/modals/EventDetailModal';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
@@ -31,12 +31,6 @@ const BG_MATCH = '#7AB4DC';
 const INITIAL_CAMERA_CENTER: [number, number] = [-18, 18];
 const INITIAL_CAMERA_ZOOM = 0.8;
 const SEARCH_DEBOUNCE_MS = 350;
-
-type EventGroup = {
-  id: string;
-  coordinate: [number, number];
-  events: FirebaseEvent[];
-};
 
 type DateField = 'start' | 'end';
 
@@ -136,9 +130,6 @@ const eventCoordinate = (event: FirebaseEvent): [number, number] => [
   Number(event.coordinates?.latitude || 0),
 ];
 
-const coordinateKey = ([longitude, latitude]: [number, number]) =>
-  `${longitude.toFixed(3)}:${latitude.toFixed(3)}`;
-
 const markerColorForEvent = (event: FirebaseEvent) =>
   isPodcastEvent(event) ? '#1B84FF' : '#F04452';
 
@@ -212,29 +203,6 @@ const eventMatchesDateRange = (
   }
 
   return true;
-};
-
-const groupEventsByCoordinate = (events: FirebaseEvent[]): EventGroup[] => {
-  const groups = new globalThis.Map<string, EventGroup>();
-
-  events.forEach((event) => {
-    const coordinate = eventCoordinate(event);
-    const key = coordinateKey(coordinate);
-    const existing = groups.get(key);
-
-    if (existing) {
-      existing.events.push(event);
-      return;
-    }
-
-    groups.set(key, {
-      id: key,
-      coordinate,
-      events: [event],
-    });
-  });
-
-  return Array.from(groups.values());
 };
 
 const Map = () => {
@@ -328,10 +296,36 @@ const Map = () => {
     );
   }, [endDateFilter, events, selectedLocation, startDateFilter]);
 
-  const groupedEvents = useMemo<EventGroup[]>(
-    () => groupEventsByCoordinate(filteredEvents),
-    [filteredEvents]
-  );
+  // Native CircleLayer rendering — every event renders as its own GPU-drawn
+  // circle. Unlike MarkerView/PointAnnotation, CircleLayer is part of the
+  // map tiles themselves, so markers stay visible at every zoom level no
+  // matter how far the user zooms out. Same-coordinate events are nudged
+  // by tiny lng offsets so they appear as visually distinct dots instead
+  // of overlapping into one.
+  const eventPointsShape = useMemo<FeatureCollection<Point>>(() => {
+    const seenAtKey = new globalThis.Map<string, number>();
+    const features = filteredEvents.map((event) => {
+      const coord = eventCoordinate(event);
+      const key = `${coord[0].toFixed(4)}:${coord[1].toFixed(4)}`;
+      const occurrence = seenAtKey.get(key) || 0;
+      seenAtKey.set(key, occurrence + 1);
+      // Nudge co-located events by ~10m so each remains tappable and
+      // visually distinct on the GPU layer.
+      const nudgedCoord: [number, number] = occurrence === 0
+        ? coord
+        : [coord[0] + occurrence * 0.0001, coord[1] + occurrence * 0.0001];
+      return {
+        type: 'Feature' as const,
+        id: event.id,
+        properties: {
+          id: event.id,
+          color: markerColorForEvent(event),
+        },
+        geometry: { type: 'Point' as const, coordinates: nudgedCoord },
+      };
+    });
+    return { type: 'FeatureCollection', features };
+  }, [filteredEvents]);
 
 
 
@@ -385,20 +379,16 @@ const Map = () => {
     return;
   }
 
-  // CASE 4: FIT ALL MARKERS PROPERLY (MAIN FIX)
-  const padding = {
-    paddingLeft: 80,
-    paddingRight: 80,
-    paddingTop: 140,
-    paddingBottom: 140,
-  };
+  // CASE 4: FIT ALL MARKERS PROPERLY
+  // Mapbox v10's fitBounds expects (ne, sw, padding, duration).
+  // Padding format is [top, right, bottom, left] in pixels.
+  // We give generous padding so the GPU circle markers (11px halo) plus
+  // the floating zoom buttons and date filter chips never clip an edge.
+  const ne: [number, number] = [maxLongitude, maxLatitude];
+  const sw: [number, number] = [minLongitude, minLatitude];
+  const padding: [number, number, number, number] = [50, 50, 50, 50];
 
-  cameraRef.current?.fitBounds(
-    [minLongitude, minLatitude], // SW corner
-    [maxLongitude, maxLatitude], // NE corner
-    padding,
-    1400
-  );
+  cameraRef.current?.fitBounds(ne, sw, padding, 1400);
 
   // ❌ IMPORTANT: DO NOT manually set zoomLevel here
   // setZoomLevel(...) removed because it breaks fitBounds accuracy
@@ -488,23 +478,6 @@ const Map = () => {
     setSelectedEvent(null);
   }, []);
 
-  const handleGroupPress = useCallback((group: EventGroup) => {
-    if (group.events.length === 1) {
-      handleMarkerPress(group.events[0]);
-      return;
-    }
-
-    const nextZoom = Math.min(zoomLevel + 2, 18);
-    cameraRef.current?.setCamera({
-      centerCoordinate: group.coordinate,
-      zoomLevel: nextZoom,
-      pitch: 0,
-      heading: 0,
-      animationDuration: 600,
-      animationMode: 'easeTo',
-    });
-    setZoomLevel(nextZoom);
-  }, [handleMarkerPress, zoomLevel]);
 
   const handleZoom = useCallback((direction: 'in' | 'out') => {
     const nextZoom =
@@ -679,6 +652,10 @@ const Map = () => {
                 scrollEnabled
                 zoomEnabled
                 surfaceView={false}
+                onCameraChanged={(state: any) => {
+                  const z = state?.properties?.zoom;
+                  if (typeof z === 'number') setZoomLevel(z);
+                }}
                 onPress={() => {
                   setShowSuggestions(false);
                   setSelectedEvent(null);
@@ -727,40 +704,41 @@ const Map = () => {
                   />
                 </Mapbox.VectorSource>
 
-                {groupedEvents.map((group) => {
-                  const groupWidth = Math.max(24, 12 + group.events.length * 12);
-
-                  return (
-                    <Mapbox.MarkerView
-                      key={`group-${group.id}`}
-                      id={`group-${group.id}`}
-                      coordinate={group.coordinate}
-                      anchor={{ x: 0.5, y: 0.5 }}
-                    >
-                      <TouchableOpacity
-                        activeOpacity={0.9}
-                        onPress={() => handleGroupPress(group)}
-                        style={[styles.groupMarkerTapArea, { width: groupWidth }]}
-                      >
-                        <View style={[styles.groupMarkerRow, { width: groupWidth }]}>
-                          {group.events.map((event, index) => (
-                            <View
-                              key={event.id}
-                              style={[
-                                styles.groupMarkerBubble,
-                                {
-                                  left: index * 12,
-                                  backgroundColor: markerColorForEvent(event),
-                                  zIndex: group.events.length - index,
-                                },
-                              ]}
-                            />
-                          ))}
-                        </View>
-                      </TouchableOpacity>
-                    </Mapbox.MarkerView>
-                  );
-                })}
+                <Mapbox.ShapeSource
+                  id="eventPoints"
+                  shape={eventPointsShape}
+                  onPress={(event) => {
+                    const feature = event.features?.[0];
+                    const id = feature?.properties?.id as string | undefined;
+                    const tappedEvent = id
+                      ? filteredEvents.find((e) => e.id === id)
+                      : null;
+                    if (tappedEvent) {
+                      handleMarkerPress(tappedEvent);
+                    }
+                  }}
+                >
+                  <Mapbox.CircleLayer
+                    id="eventPointsCircleHalo"
+                    style={{
+                      circleRadius: 11,
+                      circleColor: '#FFFFFF',
+                      circleOpacity: 1,
+                      circlePitchAlignment: 'map',
+                    }}
+                  />
+                  <Mapbox.CircleLayer
+                    id="eventPointsCircle"
+                    style={{
+                      circleRadius: 8,
+                      circleColor: ['get', 'color'],
+                      circleOpacity: 1,
+                      circleStrokeWidth: 1.5,
+                      circleStrokeColor: '#FFFFFF',
+                      circlePitchAlignment: 'map',
+                    }}
+                  />
+                </Mapbox.ShapeSource>
               </Mapbox.MapView>
 
               <View style={[styles.zoomControls]}>

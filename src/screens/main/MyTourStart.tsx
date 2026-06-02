@@ -53,9 +53,18 @@ import {
   fetchUserTourById,
   saveUserTour,
 } from '../../services/myTourService';
+import {
+  distanceMetersBetween,
+  projectPointOnPolyline,
+  splitPolylineAt,
+  type Coord,
+} from '../../utils/routeProgress';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../../Redux/store';
 import { setUserPoints } from '../../Redux/slices/authSlice';
+import NextStopBanner from '../../components/MyTourStart/NextStopBanner';
+import RecenterButton from '../../components/MyTourStart/RecenterButton';
+import ZoomControls from '../../components/MyTourStart/ZoomControls';
 
 type TourStop = {
   id: string;
@@ -129,25 +138,6 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DETAIL_CARD_WIDTH = 260;
 const DETAIL_CARD_HEIGHT = 255;
 
-const toRadians = (value: number) => (value * Math.PI) / 180;
-
-const distanceInMeters = (
-  from: [number, number],
-  to: [number, number]
-) => {
-  const earthRadius = 6371000;
-  const dLat = toRadians(to[1] - from[1]);
-  const dLon = toRadians(to[0] - from[0]);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(from[1])) *
-    Math.cos(toRadians(to[1])) *
-    Math.sin(dLon / 2) *
-    Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return earthRadius * c;
-};
-
 const getCurrentPositionAsync = async () =>
   new Promise<[number, number]>((resolve, reject) => {
     Geolocation.getCurrentPosition(
@@ -202,10 +192,10 @@ const orderStopsByNearest = (
 
   while (remaining.length > 0) {
     let nearestIndex = 0;
-    let nearestDistance = distanceInMeters(cursor, remaining[0].coordinate);
+    let nearestDistance = distanceMetersBetween(cursor, remaining[0].coordinate);
 
     for (let index = 1; index < remaining.length; index += 1) {
-      const candidateDistance = distanceInMeters(cursor, remaining[index].coordinate);
+      const candidateDistance = distanceMetersBetween(cursor, remaining[index].coordinate);
       if (candidateDistance < nearestDistance) {
         nearestDistance = candidateDistance;
         nearestIndex = index;
@@ -290,11 +280,55 @@ const pulseStyles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#1D82DD',
+    backgroundColor: '#E11D48',
   },
   iconLayer: {
     width: 35,
     height: 46,
+  },
+});
+
+// Google-Maps-style user pin: white outer ring + blue inner dot + a small
+// rotating chevron that always points in the user's direction of travel.
+const userPinStyles = StyleSheet.create({
+  outer: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
+  },
+  inner: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#1D82DD',
+  },
+  // arrowWrap sits 'above' the dot and rotates with the user's heading;
+  // its size is the rotation pivot box.
+  arrowWrap: {
+    position: 'absolute',
+    width: 30,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  // The arrow itself: a small upward-pointing triangle created with borders.
+  arrow: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderBottomWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: '#1D82DD',
   },
 });
 
@@ -340,6 +374,10 @@ const MyTourStart = () => {
     currentLocationRef.current = currentLocation;
   }, [currentLocation]);
   const [tourOrigin, setTourOrigin] = useState<[number, number] | null>(null);
+  const tourOriginRef = useRef<[number, number] | null>(null);
+  useEffect(() => {
+    tourOriginRef.current = tourOrigin;
+  }, [tourOrigin]);
   const [placeProgress, setPlaceProgress] = useState<
     Record<
       string,
@@ -366,29 +404,64 @@ const MyTourStart = () => {
   const [cardPosition, setCardPosition] = useState({ x: 24, y: 260 });
   const [, setTourActionVisible] = useState(false);
   const [, setIsPausedTour] = useState(false);
+  const leavingRef = useRef(false);
+
+  // Walking polyline cache keyed by `${fromStopId}->${toStopId}`.
+  const [legPolylines, setLegPolylines] = useState<Record<string, [number, number][]>>({});
+
+  // Active leg = last visited stop (or tour origin) → next pending stop.
+  type ActiveLeg = { key: string; from: [number, number]; to: [number, number]; toStopId: string } | null;
+  const [activeLeg, setActiveLeg] = useState<ActiveLeg>(null);
+
+  const [followMode, setFollowMode] = useState<'follow' | 'free'>('follow');
+  const [zoomLevel, setZoomLevel] = useState(12.6);
+
+  const handleZoom = useCallback((direction: 'in' | 'out') => {
+    const nextZoom =
+      direction === 'in'
+        ? Math.min(zoomLevel + 0.8, 18)
+        : Math.max(zoomLevel - 0.8, 0.8);
+    cameraRef.current?.setCamera({ zoomLevel: nextZoom, animationDuration: 450 });
+    setZoomLevel(nextZoom);
+    // Exit follow mode so the GPS-tracking effect doesn't snap zoom back to 16.
+    setFollowMode('free');
+  }, [zoomLevel]);
+  // userHeading is the GPS-reported direction (degrees, 0 = north) used to
+  // rotate the on-map user pin like Google Maps' blue arrow.
+  const [userHeading, setUserHeading] = useState<number>(0);
+
   const pendingEditSaveRef = useRef(false);
   const introPlayedRef = useRef(false);
+  const watchIdRef = useRef<number | null>(null);
   const fetchRoadSegment = useCallback(
-    async (from: [number, number], to: [number, number]): Promise<[number, number][]> => {
-      const dist = distanceInMeters(from, to);
+    async (from: [number, number], to: [number, number]): Promise<[number, number][] | null> => {
+      const dist = distanceMetersBetween(from, to);
       if (dist > ROAD_ROUTE_MAX_METERS) {
         return greatCircleArc(from, to);
       }
 
       if (!Config.MAPBOX_TOKEN) {
-        return [from, to];
+        return null;
       }
+
+      // Intra-city legs (< 50 km straight-line) avoid motorways — Lahore
+      // tour stops shouldn't route via M2/M3 when normal city roads work.
+      // Longer legs allow motorways because they're between cities.
+      const INTRACITY_THRESHOLD_METERS = 50_000;
+      const excludeMotorway = dist < INTRACITY_THRESHOLD_METERS;
 
       try {
         const { data } = await axios.get<DirectionsResponse>(
-          // driving profile follows actual roads, not hiking trails
-          `https://api.mapbox.com/directions/v5/mapbox/driving/${from[0]},${from[1]};${to[0]},${to[1]}`,
+          // driving-traffic profile follows actual roads with live traffic awareness —
+          // prefers city streets over motorways for short urban legs
+          `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${from[0]},${from[1]};${to[0]},${to[1]}`,
           {
             params: {
               access_token: Config.MAPBOX_TOKEN,
               geometries: 'geojson',
               overview: 'full',
               steps: false,
+              ...(excludeMotorway ? { exclude: 'motorway' } : {}),
             },
           }
         );
@@ -400,11 +473,11 @@ const MyTourStart = () => {
           // at `from` and end at `to` so the line meets the pin tips precisely.
           return [from, ...(routedCoordinates as [number, number][]), to];
         }
-      } catch {
-        // Fall back to straight line if API fails
+        return null;
+      } catch (error) {
+        showError('Route Unavailable', 'Could not find a route between two stops.');
+        return null;
       }
-
-      return [from, to];
     },
     []
   );
@@ -421,7 +494,7 @@ const MyTourStart = () => {
       const results = await Promise.all(
         lineStops.slice(0, -1).map(async (from, i) => {
           const to = lineStops[i + 1] as [number, number];
-          const isAir = distanceInMeters(from as [number, number], to) > ROAD_ROUTE_MAX_METERS;
+          const isAir = distanceMetersBetween(from as [number, number], to) > ROAD_ROUTE_MAX_METERS;
           const pts = isAir
             ? greatCircleArc(from as [number, number], to)
             : await fetchRoadSegment(from as [number, number], to);
@@ -434,6 +507,13 @@ const MyTourStart = () => {
       let currentRoad: [number, number][] = [];
 
       for (const { pts, isAir } of results) {
+        if (!pts) {
+          // Routing failed for this leg — break the running road chain
+          // so we don't connect across a gap with a straight line.
+          if (currentRoad.length >= 2) road.push(currentRoad);
+          currentRoad = [];
+          continue;
+        }
         if (isAir) {
           if (currentRoad.length >= 2) road.push(currentRoad);
           currentRoad = [];
@@ -527,16 +607,11 @@ const MyTourStart = () => {
             savedTour.all_places.map((item) => item.place_id)
           );
 
-          const mergedSavedPlaces = [
-            ...savedPlaces,
-            ...data.places.filter(
-              (place) => !savedPlaces.some((savedPlace) => savedPlace.id === place.id)
-            ),
-          ];
-
           nextDetails = {
             ...data,
-            places: mergedSavedPlaces,
+            // Saved tour is authoritative. Do NOT re-merge with route template
+            // places — that would resurrect places the user deliberately removed.
+            places: savedPlaces,
           };
           nextProgress = savedTour.all_places.reduce<
             Record<
@@ -563,15 +638,18 @@ const MyTourStart = () => {
           const wasCompleted = savedTour.status === 'completed';
           const shouldAutoStart = Boolean(route.params?.autoStart) && !wasCompleted;
           setTourStarted(
-            savedTour.status === 'active' ||
-            ((savedTour.status === 'paused' || savedTour.status === 'scheduled') &&
-              shouldAutoStart)
+            shouldAutoStart || savedTour.status === 'active'
           );
-          setIsPausedTour(wasPaused);
+          setIsPausedTour(wasPaused && !shouldAutoStart);
           setIsCompletedTour(wasCompleted);
           setTourId(savedTour.id);
           setStartedAt(savedTour.startedAt || null);
           setIsEdited(savedTour.isEdited || isEdited);
+          // Restore the GPS anchor so the optimized stop order remains
+          // identical to the previous session.
+          if (savedTour.tourOrigin) {
+            setTourOrigin(savedTour.tourOrigin);
+          }
         }
 
         setPlaceProgress(nextProgress);
@@ -668,6 +746,7 @@ const MyTourStart = () => {
       status: 'active',
       startedAt: startedAt || new Date().toISOString(),
       completedAt: null,
+      tourOrigin: tourOriginRef.current,
     })
       .then((savedId) => { if (savedId !== tourId) setTourId(savedId); })
       .catch(() => { });
@@ -722,15 +801,92 @@ const MyTourStart = () => {
     [placeProgress, tourStops]
   );
 
+  // Prefer the locked-in tour origin so the optimized stop order stays
+  // identical across pause/resume and restarts. Fall back to currentLocation
+  // only while waiting for the origin to be set (Step 3 effect).
   const orderingAnchor = useMemo<[number, number] | null>(
-    () => (tourStarted || visitedStopsInVisitOrder.length > 0 ? tourOrigin : currentLocation),
-    [currentLocation, tourOrigin, tourStarted, visitedStopsInVisitOrder.length]
+    () => tourOrigin ?? currentLocation,
+    [currentLocation, tourOrigin]
   );
 
-  const orderedPlaceStops = useMemo(
-    () => orderStopsByNearest(placeStops, orderingAnchor),
-    [orderingAnchor, placeStops]
-  );
+  // Cached "true" road-distance order from Mapbox Optimization API.
+  // Keyed by stop ids in current set so we don't refetch needlessly.
+  const [optimizedOrder, setOptimizedOrder] = useState<{
+    key: string;
+    ids: string[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!orderingAnchor || placeStops.length < 2) {
+      return;
+    }
+    if (!Config.MAPBOX_TOKEN) {
+      return;
+    }
+
+    const ids = placeStops.map((s) => s.id).join(',');
+    const key = `${orderingAnchor[0].toFixed(4)},${orderingAnchor[1].toFixed(4)}|${ids}`;
+    if (optimizedOrder?.key === key) {
+      return;
+    }
+
+    // Mapbox Optimization API: solves the traveling-salesman problem across
+    // all stops. Returns the best visit order by real road distance.
+    // First coordinate is the start (current location / tour origin).
+    const coords = [orderingAnchor, ...placeStops.map((s) => s.coordinate)]
+      .map((c) => `${c[0]},${c[1]}`)
+      .join(';');
+
+    let cancelled = false;
+    axios
+      .get<{ waypoints?: Array<{ waypoint_index: number }> }>(
+        `https://api.mapbox.com/optimized-trips/v1/mapbox/driving/${coords}`,
+        {
+          params: {
+            access_token: Config.MAPBOX_TOKEN,
+            source: 'first',
+            roundtrip: false,
+            overview: 'false',
+          },
+        }
+      )
+      .then(({ data }) => {
+        if (cancelled || !data.waypoints) return;
+        // waypoints[i].waypoint_index = the position in the optimized trip.
+        // Skip index 0 (the start coord) — map remaining indices back to stop ids.
+        const orderedIds = data.waypoints
+          .map((wp, originalIndex) => ({ originalIndex, order: wp.waypoint_index }))
+          .filter((entry) => entry.originalIndex > 0)
+          .sort((a, b) => a.order - b.order)
+          .map((entry) => placeStops[entry.originalIndex - 1].id);
+        setOptimizedOrder({ key, ids: orderedIds });
+      })
+      .catch(() => {
+        // Fall back silently to straight-line ordering on API failure.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orderingAnchor, placeStops, optimizedOrder]);
+
+  const orderedPlaceStops = useMemo(() => {
+    // Prefer optimized (real road distance) order when available.
+    if (optimizedOrder) {
+      const byId = new Map(placeStops.map((s) => [s.id, s]));
+      const ordered = optimizedOrder.ids
+        .map((id) => byId.get(id))
+        .filter((s): s is TourStop => Boolean(s));
+      // Append any new stops not yet in the cached optimization
+      // (rare race during edits) by straight-line fallback.
+      const missing = placeStops.filter((s) => !optimizedOrder.ids.includes(s.id));
+      if (missing.length === 0) {
+        return ordered;
+      }
+      return [...ordered, ...orderStopsByNearest(missing, orderingAnchor)];
+    }
+    return orderStopsByNearest(placeStops, orderingAnchor);
+  }, [optimizedOrder, orderingAnchor, placeStops]);
 
   const routeAnchor = useMemo<[number, number] | null>(() => {
     return (
@@ -745,17 +901,13 @@ const MyTourStart = () => {
     [orderedPlaceStops, placeProgress]
   );
 
-  const nearestPendingStop = useMemo(() => {
-    if (!currentLocation || orderedRemainingStops.length === 0) {
-      return null;
-    }
-
-    return orderedRemainingStops.reduce<TourStop>((nearest, stop) => {
-      const nearestDistance = distanceInMeters(currentLocation, nearest.coordinate);
-      const stopDistance = distanceInMeters(currentLocation, stop.coordinate);
-      return stopDistance < nearestDistance ? stop : nearest;
-    }, orderedRemainingStops[0]);
-  }, [currentLocation, orderedRemainingStops]);
+  // The active "next" stop is the first unvisited stop in the optimized
+  // tour order — NOT the straight-line closest one. Straight-line distance
+  // misleads in dense cities (e.g. Mall Road appears closer than Urdu Bazar
+  // in km even though Urdu Bazar lies along the actual driving route).
+  const nearestPendingStop = useMemo<TourStop | null>(() => {
+    return orderedRemainingStops[0] || null;
+  }, [orderedRemainingStops]);
 
   const selectedStopIsNearestPending = useMemo(() => {
     if (!selectedStop || placeProgress[selectedStop.id]?.visited) {
@@ -768,14 +920,140 @@ const MyTourStart = () => {
 
     return (
       nearestPendingStop.id === selectedStop.id ||
-      distanceInMeters(nearestPendingStop.coordinate, selectedStop.coordinate) <=
+      distanceMetersBetween(nearestPendingStop.coordinate, selectedStop.coordinate) <=
       NEAREST_STOP_TOLERANCE_METERS
     );
   }, [nearestPendingStop, placeProgress, selectedStop]);
 
   useEffect(() => {
+    if (!nearestPendingStop) {
+      setActiveLeg(null);
+      return;
+    }
+    const lastVisited = visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1];
+    const fromCoord: [number, number] | null =
+      lastVisited?.coordinate || tourOrigin || currentLocation;
+    if (!fromCoord) {
+      setActiveLeg(null);
+      return;
+    }
+    const fromId = lastVisited?.id || 'origin';
+    setActiveLeg({
+      key: `${fromId}->${nearestPendingStop.id}`,
+      from: fromCoord,
+      to: nearestPendingStop.coordinate,
+      toStopId: nearestPendingStop.id,
+    });
+  }, [visitedStopsInVisitOrder, nearestPendingStop, tourOrigin, currentLocation]);
+
+  const fetchedLegKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!activeLeg) return;
+    if (fetchedLegKeysRef.current.has(activeLeg.key)) return;
+    fetchedLegKeysRef.current.add(activeLeg.key);
+    let cancelled = false;
+    fetchRoadSegment(activeLeg.from, activeLeg.to).then((pts) => {
+      if (cancelled || !pts) return;
+      setLegPolylines((prev) => ({ ...prev, [activeLeg.key]: pts }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLeg, fetchRoadSegment]);
+
+  // Continuous GPS tracking — runs only while the tour is active.
+  useEffect(() => {
+    if (!tourStarted) {
+      if (watchIdRef.current !== null) {
+        Geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      return;
+    }
+
+    watchIdRef.current = Geolocation.watchPosition(
+      (position) => {
+        const next: [number, number] = [
+          position.coords.longitude,
+          position.coords.latitude,
+        ];
+        setCurrentLocation(next);
+
+        // GPS heading: valid range is 0..360. Many devices return -1, NaN, or
+        // null when heading is unknown (standing still or first fix). We update
+        // only on valid values; otherwise the last good heading stays in place
+        // so the arrow remains pointed where the user was last facing.
+        const heading = position.coords.heading;
+        if (typeof heading === 'number' && heading >= 0 && heading <= 360) {
+          setUserHeading(heading);
+        }
+      },
+      () => {
+        // Silently ignore transient GPS errors; keep last known location.
+      },
+      {
+        enableHighAccuracy: true,
+        distanceFilter: 0,
+        interval: 500,
+        fastestInterval: 250,
+      }
+    );
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        Geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, [tourStarted]);
+
+  useEffect(() => {
     handleCurrentLocation(false);
   }, [handleCurrentLocation]);
+
+  // Lock in the tour's GPS origin as soon as the tour is running and we
+  // have a GPS fix. The origin anchors the Mapbox Optimization API call
+  // for the entire tour lifetime (persisted to Firestore for restart).
+  useEffect(() => {
+    if (!tourStarted) return;
+    if (tourOrigin) return;
+    if (!currentLocation) return;
+    setTourOrigin(currentLocation);
+  }, [tourStarted, tourOrigin, currentLocation]);
+
+  // Follow-mode camera tracking — smoothly pan to user while tour is active.
+  // Camera stays north-up; the user pin itself rotates with GPS heading.
+  useEffect(() => {
+    if (!tourStarted || followMode !== 'follow' || !currentLocation) return;
+    cameraRef.current?.setCamera({
+      centerCoordinate: currentLocation,
+      zoomLevel: 16,
+      heading: 0,
+      animationDuration: 800,
+      animationMode: 'easeTo',
+    });
+  }, [currentLocation, followMode, tourStarted]);
+
+  // On next-stop transition, briefly frame both user and the new pending stop
+  // before resuming follow mode.
+  const previousPendingStopIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const nextId = nearestPendingStop?.id || null;
+    const prevId = previousPendingStopIdRef.current;
+    previousPendingStopIdRef.current = nextId;
+
+    if (!nextId || !prevId || nextId === prevId) return;
+    if (!currentLocation || !nearestPendingStop) return;
+
+    const lngs = [currentLocation[0], nearestPendingStop.coordinate[0]];
+    const lats = [currentLocation[1], nearestPendingStop.coordinate[1]];
+    const ne: [number, number] = [Math.max(...lngs), Math.max(...lats)];
+    const sw: [number, number] = [Math.min(...lngs), Math.min(...lats)];
+    cameraRef.current?.fitBounds(ne, sw, [200, 60, 300, 60], 1400);
+
+    const timer = setTimeout(() => setFollowMode('follow'), 1600);
+    return () => clearTimeout(timer);
+  }, [nearestPendingStop, currentLocation]);
 
 useEffect(() => {
   // Guard: Don't run if map isn't ready or we don't have location yet
@@ -783,31 +1061,37 @@ useEffect(() => {
     return;
   }
 
-  // Use a small delay to let the Infinix render the initial map tiles
-  const timer = setTimeout(() => {
+  // Two-phase intro:
+  // Phase 1 — frame the whole route (user + all remaining stops) so the
+  // user sees where they're going. Held for ~2.5s.
+  // Phase 2 — zoom in on the user's current location and hand off to
+  // follow mode for live navigation.
+  const startTimer = setTimeout(() => {
     introPlayedRef.current = true;
-    
-    cameraRef.current?.setCamera({
-      centerCoordinate: currentLocation,
-      zoomLevel: 14,
-      animationDuration: 800,
-      animationMode: 'easeTo',
-    });
 
-    // Nested timeout for the second flyTo movement
+    const stopCoords = orderedRemainingStops.map((s) => s.coordinate);
+    const allCoords: [number, number][] = [currentLocation, ...stopCoords];
+    const lngs = allCoords.map((c) => c[0]);
+    const lats = allCoords.map((c) => c[1]);
+    const ne: [number, number] = [Math.max(...lngs), Math.max(...lats)];
+    const sw: [number, number] = [Math.min(...lngs), Math.min(...lats)];
+
+    cameraRef.current?.fitBounds(ne, sw, [180, 60, 220, 60], 1400);
+
+    // Phase 2 — after the user has seen the full route, zoom in on them.
     setTimeout(() => {
       cameraRef.current?.setCamera({
-        centerCoordinate: nearestPendingStop.coordinate,
-        zoomLevel: 15.5,
-        heading: tourStarted ? 18 : 0,
-        animationDuration: 1800,
+        centerCoordinate: currentLocation,
+        zoomLevel: 16,
+        heading: 0,
+        animationDuration: 1400,
         animationMode: 'flyTo',
       });
-    }, 900);
+    }, 2500);
   }, 500);
 
-  return () => clearTimeout(timer);
-}, [currentLocation, mapReady, nearestPendingStop, tourStarted]);
+  return () => clearTimeout(startTimer);
+}, [currentLocation, mapReady, nearestPendingStop, orderedRemainingStops]);
   useEffect(() => {
     if (!cameraRef.current || !mapReady) {
       return;
@@ -1092,6 +1376,30 @@ useEffect(() => {
     }),
     [completedApproachAirSegments, completedApproachRoadSegments]
   );
+  const activeLegPolyline = useMemo<Coord[] | null>(() => {
+    if (!activeLeg) return null;
+    return legPolylines[activeLeg.key] || null;
+  }, [activeLeg, legPolylines]);
+
+  const activeLegCompletedShape = useMemo<FeatureCollection<LineString>>(() => {
+    if (!activeLegPolyline || !currentLocation) {
+      return { type: 'FeatureCollection', features: [] };
+    }
+    const projection = projectPointOnPolyline(currentLocation, activeLegPolyline);
+    const { completed } = splitPolylineAt(activeLegPolyline, projection);
+    if (completed.length < 2) {
+      return { type: 'FeatureCollection', features: [] };
+    }
+    return {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: completed },
+      }],
+    };
+  }, [activeLegPolyline, currentLocation]);
+
   // Stop name labels (native SymbolLayer — renders at every zoom level reliably)
   const unvisitedStopLabels = useMemo<FeatureCollection<Point>>(() => ({
     type: 'FeatureCollection',
@@ -1122,7 +1430,7 @@ useEffect(() => {
       : orderedPlaceStops;
     const features = stops.slice(0, -1).map((stop, index) => {
       const next = stops[index + 1];
-      const dist = distanceInMeters(stop.coordinate, next.coordinate);
+      const dist = distanceMetersBetween(stop.coordinate, next.coordinate);
       const label = dist >= 1000
         ? `${(dist / 1000).toFixed(1)} km`
         : `${Math.round(dist)} m`;
@@ -1161,7 +1469,7 @@ useEffect(() => {
     const meters = allCoords
       .slice(1)
       .reduce((sum: number, coord: [number, number], i: number) =>
-        sum + distanceInMeters(allCoords[i], coord), 0);
+        sum + distanceMetersBetween(allCoords[i], coord), 0);
     return meters / 1000;
   }, [airSegments, completedAirSegments, completedRoadSegments, roadSegments]);
 
@@ -1297,6 +1605,7 @@ useEffect(() => {
         status,
         startedAt: nextStartedAt || new Date().toISOString(),
         completedAt: status === 'completed' ? new Date().toISOString() : null,
+        tourOrigin: tourOriginRef.current,
       });
       tourIdRef.current = savedId;
       setTourId(savedId);
@@ -1304,11 +1613,36 @@ useEffect(() => {
     },
     [isEdited, route.params?.tourName, routeDetails, tourStops, tourId, user?.email, user?.id, user?.name]
   );
+  const pauseTourState = useCallback(async () => {
+    if (leavingRef.current || isCompletedTour) {
+      return tourId || null;
+    }
+
+    leavingRef.current = true;
+    setTourStarted(false);
+    setIsPausedTour(true);
+    setSelectedStop(null);
+    setSelectedEvent(null);
+    const savedId = await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => null);
+    showInfo('Tour Paused', 'You can resume this tour anytime.');
+    return savedId || tourId || null;
+  }, [isCompletedTour, persistTourIfNeeded, placeProgress, startedAt, tourId]);
+
+  // Expose tour-active state to the TabNavigator so it can intercept any
+  // tab press while a tour is running. Reading route.params from the
+  // navigator level is more reliable than chasing parent listeners.
+  useEffect(() => {
+    navigation.setParams({ tourActive: tourStarted });
+  }, [navigation, tourStarted]);
+
   // Intercept back navigation when tour is active — offer pause or stay
   useEffect(() => {
     if (!tourStarted) return;
 
     const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
+      if (leavingRef.current) {
+        return;
+      }
       e.preventDefault();
       Alert.alert(
         'Leave Tour?',
@@ -1318,12 +1652,7 @@ useEffect(() => {
           {
             text: 'Pause & Leave',
             onPress: async () => {
-              setTourStarted(false);
-              setIsPausedTour(true);
-              setSelectedStop(null);
-              setSelectedEvent(null);
-              await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => { });
-              showInfo('Tour Paused', 'You can resume this tour anytime.');
+              await pauseTourState();
               navigation.dispatch(e.data.action);
             },
           },
@@ -1332,7 +1661,32 @@ useEffect(() => {
     });
 
     return unsubscribe;
-  }, [navigation, tourStarted, persistTourIfNeeded, placeProgress, startedAt]);
+  }, [navigation, pauseTourState, tourStarted]);
+
+  // Tab-press interception happens in TabNavigator (more reliable than
+  // chasing parent listeners). When the user chooses "Pause & Leave" in
+  // that alert, TabNavigator re-navigates here with `pauseAndLeave` set;
+  // we react to that param and persist the paused state.
+  useEffect(() => {
+    if (!tourStarted) {
+      leavingRef.current = false;
+      return;
+    }
+    const pauseAndLeave = route.params?.pauseAndLeave;
+    if (!pauseAndLeave) return;
+
+    pauseTourState().then((savedId) => {
+      navigation.setParams({ pauseAndLeave: undefined });
+      navigation.navigate('MyTour', {
+        tourUpdate: {
+          tourId: savedId || tourId || undefined,
+          routeId: routeId,
+          status: 'paused',
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    });
+  }, [navigation, pauseTourState, route.params?.pauseAndLeave, routeId, tourId, tourStarted]);
 
   const handleStopFavorite = async (place: FirebasePlace) => {
     if (isFavorite(place.id)) {
@@ -1395,12 +1749,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
     if (isCompletedTour) {
       return;
     }
-    setTourStarted(false);
-    setIsPausedTour(true);
-    setSelectedStop(null);
-    setSelectedEvent(null);
-    const savedId = await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => null);
-    showInfo('Tour Paused', 'You can resume this tour anytime.');
+    const savedId = await pauseTourState();
     navigation.navigate('MyTour', {
       tourUpdate: {
         tourId: savedId || tourId || undefined,
@@ -1422,24 +1771,23 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
         ? currentLocation || selectedStop.coordinate
         : await getCurrentPositionAsync();
 
-      const nearestStopFromCurrentLocation = orderStopsByNearest(
-        placeStops.filter((stop) => !placeProgress[stop.id]?.visited),
-        coords
-      )[0];
+      // Gate confirmation by the SAME ordering used everywhere else
+      // (optimized road-distance order). Straight-line nearest gives a
+      // different answer in cities and confuses the user — e.g. the beep
+      // fires at Urdu Bazar but a straight-line check insists Mall Road
+      // is "nearer" because km distance is smaller.
+      const expectedNextStop = orderedRemainingStops[0];
 
-      if (
-        nearestStopFromCurrentLocation &&
-        nearestStopFromCurrentLocation.id !== selectedStop.id
-      ) {
+      if (expectedNextStop && expectedNextStop.id !== selectedStop.id) {
         showInfo(
-          'Nearest Stop Required',
-          `You can only confirm the nearest location first: ${nearestStopFromCurrentLocation.title}.`
+          'Next Stop First',
+          `Please confirm your next stop in route order first: ${expectedNextStop.title}.`
         );
         return false;
       }
 
       if (!ALLOW_ANY_IMAGE_FOR_TESTING) {
-        const distance = distanceInMeters(coords, selectedStop.coordinate);
+        const distance = distanceMetersBetween(coords, selectedStop.coordinate);
 
         if (distance > VISIT_DISTANCE_THRESHOLD_METERS) {
           showError(
@@ -1568,6 +1916,11 @@ return (
                   updateSelectedStopPosition(selectedStop).catch(() => { });
                 }
               }}
+              onRegionDidChange={(feature: any) => {
+                if (feature?.properties?.isUserInteraction && followMode === 'follow') {
+                  setFollowMode('free');
+                }
+              }}
               onPress={() => {
                 setSelectedStop(null);
                 setSelectedEvent(null);
@@ -1602,6 +1955,10 @@ return (
                   <Mapbox.LineLayer id="tourRouteLineLayer" style={routeLineLayerStyle} />
                 </Mapbox.ShapeSource>
               )}
+
+              <Mapbox.ShapeSource id="activeLegCompletedLine" shape={activeLegCompletedShape}>
+                <Mapbox.LineLayer id="activeLegCompletedLineLayer" style={completedRouteLineLayerStyle} />
+              </Mapbox.ShapeSource>
 
               {distanceLabels.features.length > 0 && (
                 <Mapbox.ShapeSource id="distanceLabels" shape={distanceLabels}>
@@ -1670,9 +2027,20 @@ return (
                 <Mapbox.MarkerView
                   id="currentUserLocationMarker"
                   coordinate={[...currentLocation]}
-                  anchor={{ x: 0.5, y: 1 }}
+                  anchor={{ x: 0.5, y: 0.5 }}
                 >
-                  <GrayMapIcon width={35} height={46} />
+                  <View style={userPinStyles.outer}>
+                    <View style={userPinStyles.inner} />
+                    <View
+                      style={[
+                        userPinStyles.arrowWrap,
+                        { transform: [{ rotate: `${userHeading}deg` }] },
+                      ]}
+                      pointerEvents="none"
+                    >
+                      <View style={userPinStyles.arrow} />
+                    </View>
+                  </View>
                 </Mapbox.MarkerView>
               ) : null}
             </Mapbox.MapView>
@@ -1684,6 +2052,35 @@ return (
             </View>
           )}
         </View>
+
+        {tourStarted && nearestPendingStop && currentLocation ? (
+          <NextStopBanner
+            stopName={nearestPendingStop.title}
+            distanceMeters={distanceMetersBetween(currentLocation, nearestPendingStop.coordinate)}
+          />
+        ) : null}
+
+        {tourStarted ? (
+          <RecenterButton
+            active={followMode === 'free'}
+            onPress={() => {
+              if (currentLocation) {
+                cameraRef.current?.setCamera({
+                  centerCoordinate: currentLocation,
+                  zoomLevel: 16,
+                  animationDuration: 700,
+                  animationMode: 'easeTo',
+                });
+              }
+              setFollowMode('follow');
+            }}
+          />
+        ) : null}
+
+        <ZoomControls
+          onZoomIn={() => handleZoom('in')}
+          onZoomOut={() => handleZoom('out')}
+        />
 
         <View style={styles.distancePill}>
           <Text style={styles.distancePillText}>
