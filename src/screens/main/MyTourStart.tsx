@@ -1,18 +1,15 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
-  Alert,
   Animated,
   View,
   Text,
   StyleSheet,
-  Image,
   TouchableOpacity,
-  Platform,
-  PermissionsAndroid,
   ActivityIndicator,
   Dimensions,
   ImageBackground,
 } from 'react-native';
+import { CustomAlert } from '../../utils/CustomAlert';
 import Mapbox, {
   type LineLayerStyle,
   type SymbolLayerStyle,
@@ -36,7 +33,10 @@ import {
   GrayMapIcon,
   WhiteHeart,
   WhiteFork,
+  PrideEvent,
+  PodcastEvent,
 } from '../../constants/icons';
+import { isPodcastEvent } from '../../utils/eventHelpers';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import ScanVerifyModal from '../../components/modals/ScanVerifyModal';
@@ -45,14 +45,19 @@ import EventDetailModal from '../../components/modals/EventDetailModal';
 import {
   addUserVisitPoints,
   deleteUserTour,
+  fetchEventsByIds,
   fetchPlacesByIds,
   fetchRouteDetails,
   FirebaseEvent,
   FirebasePlace,
   FirebaseRoute,
   fetchUserTourById,
+  recordTourFavoritedPlace,
   saveUserTour,
+  sortPlacesByIdOrder,
+  removeTourPlaceFromUserAndRecord,
 } from '../../services/myTourService';
+import { scheduleStopsWithEventTiming } from '../../utils/tourRouteScheduling';
 import {
   distanceMetersBetween,
   projectPointOnPolyline,
@@ -71,6 +76,10 @@ type TourStop = {
   title: string;
   coordinate: [number, number];
   place?: FirebasePlace;
+  event?: FirebaseEvent;
+  kind?: 'place' | 'event';
+  eventStatus?: 'active' | 'expired';
+  sortTime?: number;
 };
 
 type DirectionsResponse = {
@@ -178,6 +187,99 @@ const greatCircleArc = (
   return pts;
 };
 
+const startOfCalendarDay = (date: Date) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const endOfCalendarDay = (date: Date) => {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+};
+
+const isSameCalendarDay = (a: Date, b: Date) =>
+  startOfCalendarDay(a).getTime() === startOfCalendarDay(b).getTime();
+
+/** True when the event occurs on the given calendar day (supports multi-day events). */
+const isEventScheduledOnDay = (event: FirebaseEvent, day: Date): boolean => {
+  if (!event.startDate) {
+    return false;
+  }
+
+  const dayStart = startOfCalendarDay(day);
+  const dayEnd = endOfCalendarDay(day);
+  const eventStart = startOfCalendarDay(new Date(event.startDate));
+  const eventEnd = event.endDate
+    ? endOfCalendarDay(new Date(event.endDate))
+    : endOfCalendarDay(new Date(event.startDate));
+
+  return eventStart <= dayEnd && eventEnd >= dayStart;
+};
+
+const isEventInPast = (event: FirebaseEvent, today: Date): boolean => {
+  if (event.endDate) {
+    return endOfCalendarDay(new Date(event.endDate)) < startOfCalendarDay(today);
+  }
+  if (event.startDate) {
+    return endOfCalendarDay(new Date(event.startDate)) < startOfCalendarDay(today);
+  }
+  return false;
+};
+
+const parseEventSortTime = (event: FirebaseEvent): number => {
+  if (!event.startDate) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  const dateTime = `${event.startDate}T${event.startTime || '00:00'}`;
+  const parsed = new Date(dateTime).getTime();
+  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+};
+
+const getEventEndDateTime = (event: FirebaseEvent): Date | null => {
+  if (event.endDate) {
+    const parsed = new Date(`${event.endDate}T${event.endTime || '23:59'}`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  if (event.startDate && event.startTime) {
+    const start = new Date(`${event.startDate}T${event.startTime}`);
+    if (!Number.isNaN(start.getTime())) {
+      const end = new Date(start);
+      end.setHours(end.getHours() + 2);
+      return end;
+    }
+  }
+  if (event.startDate) {
+    return endOfCalendarDay(new Date(event.startDate));
+  }
+  return null;
+};
+
+const isEventTimeExpired = (event: FirebaseEvent, now = new Date()): boolean => {
+  if (!isEventScheduledOnDay(event, now)) {
+    return false;
+  }
+  const end = getEventEndDateTime(event);
+  return Boolean(end && now > end);
+};
+
+const eventToTourStop = (
+  event: FirebaseEvent,
+  status: 'active' | 'expired'
+): TourStop => ({
+  id: event.id,
+  title: event.title,
+  coordinate: [
+    Number(event.coordinates?.longitude || 0),
+    Number(event.coordinates?.latitude || 0),
+  ] as [number, number],
+  event,
+  kind: 'event',
+  eventStatus: status,
+  sortTime: parseEventSortTime(event),
+});
+
 const orderStopsByNearest = (
   stops: TourStop[],
   startCoordinate: [number, number] | null
@@ -209,6 +311,24 @@ const orderStopsByNearest = (
 
   return ordered;
 };
+
+const EventMarkerIcon = ({
+  event,
+  size = 28,
+}: {
+  event: FirebaseEvent;
+  size?: number;
+}) =>
+  isPodcastEvent(event) ? (
+    <PodcastEvent width={size} height={size} />
+  ) : (
+    <PrideEvent width={size} height={size} />
+  );
+
+const eventMarkerColors = (event: FirebaseEvent) =>
+  isPodcastEvent(event)
+    ? { backgroundColor: '#1B84FF', shadowColor: '#0B5ED7' }
+    : { backgroundColor: '#7C3AED', shadowColor: '#5B21B6' };
 
 const PulsingPin = () => {
   const scale = useRef(new Animated.Value(0)).current;
@@ -378,6 +498,7 @@ const MyTourStart = () => {
   useEffect(() => {
     tourOriginRef.current = tourOrigin;
   }, [tourOrigin]);
+  const [savedTourOrder, setSavedTourOrder] = useState<string[] | null>(null);
   const [placeProgress, setPlaceProgress] = useState<
     Record<
       string,
@@ -390,6 +511,19 @@ const MyTourStart = () => {
       }
     >
   >({});
+  const [eventProgress, setEventProgress] = useState<
+    Record<
+      string,
+      {
+        attended?: boolean;
+        dismissed?: boolean;
+        expired?: boolean;
+        visitedAt?: string | null;
+        proofImageUri?: string | null;
+      }
+    >
+  >({});
+  const [scanForEvent, setScanForEvent] = useState(false);
   const [routeDetails, setRouteDetails] = useState<{
     route: FirebaseRoute;
     places: FirebasePlace[];
@@ -403,7 +537,7 @@ const MyTourStart = () => {
   const [isCompletedTour, setIsCompletedTour] = useState(false);
   const [cardPosition, setCardPosition] = useState({ x: 24, y: 260 });
   const [, setTourActionVisible] = useState(false);
-  const [, setIsPausedTour] = useState(false);
+  const [isPausedTour, setIsPausedTour] = useState(false);
   const leavingRef = useRef(false);
 
   // Walking polyline cache keyed by `${fromStopId}->${toStopId}`.
@@ -583,7 +717,7 @@ const MyTourStart = () => {
         extraPlaceIds,
         removedPlaceIds,
       }),
-      fetchUserTourById(route.params?.tourId || null),
+      fetchUserTourById(route.params?.tourId || tourId || null),
     ])
       .then(async ([data, savedTour]) => {
         if (!data) {
@@ -603,15 +737,21 @@ const MyTourStart = () => {
         > = {};
 
         if (savedTour) {
-          const savedPlaces = await fetchPlacesByIds(
-            savedTour.all_places.map((item) => item.place_id)
+          const placeIdsInOrder = [...savedTour.all_places]
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .map((item) => item.place_id);
+          const savedPlaces = sortPlacesByIdOrder(
+            await fetchPlacesByIds(placeIdsInOrder),
+            placeIdsInOrder
           );
+          const savedEvents = await fetchEventsByIds(savedTour.event_ids || []);
 
           nextDetails = {
             ...data,
             // Saved tour is authoritative. Do NOT re-merge with route template
             // places — that would resurrect places the user deliberately removed.
             places: savedPlaces,
+            events: savedEvents,
           };
           nextProgress = savedTour.all_places.reduce<
             Record<
@@ -653,6 +793,14 @@ const MyTourStart = () => {
         }
 
         setPlaceProgress(nextProgress);
+        // Restore persisted per-event progress (attended/dismissed) if present
+        const nextEventProgress: Record<string, {
+          attended?: boolean;
+          dismissed?: boolean;
+          visitedAt?: string | null;
+          proofImageUri?: string | null;
+        }> = (savedTour?.event_progress as any) || {};
+        setEventProgress(nextEventProgress);
         setRouteDetails(nextDetails);
 
         // Strictly exclude any place whose ID also exists as an event
@@ -678,9 +826,12 @@ const MyTourStart = () => {
           }));
 
         setTourStops(stops);
+        if (savedTour) {
+          setSavedTourOrder(stops.map((stop) => stop.id));
+        }
       })
       .finally(() => setLoading(false));
-  }, [extraPlaceIds, isEdited, removedPlaceIds, route.params?.autoStart, route.params?.tourId, routeId, user?.id]);
+  }, [route.params?.autoStart, route.params?.tourId, routeId, tourId, user?.id]);
 
   useEffect(() => {
     const addedPlaceId = route.params?.addedPlaceId;
@@ -719,87 +870,145 @@ const MyTourStart = () => {
         [addedPlace.id]: { ...prev[addedPlace.id], visited: Boolean(prev[addedPlace.id]?.visited), addedByUser: true },
       }));
       setIsEdited(true);
+      setSavedTourOrder(null);
+      setOptimizedOrder(null);
       pendingEditSaveRef.current = true;
     });
   }, [route.params?.addedPlaceId]);
 
-  // Persist to Firestore after tourStops updates from AddLocations
-  useEffect(() => {
-    if (!pendingEditSaveRef.current || !routeDetails || !user?.id) return;
-    pendingEditSaveRef.current = false;
-
-    const allPlaceStops = tourStops.map((s) => s.place!).filter(Boolean);
-    if (allPlaceStops.length === 0) return;
-
-    saveUserTour({
-      tourId,
-      userId: user.id,
-      userName: user.name || '',
-      userEmail: user.email || '',
-      route: routeDetails.route,
-      title: route.params?.tourName || routeDetails.route.name,
-      places: allPlaceStops,
-      events: routeDetails.events,
-      placeProgress,
-      currentStopIndex: 0,
-      isEdited: true,
-      status: 'active',
-      startedAt: startedAt || new Date().toISOString(),
-      completedAt: null,
-      tourOrigin: tourOriginRef.current,
-    })
-      .then((savedId) => { if (savedId !== tourId) setTourId(savedId); })
-      .catch(() => { });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tourStops]);
-
   const placeStops = useMemo(() => tourStops, [tourStops]);
 
-  const eventStops = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  const hasVisitedProgress = useMemo(
+    () => Object.values(placeProgress).some((item) => item.visited),
+    [placeProgress]
+  );
 
-    return (routeDetails?.events || [])
-      .filter((event) => {
-        // Hide events whose end date (or start date if no end date) has passed
-        if (event.endDate) {
-          const end = new Date(event.endDate);
-          end.setHours(23, 59, 59, 999);
-          return end >= today;
-        }
-        if (event.startDate) {
-          const start = new Date(event.startDate);
-          return start >= today;
-        }
-        return true; // No date = always show
-      })
+  const isStopComplete = useCallback(
+    (stop: TourStop) => {
+      if (stop.kind === 'event' || stop.event) {
+        const progress = eventProgress[stop.id];
+        return Boolean(progress?.attended || progress?.expired);
+      }
+      return Boolean(placeProgress[stop.id]?.visited);
+    },
+    [eventProgress, placeProgress]
+  );
+
+  const { activeTodayEventStops, expiredTodayEventStops } = useMemo(() => {
+    const today = new Date();
+    const active: TourStop[] = [];
+    const expired: TourStop[] = [];
+
+    (routeDetails?.events || [])
+      .filter((event) => !isEventInPast(event, today))
+      .filter((event) => isEventScheduledOnDay(event, today))
       .filter(
         (event) =>
           event.coordinates?.longitude !== undefined &&
           event.coordinates?.latitude !== undefined
       )
-      .map((event) => ({
-        id: event.id,
-        title: event.title,
-        coordinate: [
-          Number(event.coordinates?.longitude || 0),
-          Number(event.coordinates?.latitude || 0),
-        ] as [number, number],
-        event,
-      }));
-  }, [routeDetails?.events]);
+      .forEach((event) => {
+        const progress = eventProgress[event.id];
+        if (progress?.attended) {
+          return;
+        }
+        if (progress?.dismissed && progress.visitedAt) {
+          if (isSameCalendarDay(new Date(progress.visitedAt), today)) {
+            return;
+          }
+        }
 
-  const visitedStopsInVisitOrder = useMemo(
-    () =>
-      tourStops
+        const timedOut = Boolean(progress?.expired || isEventTimeExpired(event, today));
+        if (timedOut) {
+          expired.push(eventToTourStop(event, 'expired'));
+        } else {
+          active.push(eventToTourStop(event, 'active'));
+        }
+      });
+
+    const byTime = (a: TourStop, b: TourStop) =>
+      (a.sortTime || 0) - (b.sortTime || 0);
+
+    return {
+      activeTodayEventStops: active.sort(byTime),
+      expiredTodayEventStops: expired.sort(byTime),
+    };
+  }, [eventProgress, routeDetails?.events]);
+
+  /** Places only — Mapbox optimizes driving order without pulling events forward. */
+  const routePlaceStops = useMemo(() => placeStops, [placeStops]);
+
+  const allRouteStops = useMemo(() => {
+    if (!tourStarted) {
+      return routePlaceStops;
+    }
+    return [...activeTodayEventStops, ...routePlaceStops];
+  }, [activeTodayEventStops, routePlaceStops, tourStarted]);
+
+  useEffect(() => {
+    if (!tourStarted || !routeDetails?.events?.length) {
+      return;
+    }
+
+    const markExpired = () => {
+      const now = new Date();
+      setEventProgress((prev) => {
+        let changed = false;
+        const next = { ...prev };
+
+        routeDetails.events.forEach((event) => {
+          if (!isEventScheduledOnDay(event, now)) {
+            return;
+          }
+          if (
+            isEventTimeExpired(event, now) &&
+            !next[event.id]?.attended &&
+            !next[event.id]?.expired
+          ) {
+            next[event.id] = {
+              ...next[event.id],
+              expired: true,
+              visitedAt: now.toISOString(),
+            };
+            changed = true;
+          }
+        });
+
+        return changed ? next : prev;
+      });
+    };
+
+    markExpired();
+    const timer = setInterval(markExpired, 60_000);
+    return () => clearInterval(timer);
+  }, [routeDetails?.events, tourStarted]);
+
+  const visitedStopsInVisitOrder = useMemo(() => {
+    const eventStops = [...activeTodayEventStops, ...expiredTodayEventStops];
+    const visitedPlaces = tourStops
         .filter((stop) => Boolean(placeProgress[stop.id]?.visited))
-        .sort((a, b) => {
-          const aTime = placeProgress[a.id]?.visitedAt || '';
-          const bTime = placeProgress[b.id]?.visitedAt || '';
-          return aTime.localeCompare(bTime);
-        }),
-    [placeProgress, tourStops]
-  );
+      .map((stop) => ({
+        stop,
+        visitedAt: placeProgress[stop.id]?.visitedAt || '',
+      }));
+    const visitedEvents = eventStops
+      .filter((stop) => isStopComplete(stop))
+      .map((stop) => ({
+        stop,
+        visitedAt: eventProgress[stop.id]?.visitedAt || '',
+      }));
+
+    return [...visitedPlaces, ...visitedEvents]
+      .sort((a, b) => a.visitedAt.localeCompare(b.visitedAt))
+      .map((item) => item.stop);
+  }, [
+    activeTodayEventStops,
+    eventProgress,
+    expiredTodayEventStops,
+    isStopComplete,
+    placeProgress,
+    tourStops,
+  ]);
 
   // Prefer the locked-in tour origin so the optimized stop order stays
   // identical across pause/resume and restarts. Fall back to currentLocation
@@ -817,23 +1026,23 @@ const MyTourStart = () => {
   } | null>(null);
 
   useEffect(() => {
-    if (!orderingAnchor || placeStops.length < 2) {
+    if (savedTourOrder) {
+      return;
+    }
+    if (!orderingAnchor || routePlaceStops.length < 2) {
       return;
     }
     if (!Config.MAPBOX_TOKEN) {
       return;
     }
 
-    const ids = placeStops.map((s) => s.id).join(',');
+    const ids = routePlaceStops.map((s) => s.id).join(',');
     const key = `${orderingAnchor[0].toFixed(4)},${orderingAnchor[1].toFixed(4)}|${ids}`;
     if (optimizedOrder?.key === key) {
       return;
     }
 
-    // Mapbox Optimization API: solves the traveling-salesman problem across
-    // all stops. Returns the best visit order by real road distance.
-    // First coordinate is the start (current location / tour origin).
-    const coords = [orderingAnchor, ...placeStops.map((s) => s.coordinate)]
+    const coords = [orderingAnchor, ...routePlaceStops.map((s) => s.coordinate)]
       .map((c) => `${c[0]},${c[1]}`)
       .join(';');
 
@@ -852,13 +1061,11 @@ const MyTourStart = () => {
       )
       .then(({ data }) => {
         if (cancelled || !data.waypoints) return;
-        // waypoints[i].waypoint_index = the position in the optimized trip.
-        // Skip index 0 (the start coord) — map remaining indices back to stop ids.
         const orderedIds = data.waypoints
           .map((wp, originalIndex) => ({ originalIndex, order: wp.waypoint_index }))
           .filter((entry) => entry.originalIndex > 0)
           .sort((a, b) => a.order - b.order)
-          .map((entry) => placeStops[entry.originalIndex - 1].id);
+          .map((entry) => routePlaceStops[entry.originalIndex - 1].id);
         setOptimizedOrder({ key, ids: orderedIds });
       })
       .catch(() => {
@@ -868,25 +1075,166 @@ const MyTourStart = () => {
     return () => {
       cancelled = true;
     };
-  }, [orderingAnchor, placeStops, optimizedOrder]);
+  }, [routePlaceStops, orderingAnchor, optimizedOrder]);
 
-  const orderedPlaceStops = useMemo(() => {
-    // Prefer optimized (real road distance) order when available.
+  const mapOptimizedPlaceStops = useMemo(() => {
+    if (savedTourOrder) {
+      return routePlaceStops;
+    }
+
+    if (!optimizedOrder && !orderingAnchor) {
+      return routePlaceStops;
+    }
+
+    let ordered: TourStop[];
+
     if (optimizedOrder) {
-      const byId = new Map(placeStops.map((s) => [s.id, s]));
-      const ordered = optimizedOrder.ids
+      const byId = new Map(routePlaceStops.map((s) => [s.id, s]));
+      ordered = optimizedOrder.ids
         .map((id) => byId.get(id))
         .filter((s): s is TourStop => Boolean(s));
-      // Append any new stops not yet in the cached optimization
-      // (rare race during edits) by straight-line fallback.
-      const missing = placeStops.filter((s) => !optimizedOrder.ids.includes(s.id));
-      if (missing.length === 0) {
-        return ordered;
+      const missing = routePlaceStops.filter((s) => !optimizedOrder.ids.includes(s.id));
+      if (missing.length > 0) {
+        ordered = [...ordered, ...orderStopsByNearest(missing, orderingAnchor)];
       }
-      return [...ordered, ...orderStopsByNearest(missing, orderingAnchor)];
+    } else {
+      ordered = orderStopsByNearest(routePlaceStops, orderingAnchor);
     }
-    return orderStopsByNearest(placeStops, orderingAnchor);
-  }, [optimizedOrder, orderingAnchor, placeStops]);
+
+    return ordered;
+  }, [routePlaceStops, optimizedOrder, orderingAnchor, savedTourOrder]);
+
+  const orderedNavigableStops = useMemo(() => {
+    if (!tourStarted) {
+      return mapOptimizedPlaceStops;
+    }
+
+    const anchor =
+      visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1]?.coordinate ||
+      orderingAnchor;
+
+    return scheduleStopsWithEventTiming(
+      [...mapOptimizedPlaceStops, ...activeTodayEventStops],
+      isStopComplete,
+      anchor,
+      Date.now()
+    );
+  }, [
+    activeTodayEventStops,
+    isStopComplete,
+    mapOptimizedPlaceStops,
+    orderingAnchor,
+    tourStarted,
+    visitedStopsInVisitOrder,
+  ]);
+
+  const orderedPlaceStops = orderedNavigableStops;
+
+  const orderedPlacesForSave = useMemo(
+    () =>
+      orderedNavigableStops
+        .filter((stop) => Boolean(stop.place))
+        .map((stop) => stop.place!),
+    [orderedNavigableStops]
+  );
+
+  const lastSavedOptimizedOrderKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    lastSavedOptimizedOrderKeyRef.current = null;
+  }, [tourId]);
+
+  // Persist to Firestore after tourStops updates from AddLocations
+  useEffect(() => {
+    if (!pendingEditSaveRef.current || !routeDetails || !user?.id) return;
+    pendingEditSaveRef.current = false;
+
+    const placesToSave =
+      orderedPlacesForSave.length > 0
+        ? orderedPlacesForSave
+        : tourStops.map((s) => s.place!).filter(Boolean);
+    if (placesToSave.length === 0) return;
+
+    saveUserTour({
+      tourId,
+      userId: user.id,
+      userName: user.name || '',
+      userEmail: user.email || '',
+      route: routeDetails.route,
+      title: route.params?.tourName || routeDetails.route.name,
+      places: placesToSave,
+      events: routeDetails.events,
+      placeProgress,
+      eventProgress,
+      currentStopIndex: 0,
+      isEdited: true,
+      status: 'active',
+      startedAt: startedAt || new Date().toISOString(),
+      completedAt: null,
+      tourOrigin: tourOriginRef.current,
+    })
+      .then((savedId) => { if (savedId !== tourId) setTourId(savedId); })
+      .catch(() => { });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tourStops, orderedPlacesForSave]);
+
+  // Keep Firebase all_places order aligned with the optimized map route.
+  useEffect(() => {
+    if (!optimizedOrder || !tourId || !routeDetails || !user?.id) {
+      return;
+    }
+    if (lastSavedOptimizedOrderKeyRef.current === optimizedOrder.key) {
+      return;
+    }
+    if (orderedPlacesForSave.length < 2) {
+      return;
+    }
+
+    lastSavedOptimizedOrderKeyRef.current = optimizedOrder.key;
+    const nextCurrentStopIndex = orderedPlacesForSave.findIndex(
+      (place) => !placeProgress[place.id]?.visited
+    );
+
+    saveUserTour({
+      tourId,
+      userId: user.id,
+      userName: user.name || '',
+      userEmail: user.email || '',
+      route: routeDetails.route,
+      title: route.params?.tourName || routeDetails.route.name,
+      places: orderedPlacesForSave,
+      events: routeDetails.events,
+      placeProgress,
+      eventProgress,
+      currentStopIndex:
+        nextCurrentStopIndex < 0 ? orderedPlacesForSave.length : nextCurrentStopIndex,
+      isEdited,
+      status: isCompletedTour
+        ? 'completed'
+        : isPausedTour
+          ? 'paused'
+          : tourStarted
+            ? 'active'
+            : 'saved',
+      startedAt: startedAt || new Date().toISOString(),
+      completedAt: isCompletedTour ? new Date().toISOString() : null,
+      tourOrigin: tourOriginRef.current,
+    }).catch(() => { });
+  }, [
+    isCompletedTour,
+    isEdited,
+    isPausedTour,
+    optimizedOrder?.key,
+    orderedPlacesForSave,
+    route.params?.tourName,
+    routeDetails,
+    startedAt,
+    tourId,
+    tourStarted,
+    user?.email,
+    user?.id,
+    user?.name,
+  ]);
 
   const routeAnchor = useMemo<[number, number] | null>(() => {
     return (
@@ -897,8 +1245,8 @@ const MyTourStart = () => {
   }, [currentLocation, visitedStopsInVisitOrder]);
 
   const orderedRemainingStops = useMemo(
-    () => orderedPlaceStops.filter((stop) => !placeProgress[stop.id]?.visited),
-    [orderedPlaceStops, placeProgress]
+    () => orderedNavigableStops.filter((stop) => !isStopComplete(stop)),
+    [isStopComplete, orderedNavigableStops]
   );
 
   // The active "next" stop is the first unvisited stop in the optimized
@@ -906,11 +1254,14 @@ const MyTourStart = () => {
   // misleads in dense cities (e.g. Mall Road appears closer than Urdu Bazar
   // in km even though Urdu Bazar lies along the actual driving route).
   const nearestPendingStop = useMemo<TourStop | null>(() => {
+    if (tourStarted && !optimizedOrder && !orderingAnchor) {
+      return null;
+    }
     return orderedRemainingStops[0] || null;
-  }, [orderedRemainingStops]);
+  }, [optimizedOrder, orderingAnchor, orderedRemainingStops, tourStarted]);
 
   const selectedStopIsNearestPending = useMemo(() => {
-    if (!selectedStop || placeProgress[selectedStop.id]?.visited) {
+    if (!selectedStop || isStopComplete(selectedStop)) {
       return false;
     }
 
@@ -923,7 +1274,7 @@ const MyTourStart = () => {
       distanceMetersBetween(nearestPendingStop.coordinate, selectedStop.coordinate) <=
       NEAREST_STOP_TOLERANCE_METERS
     );
-  }, [nearestPendingStop, placeProgress, selectedStop]);
+  }, [isStopComplete, nearestPendingStop, selectedStop]);
 
   useEffect(() => {
     if (!nearestPendingStop) {
@@ -961,14 +1312,11 @@ const MyTourStart = () => {
     };
   }, [activeLeg, fetchRoadSegment]);
 
-  // Continuous GPS tracking — runs only while the tour is active.
+  // Continuous GPS tracking — runs while the screen is mounted.
   useEffect(() => {
-    if (!tourStarted) {
-      if (watchIdRef.current !== null) {
-        Geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-      return;
+    if (watchIdRef.current !== null) {
+      Geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
     }
 
     watchIdRef.current = Geolocation.watchPosition(
@@ -979,10 +1327,6 @@ const MyTourStart = () => {
         ];
         setCurrentLocation(next);
 
-        // GPS heading: valid range is 0..360. Many devices return -1, NaN, or
-        // null when heading is unknown (standing still or first fix). We update
-        // only on valid values; otherwise the last good heading stays in place
-        // so the arrow remains pointed where the user was last facing.
         const heading = position.coords.heading;
         if (typeof heading === 'number' && heading >= 0 && heading <= 360) {
           setUserHeading(heading);
@@ -993,7 +1337,9 @@ const MyTourStart = () => {
       },
       {
         enableHighAccuracy: true,
-        distanceFilter: 0,
+        distanceFilter: 1,
+        maximumAge: 1000,
+        timeout: 5000,
         interval: 500,
         fastestInterval: 250,
       }
@@ -1005,11 +1351,7 @@ const MyTourStart = () => {
         watchIdRef.current = null;
       }
     };
-  }, [tourStarted]);
-
-  useEffect(() => {
-    handleCurrentLocation(false);
-  }, [handleCurrentLocation]);
+  }, []);
 
   // Lock in the tour's GPS origin as soon as the tour is running and we
   // have a GPS fix. The origin anchors the Mapbox Optimization API call
@@ -1025,14 +1367,18 @@ const MyTourStart = () => {
   // Camera stays north-up; the user pin itself rotates with GPS heading.
   useEffect(() => {
     if (!tourStarted || followMode !== 'follow' || !currentLocation) return;
+    const heading =
+      typeof userHeading === 'number' && userHeading >= 0 && userHeading <= 360
+        ? userHeading
+        : 0;
     cameraRef.current?.setCamera({
       centerCoordinate: currentLocation,
       zoomLevel: 16,
-      heading: 0,
+      heading,
       animationDuration: 800,
       animationMode: 'easeTo',
     });
-  }, [currentLocation, followMode, tourStarted]);
+  }, [currentLocation, followMode, tourStarted, userHeading]);
 
   // On next-stop transition, briefly frame both user and the new pending stop
   // before resuming follow mode.
@@ -1146,29 +1492,18 @@ useEffect(() => {
       return;
     }
 
-    // Route line ONLY connects places — events are informational markers only
+    // Route line connects today's events and locations in optimized order.
     const navigablePlaceStops =
       (tourStarted || hasVisitedProgress) && orderedRemainingStops.length > 0
         ? orderedRemainingStops
         : orderedPlaceStops;
-
-    // Second guard: exclude any coordinate that matches an event stop coordinate
-    const eventCoordKeys = new Set(
-      eventStops.map((s) => `${s.coordinate[0].toFixed(6)},${s.coordinate[1].toFixed(6)}`)
-    );
-    const filteredPlaceCoords = navigablePlaceStops
-      .filter((stop) => {
-        const key = `${stop.coordinate[0].toFixed(6)},${stop.coordinate[1].toFixed(6)}`;
-        return !eventCoordKeys.has(key);
-      })
-      .map((stop) => stop.coordinate);
 
     const routeStartCoordinate =
       ((tourStarted || hasVisitedProgress) ? routeAnchor : currentLocation) || null;
 
     const lineStops = [
       ...(routeStartCoordinate ? [routeStartCoordinate] : []),
-      ...filteredPlaceCoords,
+      ...navigablePlaceStops.map((stop) => stop.coordinate),
     ];
 
     if (lineStops.length < 2) {
@@ -1201,7 +1536,7 @@ useEffect(() => {
     return () => {
       isMounted = false;
     };
-  }, [buildRouteSegments, currentLocation, eventStops, hasVisitedProgress, orderedPlaceStops, orderedRemainingStops, routeAnchor, tourStarted]);
+  }, [buildRouteSegments, currentLocation, hasVisitedProgress, orderedPlaceStops, orderedRemainingStops, routeAnchor, tourStarted]);
 
   useEffect(() => {
     const completedStops = [
@@ -1473,11 +1808,6 @@ useEffect(() => {
     return meters / 1000;
   }, [airSegments, completedAirSegments, completedRoadSegments, roadSegments]);
 
-  const hasVisitedProgress = useMemo(
-    () => Object.values(placeProgress).some((item) => item.visited),
-    [placeProgress]
-  );
-
   const currentMarkerNeedsStandalonePin = useMemo(
     () => Boolean(currentLocation),
     [currentLocation]
@@ -1515,6 +1845,13 @@ useEffect(() => {
         animationDuration: 900,
         animationMode: 'flyTo',
       });
+
+      if (stop.event) {
+        setSelectedStop(null);
+        setSelectedEvent(stop.event);
+        return;
+      }
+
       setSelectedEvent(null);
       setSelectedStop(stop);
       await updateSelectedStopPosition(stop);
@@ -1522,7 +1859,8 @@ useEffect(() => {
     [updateSelectedStopPosition]
   );
 
-  const handleEventMarkerPress = useCallback((event: FirebaseEvent) => {
+  const handleEventMarkerPress = useCallback(
+    (event: FirebaseEvent) => {
     if (
       event.coordinates?.longitude === undefined ||
       event.coordinates?.latitude === undefined
@@ -1530,36 +1868,177 @@ useEffect(() => {
       return;
     }
 
-    setSelectedStop(null);
-    setSelectedEvent(event);
-    cameraRef.current?.setCamera({
-      centerCoordinate: [
-        Number(event.coordinates.longitude || 0),
-        Number(event.coordinates.latitude || 0),
-      ],
-      zoomLevel: 15.8,
-      pitch: 0,
-      heading: 0,
-      animationDuration: 900,
-      animationMode: 'flyTo',
-    });
+      const stop =
+        activeTodayEventStops.find((item) => item.id === event.id) ||
+        expiredTodayEventStops.find((item) => item.id === event.id) ||
+        eventToTourStop(
+          event,
+          isEventTimeExpired(event) ? 'expired' : 'active'
+        );
+
+      handleMarkerPress(stop);
+    },
+    [activeTodayEventStops, expiredTodayEventStops, handleMarkerPress]
+  );
+
+  const handleDismissTodayEvent = useCallback((eventId: string) => {
+    const now = new Date().toISOString();
+    setEventProgress((prev) => ({
+      ...prev,
+      [eventId]: {
+        ...prev[eventId],
+        dismissed: true,
+        visitedAt: now,
+      },
+    }));
+    setSelectedEvent(null);
+    showInfo('Event Skipped', 'This event is hidden for today. It will appear again on its scheduled day.');
   }, []);
 
-  const handleDeleteStop = useCallback((stopId: string) => {
-    setExtraPlaceIds((prev) => prev.filter((id) => id !== stopId));
-    setRemovedPlaceIds((prev) => (prev.includes(stopId) ? prev : [...prev, stopId]));
-    setIsEdited(true);
-    setTourStops((prev) => prev.filter((s) => s.id !== stopId));
-    setRouteDetails((prev) =>
-      prev
-        ? {
-          ...prev,
-          places: prev.places.filter((place) => place.id !== stopId),
+  const handleRemoveEventFromTour = useCallback(
+    async (eventId: string) => {
+      if (!routeDetails) {
+        return;
+      }
+
+      const nextEvents = routeDetails.events.filter((event) => event.id !== eventId);
+      setRouteDetails((prev) =>
+        prev
+          ? {
+              ...prev,
+              events: nextEvents,
+            }
+          : prev
+      );
+      setEventProgress((prev) => {
+        const next = { ...prev };
+        delete next[eventId];
+        return next;
+      });
+      setSelectedEvent(null);
+      setIsEdited(true);
+
+      if (user?.id) {
+        try {
+          await saveUserTour({
+            tourId: tourIdRef.current,
+            userId: user.id,
+            userName: user.name || '',
+            userEmail: user.email || '',
+            route: routeDetails.route,
+            title: route.params?.tourName || routeDetails.route.name,
+            places:
+              orderedPlacesForSave.length > 0
+                ? orderedPlacesForSave
+                : tourStops.map((stop) => stop.place!).filter(Boolean),
+            events: nextEvents,
+            placeProgress,
+            eventProgress,
+            currentStopIndex: 0,
+            isEdited: true,
+            status: tourStarted ? 'active' : 'paused',
+            startedAt: startedAt || new Date().toISOString(),
+            completedAt: null,
+            tourOrigin: tourOriginRef.current,
+          });
+        } catch {
+          showError('Remove Failed', 'Unable to remove this event from the tour right now.');
         }
-        : prev
-    );
-    setSelectedStop(null);
-  }, []);
+      }
+    },
+    [
+      orderedPlacesForSave,
+      placeProgress,
+      route.params?.tourName,
+      routeDetails,
+      startedAt,
+      tourStarted,
+      tourStops,
+      user?.email,
+      user?.id,
+      user?.name,
+    ]
+  );
+
+  const handleDeleteStop = useCallback(
+    async (stopId: string) => {
+      setExtraPlaceIds((prev) => prev.filter((id) => id !== stopId));
+      setRemovedPlaceIds((prev) =>
+        prev.includes(stopId) ? prev : [...prev, stopId]
+      );
+      setIsEdited(true);
+      setOptimizedOrder(null);
+      lastSavedOptimizedOrderKeyRef.current = null;
+
+      const nextStops = tourStops.filter((stop) => stop.id !== stopId);
+      const nextPlaces =
+        routeDetails?.places.filter((place) => place.id !== stopId) || [];
+      const nextProgress = { ...placeProgress };
+      delete nextProgress[stopId];
+
+      setTourStops(nextStops);
+      setRouteDetails((prev) =>
+        prev
+          ? {
+              ...prev,
+              places: nextPlaces,
+            }
+          : prev
+      );
+      setPlaceProgress(nextProgress);
+      setSelectedStop(null);
+      setRoadSegments([]);
+      setAirSegments([]);
+      setCompletedRoadSegments([]);
+      setCompletedAirSegments([]);
+      setCompletedApproachRoadSegments([]);
+      setCompletedApproachAirSegments([]);
+      setLegPolylines({});
+      if (fetchedLegKeysRef.current) {
+        fetchedLegKeysRef.current.clear();
+      }
+      setSavedTourOrder(null);
+
+      pendingEditSaveRef.current = true;
+
+      if (!user?.id || !routeDetails) {
+        return;
+      }
+
+      try {
+        if (isFavorite(stopId)) {
+          await removeFromFavorites(stopId, 'Place');
+        }
+        await removeTourPlaceFromUserAndRecord({
+          userId: user.id,
+          tourId: tourIdRef.current || tourId,
+          placeId: stopId,
+        });
+
+        showInfo('Location Removed', 'This stop was removed from your tour.');
+      } catch {
+        showError(
+          'Remove Failed',
+          'Unable to remove this location from your tour right now.'
+        );
+      }
+    },
+    [
+      isFavorite,
+      isPausedTour,
+      placeProgress,
+      removeFromFavorites,
+      route.params?.tourName,
+      routeDetails,
+      startedAt,
+      tourId,
+      tourStarted,
+      tourStops,
+      user?.email,
+      user?.id,
+      user?.name,
+    ]
+  );
 
   const persistTourIfNeeded = useCallback(
     async (
@@ -1581,10 +2060,24 @@ useEffect(() => {
       }
 
       const activePlaceStops = tourStops.map((stop) => stop.place!).filter(Boolean);
-      const nextCurrentStopIndex = activePlaceStops.findIndex(
+      const placesToSave =
+        orderedPlacesForSave.length > 0 ? orderedPlacesForSave : activePlaceStops;
+
+      const shouldDeferActiveSave =
+        tourStarted &&
+        !!tourIdRef.current &&
+        !optimizedOrder &&
+        !savedTourOrder &&
+        routePlaceStops.length > 1;
+      if (shouldDeferActiveSave) {
+        pendingEditSaveRef.current = true;
+        return tourIdRef.current;
+      }
+
+      const nextCurrentStopIndex = placesToSave.findIndex(
         (place) => !nextProgress[place.id]?.visited
       );
-      const remainingStops = activePlaceStops.filter(
+      const remainingStops = placesToSave.filter(
         (place) => !nextProgress[place.id]?.visited
       );
       const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
@@ -1596,11 +2089,12 @@ useEffect(() => {
         userEmail: user.email || '',
         route: routeDetails.route,
         title: route.params?.tourName || routeDetails.route.name,
-        places: activePlaceStops,
+        places: placesToSave,
         events: routeDetails.events,
         placeProgress: nextProgress,
+        eventProgress,
         currentStopIndex:
-          nextCurrentStopIndex < 0 ? activePlaceStops.length : nextCurrentStopIndex,
+          nextCurrentStopIndex < 0 ? placesToSave.length : nextCurrentStopIndex,
         isEdited,
         status,
         startedAt: nextStartedAt || new Date().toISOString(),
@@ -1611,7 +2105,17 @@ useEffect(() => {
       setTourId(savedId);
       return savedId;
     },
-    [isEdited, route.params?.tourName, routeDetails, tourStops, tourId, user?.email, user?.id, user?.name]
+    [
+      isEdited,
+      orderedPlacesForSave,
+      route.params?.tourName,
+      routeDetails,
+      tourStops,
+      tourId,
+      user?.email,
+      user?.id,
+      user?.name,
+    ]
   );
   const pauseTourState = useCallback(async () => {
     if (leavingRef.current || isCompletedTour) {
@@ -1644,7 +2148,7 @@ useEffect(() => {
         return;
       }
       e.preventDefault();
-      Alert.alert(
+      CustomAlert.alert(
         'Leave Tour?',
         'Your tour will be paused. You can resume from where you left off.',
         [
@@ -1690,7 +2194,7 @@ useEffect(() => {
 
   const handleStopFavorite = async (place: FirebasePlace) => {
     if (isFavorite(place.id)) {
-      await removeFromFavorites(place.id);
+      await removeFromFavorites(place.id, 'Place');
       showInfo('Removed from Favorites', 'You have Removed from favorites successfully');
       return;
     }
@@ -1701,50 +2205,67 @@ useEffect(() => {
       description: place.description || place.address || 'Location',
       rating: String(place.rating || 0),
       image: place.imageUrl || '',
-      category: 'Food',
+      category: 'Place',
       routeName: 'RecommendationDetials',
       routeParams: { item: place },
       city_name: place.city_name,
       country: place.country,
     });
+    const activeTourId = tourIdRef.current || tourId;
+    if (activeTourId) {
+      await recordTourFavoritedPlace(activeTourId, place.id).catch(() => {});
+    }
     showSuccess('Added to Favorites', 'You have Added to favorites successfully');
   };
 
 const handleCurrentLocation = useCallback(async (zoom = true) => {
-  // 1. Instantly move to a "cached" position if available to make it feel fast
-  if (currentLocation && zoom) {
+  const currentLoc = currentLocationRef.current;
+  if (currentLoc && zoom) {
     cameraRef.current?.setCamera({
-      centerCoordinate: currentLocation,
+      centerCoordinate: currentLoc,
       zoomLevel: 15,
-      animationDuration: 500, // Faster duration
+      animationDuration: 500,
+      animationMode: 'easeTo',
     });
+    setFollowMode('follow');
   }
 
-  const getPos = (): Promise<[number, number]> => 
+  const getPos = (): Promise<[number, number]> =>
     new Promise((resolve, reject) => {
       Geolocation.getCurrentPosition(
         (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
-        (err) => {
-          // If high accuracy is slow, grab the "last known" or low-accuracy immediately
+        () => {
           Geolocation.getCurrentPosition(
             (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
             reject,
-            { enableHighAccuracy: false, timeout: 2000 } // Super short timeout for fallback
+            { enableHighAccuracy: false, timeout: 2000 }
           );
         },
-        // Reduce this timeout. 8s-10s is too long for a user to wait.
-        { enableHighAccuracy: true, timeout: 3000 } 
+        { enableHighAccuracy: true, timeout: 3000 }
       );
     });
 
   try {
     const pos = await getPos();
     setCurrentLocation(pos);
-    // ... camera movement logic
-  } catch (err) {
+    if (zoom) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: pos,
+        zoomLevel: 15,
+        animationDuration: 500,
+        animationMode: 'easeTo',
+      });
+      setFollowMode('follow');
+    }
+  } catch {
     // Fail silently or show toast
   }
-}, [currentLocation]);
+}, []);
+
+  useEffect(() => {
+    handleCurrentLocation(false);
+  }, [handleCurrentLocation]);
+
   const handlePauseTour = async () => {
     if (isCompletedTour) {
       return;
@@ -1761,7 +2282,87 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
   };
 
 
+  const handleEventVerification = async (imageUri: string) => {
+    const event = selectedEvent || selectedStop?.event;
+    if (!event) {
+      return false;
+    }
+
+    const eventCoordinate: [number, number] = [
+      Number(event.coordinates?.longitude || 0),
+      Number(event.coordinates?.latitude || 0),
+    ];
+
+    try {
+      const coords = ALLOW_ANY_IMAGE_FOR_TESTING
+        ? currentLocation || eventCoordinate
+        : await getCurrentPositionAsync();
+
+      const expectedNextStop = orderedRemainingStops[0];
+      const eventStopId = event.id;
+      if (expectedNextStop && expectedNextStop.id !== eventStopId) {
+        showInfo(
+          'Next Stop First',
+          `Please complete your next route stop first: ${expectedNextStop.title}.`
+        );
+        return false;
+      }
+
+      if (!ALLOW_ANY_IMAGE_FOR_TESTING) {
+        const distance = distanceMetersBetween(coords, eventCoordinate);
+
+        if (distance > VISIT_DISTANCE_THRESHOLD_METERS) {
+          showError(
+            'Verification Failed',
+            'You need to be near this event to confirm attendance.'
+          );
+          return false;
+        }
+      }
+
+      const visitedAt = new Date().toISOString();
+      setEventProgress((prev) => ({
+        ...prev,
+        [event.id]: {
+          ...prev[event.id],
+          attended: true,
+          visitedAt,
+          proofImageUri: imageUri,
+        },
+      }));
+      setSelectedEvent(null);
+      setSelectedStop(null);
+      showSuccess('Event Attended', `You checked in at ${event.title}.`);
+
+      const nextUnvisited = orderedRemainingStops.find(
+        (stop) => stop.id !== event.id && !isStopComplete(stop)
+      );
+      if (nextUnvisited) {
+        setTimeout(() => {
+          cameraRef.current?.setCamera({
+            centerCoordinate: nextUnvisited.coordinate,
+            zoomLevel: 15,
+            animationDuration: 1000,
+            animationMode: 'flyTo',
+          });
+        }, 700);
+      }
+
+      return true;
+    } catch {
+      showError(
+        'Verification Failed',
+        'Unable to verify your location right now.'
+      );
+      return false;
+    }
+  };
+
   const handleVisitVerification = async (imageUri: string) => {
+    if (scanForEvent || selectedStop?.event) {
+      return handleEventVerification(imageUri);
+    }
+
     if (!selectedStop?.place) {
       return false;
     }
@@ -1842,7 +2443,12 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           console.warn('[MyTourStart] failed to add visit points', err);
         }
       }
-      const allDone = placeStops.filter((stop) => !nextProgress[stop.id]?.visited).length === 0;
+      const allDone = allRouteStops.every((stop) => {
+        if (stop.kind === 'event') {
+          return isStopComplete(stop);
+        }
+        return Boolean(nextProgress[stop.id]?.visited);
+      });
       if (allDone) {
         setRoadSegments([]);
         setAirSegments([]);
@@ -1854,8 +2460,10 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
 
       // Auto-advance camera to next nearest unvisited stop
       if (!allDone) {
-        const nextUnvisited = orderStopsByNearest(
-          placeStops.filter((stop) => !nextProgress[stop.id]?.visited),
+        const nextUnvisited =
+          orderedRemainingStops.find((stop) => stop.id !== selectedStop.id) ||
+          orderStopsByNearest(
+            allRouteStops.filter((stop) => !isStopComplete(stop)),
           selectedStop.coordinate
         )[0];
         if (nextUnvisited) {
@@ -2002,7 +2610,11 @@ return (
                 );
               })}
 
-              {eventStops.map((stop) => (
+              {tourStarted
+                ? activeTodayEventStops.map((stop) => {
+                    const isNextPending =
+                      !isStopComplete(stop) && nearestPendingStop?.id === stop.id;
+                    return (
                 <Mapbox.MarkerView
                   key={`event-${stop.id}`}
                   id={`event-${stop.id}`}
@@ -2013,15 +2625,59 @@ return (
                     activeOpacity={0.8}
                     accessibilityRole="button"
                     accessibilityLabel={`Show event ${stop.title}`}
-                    onPress={() => stop.event && handleEventMarkerPress(stop.event)}
+                          onPress={() => handleMarkerPress(stop)}
                     style={styles.markerTapArea}
                   >
-                    <View style={styles.eventMarker}>
-                      <View style={styles.eventMarkerInner} />
+                          {isNextPending ? (
+                            <View style={styles.eventMarkerPulseWrap}>
+                              <PulsingPin />
+                              <View
+                                style={[
+                                  styles.eventMarkerOnPulse,
+                                  eventMarkerColors(stop.event!),
+                                ]}
+                              >
+                                <EventMarkerIcon event={stop.event!} size={26} />
                     </View>
+                            </View>
+                          ) : (
+                            <View
+                              style={[
+                                styles.eventMarker,
+                                eventMarkerColors(stop.event!),
+                              ]}
+                            >
+                              <EventMarkerIcon event={stop.event!} size={28} />
+                            </View>
+                          )}
                   </TouchableOpacity>
                 </Mapbox.MarkerView>
-              ))}
+                    );
+                  })
+                : null}
+
+              {tourStarted
+                ? expiredTodayEventStops.map((stop) => (
+                    <Mapbox.MarkerView
+                      key={`event-expired-${stop.id}`}
+                      id={`event-expired-${stop.id}`}
+                      coordinate={[...stop.coordinate]}
+                      anchor={{ x: 0.5, y: 1 }}
+                    >
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Show passed event ${stop.title}`}
+                        onPress={() => handleMarkerPress(stop)}
+                        style={styles.markerTapArea}
+                      >
+                        <View style={styles.eventMarkerExpired}>
+                          <EventMarkerIcon event={stop.event!} size={26} />
+                        </View>
+                      </TouchableOpacity>
+                    </Mapbox.MarkerView>
+                  ))
+                : null}
 
               {currentLocation && currentMarkerNeedsStandalonePin ? (
                 <Mapbox.MarkerView
@@ -2034,7 +2690,13 @@ return (
                     <View
                       style={[
                         userPinStyles.arrowWrap,
-                        { transform: [{ rotate: `${userHeading}deg` }] },
+                        {
+                          transform: [
+                            {
+                              rotate: `${followMode === 'follow' ? 0 : userHeading}deg`,
+                            },
+                          ],
+                        },
                       ]}
                       pointerEvents="none"
                     >
@@ -2055,8 +2717,15 @@ return (
 
         {tourStarted && nearestPendingStop && currentLocation ? (
           <NextStopBanner
-            stopName={nearestPendingStop.title}
-            distanceMeters={distanceMetersBetween(currentLocation, nearestPendingStop.coordinate)}
+            stopName={
+              nearestPendingStop.kind === 'event'
+                ? `Event · ${nearestPendingStop.title}`
+                : nearestPendingStop.title
+            }
+            distanceMeters={distanceMetersBetween(
+              currentLocation,
+              nearestPendingStop.coordinate
+            )}
           />
         ) : null}
 
@@ -2088,7 +2757,11 @@ return (
           </Text>
         </View>
 
-        <TouchableOpacity activeOpacity={0.85} style={styles.currentLocationBtn} onPress={handleCurrentLocation}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.currentLocationBtn}
+          onPress={() => handleCurrentLocation()}
+        >
           <View style={styles.currentLocationOuter}>
             <View style={styles.currentLocationInner} />
           </View>
@@ -2184,6 +2857,7 @@ return (
                       return;
                     }
 
+                    setScanForEvent(false);
                     setScanVisible(true);
                   }}
                   disabled={Boolean(placeProgress[selectedStop.id]?.visited)}
@@ -2197,7 +2871,10 @@ return (
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={() => handleDeleteStop(selectedStop.id)}>
+                <TouchableOpacity
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={() => handleDeleteStop(selectedStop.id)}
+                >
                   <DeleteWhiteIcon width={24} height={24} />
                 </TouchableOpacity>
               </View>
@@ -2236,11 +2913,22 @@ return (
 
         <ScanVerifyModal
           visible={scanVisible}
-          title={selectedStop?.title || 'this location'}
-          successPoints={Number(selectedStop?.place?.points || 10)}
+          title={
+            scanForEvent
+              ? selectedEvent?.title || 'this event'
+              : selectedStop?.title || 'this location'
+          }
+          successPoints={
+            scanForEvent ? 0 : Number(selectedStop?.place?.points || 10)
+          }
           onClose={() => {
             setScanVisible(false);
+            setScanForEvent(false);
+            if (scanForEvent) {
+              setSelectedEvent(null);
+            } else {
             setSelectedStop(null);
+            }
           }}
           onScanSuccess={handleVisitVerification}
         />
@@ -2249,6 +2937,70 @@ return (
           visible={Boolean(selectedEvent)}
           event={selectedEvent}
           onClose={() => setSelectedEvent(null)}
+          statusMessage={
+            selectedEvent && (eventProgress[selectedEvent.id]?.expired || isEventTimeExpired(selectedEvent))
+              ? 'This event was scheduled for today, but its time has passed. It is marked complete on your route.'
+              : selectedEvent && eventProgress[selectedEvent.id]?.attended
+                ? 'You have already checked in to this event.'
+                : selectedEvent && nearestPendingStop?.id === selectedEvent.id
+                  ? 'This is your next route stop. Confirm attendance when you arrive.'
+                  : undefined
+          }
+          statusTone={
+            selectedEvent && (eventProgress[selectedEvent.id]?.expired || isEventTimeExpired(selectedEvent))
+              ? 'warning'
+              : selectedEvent && eventProgress[selectedEvent.id]?.attended
+                ? 'success'
+                : 'info'
+          }
+          primaryActionLabel={
+            selectedEvent && eventProgress[selectedEvent.id]?.attended
+              ? 'Attended'
+              : selectedEvent &&
+                  (eventProgress[selectedEvent.id]?.expired || isEventTimeExpired(selectedEvent))
+                ? undefined
+                : 'Confirm Attendance'
+          }
+          onPrimaryAction={
+            selectedEvent &&
+            !eventProgress[selectedEvent.id]?.attended &&
+            !eventProgress[selectedEvent.id]?.expired &&
+            !isEventTimeExpired(selectedEvent)
+              ? () => {
+                  if (
+                    nearestPendingStop &&
+                    nearestPendingStop.id !== selectedEvent.id
+                  ) {
+                    showInfo(
+                      'Next Stop First',
+                      `Please complete ${nearestPendingStop.title} first.`
+                    );
+                    return;
+                  }
+                  setScanForEvent(true);
+                  setScanVisible(true);
+                }
+              : undefined
+          }
+          primaryDisabled={Boolean(selectedEvent && eventProgress[selectedEvent.id]?.attended)}
+          secondaryActionLabel={
+            selectedEvent &&
+            !eventProgress[selectedEvent.id]?.attended &&
+            !eventProgress[selectedEvent.id]?.expired &&
+            !isEventTimeExpired(selectedEvent)
+              ? 'Skip for today'
+              : undefined
+          }
+          onSecondaryAction={
+            selectedEvent
+              ? () => handleDismissTodayEvent(selectedEvent.id)
+              : undefined
+          }
+          onRemoveFromTour={
+            selectedEvent
+              ? () => handleRemoveEventFromTour(selectedEvent.id)
+              : undefined
+          }
         />
 
         {tourCompletedVisible ? (
@@ -2364,11 +3116,42 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   eventMarker: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  eventMarkerPulseWrap: {
+    width: 70,
+    height: 70,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eventMarkerOnPulse: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: COLORS.BUTTON_COLOR,
-    borderWidth: 2.5,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 10,
+  },
+  eventMarkerExpired: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EAB308',
+    borderWidth: 3,
     borderColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2378,11 +3161,72 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 6,
   },
-  eventMarkerInner: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.7)',
+  todayEventBanner: {
+    position: 'absolute',
+    top: 52,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(244, 106, 58, 0.92)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    zIndex: 20,
+  },
+  todayEventBannerText: {
+    color: COLORS.WHITE,
+    fontSize: FONT_SIZE.SMALL_TEXT,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  eventActionCard: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    bottom: 96,
+    backgroundColor: COLORS.WHITE,
+    borderRadius: 16,
+    padding: 16,
+    zIndex: 120,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  eventActionTitle: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.Poppins_SemiBold,
+    color: COLORS.TEXT_PRIMARY,
+  },
+  eventActionMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    color: COLORS.TEXT_SECONDARY,
+  },
+  eventActionHint: {
+    marginTop: 8,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    color: COLORS.TEXT_SECONDARY,
+  },
+  eventActionRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  skipEventBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+  },
+  skipEventText: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    color: COLORS.BUTTON_COLOR,
+  },
+  closeEventCardBtn: {
+    marginTop: 8,
+    alignSelf: 'flex-end',
   },
   currentLocationBtn: {
     position: 'absolute',

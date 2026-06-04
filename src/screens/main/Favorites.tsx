@@ -30,12 +30,14 @@ import {
 
 type TabValue = 'Places' | 'Tours' | 'Events';
 
+type FavoriteTourItem = SavedTour & { coverImage?: string };
+
 const Favorites = () => {
     const { favorites, favoriteTours, favoriteEvents } = useFavorites();
     const navigation = useNavigation<any>();
     const [activeTab, setActiveTab] = useState<TabValue>('Places');
     const [places, setPlaces] = useState<FirebasePlace[]>([]);
-    const [tours, setTours] = useState<SavedTour[]>([]);
+    const [tours, setTours] = useState<FavoriteTourItem[]>([]);
     const [events, setEvents] = useState<FirebaseEvent[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -77,15 +79,52 @@ const Favorites = () => {
             const toursById = new Map(toursData.map((t) => [t.id, t]));
             const eventsById = new Map(eventsData.map((e) => [e.id, e]));
 
-            setPlaces(
-                favorites
-                    .map((id) => placesById.get(id))
-                    .filter((p): p is FirebasePlace => Boolean(p))
+            const eventIdsFound = new Set(eventsData.map((e) => e.id));
+            const miscategorizedPlaceIds = favoriteEvents.filter(
+                (id) => !eventIdsFound.has(id)
             );
+            const miscategorizedPlaces =
+                miscategorizedPlaceIds.length > 0
+                    ? await fetchPlacesByIds(miscategorizedPlaceIds)
+                    : [];
+
+            miscategorizedPlaces.forEach((place) => {
+                placesById.set(place.id, place);
+            });
+
+            const tourPlaceIds = Array.from(
+                new Set(
+                    toursData.flatMap((tour) =>
+                        (tour.all_places || []).map((item) => item.place_id)
+                    )
+                )
+            );
+            const tourPlaces =
+                tourPlaceIds.length > 0 ? await fetchPlacesByIds(tourPlaceIds) : [];
+            const tourPlacesById = new Map(tourPlaces.map((place) => [place.id, place]));
+
+            const placeIds = new Set<string>();
+            const mergedPlaces: FirebasePlace[] = [];
+            [...favorites, ...miscategorizedPlaceIds].forEach((id) => {
+                if (placeIds.has(id)) return;
+                const place = placesById.get(id);
+                if (!place) return;
+                placeIds.add(id);
+                mergedPlaces.push(place);
+            });
+            setPlaces(mergedPlaces);
+
             setTours(
                 favoriteTours
                     .map((id) => toursById.get(id))
                     .filter((t): t is SavedTour => Boolean(t))
+                    .map((tour) => {
+                        const coverImage =
+                            (tour.all_places || [])
+                                .map((item) => tourPlacesById.get(item.place_id)?.imageUrl)
+                                .find((url): url is string => Boolean(url)) || '';
+                        return { ...tour, coverImage };
+                    })
             );
             setEvents(
                 favoriteEvents
@@ -157,7 +196,7 @@ const Favorites = () => {
         </TouchableOpacity>
     );
 
-    const renderTourItem = ({ item }: { item: SavedTour }) => (
+    const renderTourItem = ({ item }: { item: FavoriteTourItem }) => (
         <TouchableOpacity
             onPress={() => handleTourTap(item)}
             activeOpacity={0.9}
@@ -167,8 +206,7 @@ const Favorites = () => {
                 id={item.id}
                 title={item.title || 'My Tour'}
                 description={[item.city_name, item.country].filter(Boolean).join(', ') || 'Tour'}
-                rating={''}
-                image={''}
+                image={item.coverImage || ''}
                 location={[item.city_name, item.country].filter(Boolean).join(', ')}
                 category="Route"
             />

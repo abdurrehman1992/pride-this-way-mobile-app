@@ -1,0 +1,54 @@
+<svg width="200" height="260" viewBox="0 0 200 260" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- <circle cx="100" cy="120" r="70" fill="#F6E96B" opacity="0.45"/> -->
+  <!-- <circle cx="100" cy="190" r="38" fill="#8BB7E8" opacity="0.25"/> -->
+  <path
+    d="M100 40C72 40 50 62 50 90C50 126 100 178 100 178C100 178 150 126 150 90C150 62 128 40 100 40Z"
+    fill="white"
+    stroke="#E12626"
+    stroke-width="8"
+  />
+  <circle
+    cx="100"
+    cy="90"
+    r="32"
+    fill="white"
+    stroke="#E12626"
+    stroke-width="6"
+  />
+  <circle
+    cx="100"
+    cy="90"
+    r="12"
+    fill="white"
+    stroke="#E12626"
+    stroke-width="4"
+  />
+  <line
+    x1="100"
+    y1="90"
+    x2="100"
+    y2="82"
+    stroke="#E12626"
+    stroke-width="3"
+    stroke-linecap="round"
+  />
+
+  <line
+    x1="100"
+    y1="90"
+    x2="106"
+    y2="90"
+    stroke="#E12626"
+    stroke-width="3"
+    stroke-linecap="round"
+  />
+  <circle
+    cx="100"
+    cy="188"
+    r="16"
+    fill="#E12626"
+    stroke="black"
+    stroke-width="4"
+  />
+
+</svg>

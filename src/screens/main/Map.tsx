@@ -1,4 +1,3 @@
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import {
@@ -12,40 +11,42 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import Mapbox, { type FillLayerStyle, type LineLayerStyle } from '@rnmapbox/maps';
+import Mapbox, {
+  type FillLayerStyle,
+  type LineLayerStyle,
+  type SymbolLayerStyle,
+} from '@rnmapbox/maps';
 import Config from 'react-native-config';
 import type { FeatureCollection, Point, Polygon } from 'geojson';
 import EventDetailModal from '../../components/modals/EventDetailModal';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY } from '../../constants/fonts';
-import { CrossIcon, DropdownIcon, SearchIcon } from '../../constants/icons';
+import { CrossIcon, DropdownIcon, SearchIcon, BlueMapIcon, PodcastEvent, PrideEvent } from '../../constants/icons';
 import {
   fetchMapEvents,
   searchLocationSuggestions,
   type FirebaseEvent,
   type LocationSuggestion,
 } from '../../services/myTourService';
+import { isPodcastEvent } from '../../utils/eventHelpers';
 
-const BG_MATCH = '#7AB4DC';
+const BG_MATCH = '#8ECAE6';
 const INITIAL_CAMERA_CENTER: [number, number] = [-18, 18];
 const INITIAL_CAMERA_ZOOM = 0.8;
 const SEARCH_DEBOUNCE_MS = 350;
 
 type DateField = 'start' | 'end';
 
-const isPodcastEvent = (event: FirebaseEvent) =>
-  (event.event_type || '').toLowerCase().trim() === 'podcast_event';
-
 const PRIDE_BANDS: { color: string; minLon: number; maxLon: number }[] = [
-{ color: '#FF5C0A', minLon: -180, maxLon: -120 },
-    { color: '#F39A22', minLon: -120, maxLon: -60 },
-    { color: '#FFE100', minLon: -60, maxLon: -20 },
-    { color: '#95D600', minLon: -20, maxLon: 20 },
-    { color: '#31C93A', minLon: 20, maxLon: 60 },
-    { color: '#249D78', minLon: 60, maxLon: 100 },
-    { color: '#3367CC', minLon: 100, maxLon: 140 },
-    { color: '#A11FD6', minLon: 140, maxLon: 180 },
+  { color: '#FF5C0A', minLon: -180, maxLon: -120 },
+  { color: '#F39A22', minLon: -120, maxLon: -60 },
+  { color: '#FFE100', minLon: -60, maxLon: -20 },
+  { color: '#95D600', minLon: -20, maxLon: 20 },
+  { color: '#31C93A', minLon: 20, maxLon: 60 },
+  { color: '#249D78', minLon: 60, maxLon: 100 },
+  { color: '#3367CC', minLon: 100, maxLon: 140 },
+  { color: '#A11FD6', minLon: 140, maxLon: 180 },
 ];
 
 const prideStripes: FeatureCollection<Polygon> = {
@@ -71,25 +72,44 @@ const prideFillStyle: FillLayerStyle = {
   fillOpacity: 1,
 };
 
+const landFillStyle: FillLayerStyle = {
+  fillColor: '#F4F6F8',
+  fillOpacity: 1,
+};
+
 const waterFillStyle: FillLayerStyle = {
-  fillColor: '#066ac1',
+  fillColor: '#5BA4D4',
   fillOpacity: 1,
 };
 
 const roadCasingStyle: LineLayerStyle = {
   lineColor: '#FFFFFF',
-  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.5, 12, 2, 16, 6],
-  lineOpacity: 0.9,
+  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 2.5, 14, 5, 18, 10],
+  lineOpacity: 1,
   lineCap: 'round',
   lineJoin: 'round',
 };
 
 const roadFillStyle: LineLayerStyle = {
-  lineColor: '#0000FF',
-  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.3, 12, 1.4, 16, 4],
+  lineColor: '#C5CDD6',
+  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.4, 10, 1.6, 14, 3.2, 18, 7],
   lineOpacity: 1,
   lineCap: 'round',
   lineJoin: 'round',
+};
+
+const placeLabelStyle: SymbolLayerStyle = {
+  textField: ['coalesce', ['get', 'name_en'], ['get', 'name'], ['get', 'name_fr']],
+  textSize: ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 12, 10, 14, 14, 16],
+  textColor: '#1E293B',
+  textHaloColor: '#FFFFFF',
+  textHaloWidth: 2.5,
+  textHaloBlur: 0.35,
+  textAnchor: 'center',
+  textAllowOverlap: false,
+  textOptional: true,
+  textFont: ['DIN Pro Medium', 'Arial Unicode MS Regular'],
+  symbolSortKey: ['get', 'symbolrank'],
 };
 
 const atmosphereStyle = {
@@ -130,8 +150,18 @@ const eventCoordinate = (event: FirebaseEvent): [number, number] => [
   Number(event.coordinates?.latitude || 0),
 ];
 
-const markerColorForEvent = (event: FirebaseEvent) =>
-  isPodcastEvent(event) ? '#1B84FF' : '#F04452';
+const EventMarkerIcon = ({
+  event,
+  size = 71,
+}: {
+  event: FirebaseEvent;
+  size?: number;
+}) =>
+  isPodcastEvent(event) ? (
+    <PodcastEvent width={size} height={size} />
+  ) : (
+    <PrideEvent width={size} height={size} />
+  );
 
 const formatDateValue = (date: Date) => {
   const year = date.getFullYear();
@@ -296,88 +326,72 @@ const Map = () => {
     );
   }, [endDateFilter, events, selectedLocation, startDateFilter]);
 
-  // Native CircleLayer rendering — every event renders as its own GPU-drawn
-  // circle. Unlike MarkerView/PointAnnotation, CircleLayer is part of the
-  // map tiles themselves, so markers stay visible at every zoom level no
-  // matter how far the user zooms out. Same-coordinate events are nudged
-  // by tiny lng offsets so they appear as visually distinct dots instead
-  // of overlapping into one.
-  const eventPointsShape = useMemo<FeatureCollection<Point>>(() => {
+  const mapEventMarkers = useMemo(() => {
     const seenAtKey = new globalThis.Map<string, number>();
-    const features = filteredEvents.map((event) => {
+    return filteredEvents.map((event) => {
       const coord = eventCoordinate(event);
       const key = `${coord[0].toFixed(4)}:${coord[1].toFixed(4)}`;
       const occurrence = seenAtKey.get(key) || 0;
       seenAtKey.set(key, occurrence + 1);
-      // Nudge co-located events by ~10m so each remains tappable and
-      // visually distinct on the GPU layer.
-      const nudgedCoord: [number, number] = occurrence === 0
-        ? coord
-        : [coord[0] + occurrence * 0.0001, coord[1] + occurrence * 0.0001];
-      return {
-        type: 'Feature' as const,
-        id: event.id,
-        properties: {
-          id: event.id,
-          color: markerColorForEvent(event),
-        },
-        geometry: { type: 'Point' as const, coordinates: nudgedCoord },
-      };
+      const coordinate: [number, number] =
+        occurrence === 0
+          ? coord
+          : [coord[0] + occurrence * 0.0001, coord[1] + occurrence * 0.0001];
+      return { event, coordinate };
     });
-    return { type: 'FeatureCollection', features };
   }, [filteredEvents]);
 
 
 
   const focusLocation = useCallback((location: LocationSuggestion) => {
-  if (!location.coordinates) {
-    return;
-  }
+    if (!location.coordinates) {
+      return;
+    }
 
-  const matchingEvents = events.filter(
-    (event) =>
-      eventMatchesFilter(event, location.label) &&
-      eventMatchesDateRange(event, startDateFilter, endDateFilter)
-  );
+    const matchingEvents = events.filter(
+      (event) =>
+        eventMatchesFilter(event, location.label) &&
+        eventMatchesDateRange(event, startDateFilter, endDateFilter)
+    );
 
-  // CASE 1: No events → just move camera to city
-  if (matchingEvents.length === 0) {
-    cameraRef.current?.setCamera({
-      centerCoordinate: location.coordinates,
-      zoomLevel: 4.5,
-      pitch: 0,
-      heading: 0,
-      animationDuration: 1200,
-      animationMode: 'flyTo',
-    });
-    setZoomLevel(4.5);
-    return;
-  }
+    // CASE 1: No events → just move camera to city
+    if (matchingEvents.length === 0) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: location.coordinates,
+        zoomLevel: 4.5,
+        pitch: 0,
+        heading: 0,
+        animationDuration: 1200,
+        animationMode: 'flyTo',
+      });
+      setZoomLevel(4.5);
+      return;
+    }
 
-  // CASE 2: Get all event coordinates
-  const coordinates = matchingEvents.map(eventCoordinate);
+    // CASE 2: Get all event coordinates
+    const coordinates = matchingEvents.map(eventCoordinate);
 
-  const longitudes = coordinates.map(([lng]) => lng);
-  const latitudes = coordinates.map(([, lat]) => lat);
+    const longitudes = coordinates.map(([lng]) => lng);
+    const latitudes = coordinates.map(([, lat]) => lat);
 
-  const minLongitude = Math.min(...longitudes);
-  const maxLongitude = Math.max(...longitudes);
-  const minLatitude = Math.min(...latitudes);
-  const maxLatitude = Math.max(...latitudes);
+    const minLongitude = Math.min(...longitudes);
+    const maxLongitude = Math.max(...longitudes);
+    const minLatitude = Math.min(...latitudes);
+    const maxLatitude = Math.max(...latitudes);
 
-  // CASE 3: All events at same point → zoom in nicely
-  if (minLongitude === maxLongitude && minLatitude === maxLatitude) {
-    cameraRef.current?.setCamera({
-      centerCoordinate: [minLongitude, minLatitude],
+    // CASE 3: All events at same point → zoom in nicely
+    if (minLongitude === maxLongitude && minLatitude === maxLatitude) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: [minLongitude, minLatitude],
       zoomLevel: 13,
-      pitch: 0,
-      heading: 0,
-      animationDuration: 1200,
-      animationMode: 'flyTo',
-    });
-    setZoomLevel(13);
-    return;
-  }
+        pitch: 0,
+        heading: 0,
+        animationDuration: 1200,
+        animationMode: 'flyTo',
+      });
+      setZoomLevel(13);
+      return;
+    }
 
   // CASE 4: FIT ALL MARKERS PROPERLY
   // Mapbox v10's fitBounds expects (ne, sw, padding, duration).
@@ -392,7 +406,7 @@ const Map = () => {
 
   // ❌ IMPORTANT: DO NOT manually set zoomLevel here
   // setZoomLevel(...) removed because it breaks fitBounds accuracy
-}, [events, startDateFilter, endDateFilter]);
+  }, [events, startDateFilter, endDateFilter]);
   const openCalendar = useCallback((field: DateField) => {
     const currentValue = field === 'start' ? startDateFilter : endDateFilter;
     const parsed = parseDateOnly(currentValue) || new Date();
@@ -684,6 +698,13 @@ const Map = () => {
                   existing
                 >
                   <Mapbox.FillLayer
+                    id="customLandFill"
+                    sourceID="composite"
+                    sourceLayerID="landuse"
+                    style={landFillStyle}
+                    filter={['==', ['geometry-type'], 'Polygon']}
+                  />
+                  <Mapbox.FillLayer
                     id="customWaterFill"
                     sourceID="composite"
                     sourceLayerID="water"
@@ -702,43 +723,33 @@ const Map = () => {
                     style={roadFillStyle}
                     aboveLayerID="customRoadCasing"
                   />
+                  <Mapbox.SymbolLayer
+                    id="customPlaceLabels"
+                    sourceID="composite"
+                    sourceLayerID="place_label"
+                    style={placeLabelStyle}
+                    aboveLayerID="customRoadFill"
+                  />
                 </Mapbox.VectorSource>
 
-                <Mapbox.ShapeSource
-                  id="eventPoints"
-                  shape={eventPointsShape}
-                  onPress={(event) => {
-                    const feature = event.features?.[0];
-                    const id = feature?.properties?.id as string | undefined;
-                    const tappedEvent = id
-                      ? filteredEvents.find((e) => e.id === id)
-                      : null;
-                    if (tappedEvent) {
-                      handleMarkerPress(tappedEvent);
-                    }
-                  }}
-                >
-                  <Mapbox.CircleLayer
-                    id="eventPointsCircleHalo"
-                    style={{
-                      circleRadius: 11,
-                      circleColor: '#FFFFFF',
-                      circleOpacity: 1,
-                      circlePitchAlignment: 'map',
-                    }}
-                  />
-                  <Mapbox.CircleLayer
-                    id="eventPointsCircle"
-                    style={{
-                      circleRadius: 8,
-                      circleColor: ['get', 'color'],
-                      circleOpacity: 1,
-                      circleStrokeWidth: 1.5,
-                      circleStrokeColor: '#FFFFFF',
-                      circlePitchAlignment: 'map',
-                    }}
-                  />
-                </Mapbox.ShapeSource>
+                {mapEventMarkers.map(({ event, coordinate }) => (
+                  <Mapbox.MarkerView
+                    key={event.id}
+                    id={`map-event-${event.id}`}
+                    coordinate={coordinate}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Show ${isPodcastEvent(event) ? 'podcast' : 'pride'} event ${event.title}`}
+                      onPress={() => handleMarkerPress(event)}
+                      style={styles.eventMapMarker}
+                    >
+                      <EventMarkerIcon event={event} size={48} />
+                    </TouchableOpacity>
+                  </Mapbox.MarkerView>
+                ))}
               </Mapbox.MapView>
 
               <View style={[styles.zoomControls]}>
@@ -769,15 +780,14 @@ const Map = () => {
       </View>
 
       <View style={[styles.legendCard, { marginBottom: 5 }]}>
-        {/* <Text style={styles.legendTitle}>Map Legend</Text> */}
         <View style={styles.legendRow}>
-          <View style={[styles.legendDot, styles.legendDotRed]} />
-          <Text style={styles.legendText}>Red markers show Pride events.</Text>
+          <PrideEvent width={24} height={24}/>
+          <Text style={styles.legendText}>Purple markers show Pride events.</Text>
         </View>
         <View style={styles.legendRow}>
-          <View style={[styles.legendDot, styles.legendDotBlue]} />
+          <PodcastEvent height={24} width={24}/>
           <Text style={styles.legendText}>
-            Blue markers show Podcast events. 
+            Blue markers show Podcast events.
           </Text>
         </View>
       </View>
@@ -796,7 +806,7 @@ const Map = () => {
         onRequestClose={closeCalendar}
       >
         <Pressable style={styles.calendarOverlay} onPress={closeCalendar}>
-          <Pressable style={styles.calendarCard} onPress={() => {}}>
+          <Pressable style={styles.calendarCard} onPress={() => { }}>
             <View style={styles.calendarHeader}>
               <TouchableOpacity
                 activeOpacity={0.85}
@@ -880,6 +890,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG_MATCH,
+  },
+  eventMapMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   mapSection: {
     flex: 1,
@@ -1110,9 +1124,9 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginHorizontal: 20,
     paddingHorizontal: 18,
-   
+
     borderRadius: 24,
-  
+
   },
   legendTitle: {
     color: COLORS.TEXT_PRIMARY,
@@ -1122,8 +1136,9 @@ const styles = StyleSheet.create({
   },
   legendRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 10,
+    alignItems: 'center',
+    marginBottom: 6,
+    // gap: 6
   },
   legendDot: {
     width: 14,

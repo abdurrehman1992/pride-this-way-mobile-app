@@ -1,3 +1,978 @@
+// import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// import {
+//     View,
+//     Text,
+//     Image,
+//     ScrollView,
+//     StyleSheet,
+//     TouchableOpacity,
+//     ActivityIndicator,
+// } from 'react-native';
+// import { CommonActions, useNavigation, useRoute } from '@react-navigation/native';
+// import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+// import { useSelector } from 'react-redux';
+// import { CustomAlert } from '../../utils/CustomAlert';
+// import TopHeader from '../../components/Home/TopHeader';
+// import { COLORS } from '../../constants/colors';
+// import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
+// import {
+//     CreatedTourLocationIcon,
+//     DownArrow,
+//     EarnedPointIcon,
+//     IconDelete,
+//     IconPlus,
+//     IconUp,
+//     TourDateIcon,
+//     TourLocationIcon,
+//     CloseIcon,
+// } from '../../constants/icons';
+// import { showError } from '../../components/common/AppToast';
+// import { MyTourStackParamList } from '../../types/types';
+// import { RootState } from '../../Redux/store';
+// import { fetchUpcomingEventSuggestions } from '../../services/myTourService';
+// import firestore from '@react-native-firebase/firestore';
+// import {
+//     FirebaseEvent,
+//     FirebasePlace,
+//     fetchPlacesByIds,
+//     RecommendedRoute,
+//     removeTourPlaceFromUserAndRecord,
+//     saveUserTour,
+//     buildNavigableRouteFromStops,
+// } from '../../services/myTourService';
+// import { optimizePlacesForTour } from '../../utils/tourPlaceOrder';
+// import { useFavorites } from '../../context/FavoritesContext';
+
+// type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'TourSuggestion'>;
+// const POINTS_PER_LOCATION = 15;
+// const TAB_ROUTE_NAMES = new Set(['MyTours', 'Map', 'ForYou', 'Favorites']);
+
+// const TourSuggestion: React.FC = () => {
+//     const navigation = useNavigation<NavigationProp>();
+//     const route = useRoute<any>();
+//     const authUser = useSelector((state: RootState) => state.auth.user);
+//     const userId = authUser?.id;
+//     const { removeFromFavorites, isFavorite } = useFavorites();
+
+//     const params = route.params as {
+//         tourName?: string;
+//         cityLabel?: string;
+//         recommendations?: RecommendedRoute[];
+//         addedPlaceId?: string;
+//         timestamp?: number;
+//     } | undefined;
+
+//     const recommendations = params?.recommendations || [];
+//     const tourName = params?.tourName || recommendations[0]?.route?.name || 'Custom Tour';
+//     const cityLabel = params?.cityLabel || '';
+//     const primary = recommendations[0];
+//     const initialPlaces: FirebasePlace[] = primary?.places || [];
+
+//     const [places, setPlaces] = useState<FirebasePlace[]>(initialPlaces);
+//     const [expandedLocations, setExpandedLocations] = useState<Record<string, boolean>>({});
+//     const totalPoints = useMemo(() => places.length * POINTS_PER_LOCATION, [places.length]);
+
+//     const [saving, setSaving] = useState(false);
+//     const [saved, setSaved] = useState(false);
+//     const [suggestedEvents, setSuggestedEvents] = useState<FirebaseEvent[]>([]);
+//     const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
+//     const [loadingEvents, setLoadingEvents] = useState(false);
+//     const [existingTourId, setExistingTourId] = useState<string | null>(null);
+//     const [tourOrigin, setTourOrigin] = useState<[number, number] | null>(null);
+//     const bypassGuardRef = useRef(false);
+//     const optimizeRequestRef = useRef(0);
+
+//     // Combine current route template events with external live suggestions
+//     const allAvailableEvents = useMemo(() => {
+//         const templateEvents = primary?.events || [];
+//         // Prevent duplicate IDs if suggested matches template
+//         const templateIds = new Set(templateEvents.map(e => e.id));
+//         const filteredSuggestions = suggestedEvents.filter(e => !templateIds.has(e.id));
+//         return [...templateEvents, ...filteredSuggestions];
+//     }, [suggestedEvents, primary?.events]);
+
+//     // Derive selected event objects using the master array list
+//     const selectedEvents = useMemo(() => {
+//         return allAvailableEvents.filter((event) =>
+//             selectedEventIds.includes(event.id)
+//         );
+//     }, [allAvailableEvents, selectedEventIds]);
+
+//     // Filter suggestions pool to exclude anything selected
+//     const availableSuggestions = useMemo(
+//         () => suggestedEvents.filter((event) => !selectedEventIds.includes(event.id)),
+//         [suggestedEvents, selectedEventIds]
+//     );
+
+//     const previewImage =
+//         places[0]?.imageUrl ||
+//         primary?.favoritePlace?.imageUrl ||
+//         allAvailableEvents[0]?.coverImage ||
+//         '';
+//     const dateLabel = primary?.route?.dateRange?.startDate;
+
+//     const toggleEventSelection = useCallback((eventId: string) => {
+//         setSelectedEventIds((prev) => {
+//             if (prev.includes(eventId)) {
+//                 return prev.filter((id) => id !== eventId);
+//             }
+//             return [...prev, eventId];
+//         });
+//     }, []);
+
+//     const removeEventSuggestion = useCallback((eventId: string) => {
+//         setSuggestedEvents((prev) => prev.filter((event) => event.id !== eventId));
+//         setSelectedEventIds((prev) => prev.filter((id) => id !== eventId));
+//     }, []);
+
+//     const removeAllSuggestions = useCallback(() => {
+//         setSuggestedEvents([]);
+//         // Only remove event selections that belong to the dynamic suggestions pool
+//         const templateIds = (primary?.events || []).map(e => e.id);
+//         setSelectedEventIds((prev) => prev.filter((id) => templateIds.includes(id)));
+//     }, [primary?.events]);
+
+//     const removeSelectedEvent = useCallback((eventId: string) => {
+//         setSelectedEventIds((prev) => prev.filter((id) => id !== eventId));
+//     }, []);
+
+//     // 1. First, fetch already saved document entries if they exist
+//     useEffect(() => {
+//         const loadSavedEvents = async () => {
+//             try {
+//                 if (!primary?.route?.id || !userId) return;
+//                 const doc = await firestore()
+//                     .collection('tours')
+//                     .where('user_id', '==', userId)
+//                     .where('route_id', '==', primary.route.id)
+//                     .where('status', '==', 'saved')
+//                     .limit(1)
+//                     .get();
+//                 if (!doc.empty) {
+//                     const tourDoc = doc.docs[0];
+//                     const data = tourDoc.data();
+//                     const ids = data?.event_ids || [];
+//                     setExistingTourId(tourDoc.id);
+//                     setSelectedEventIds(ids);
+//                 } else {
+//                     setExistingTourId(null);
+//                     // Fallback: Default pre-select all standard template route events if no document exists yet
+//                     const initialIds = (primary?.events || []).map(e => e.id);
+//                     setSelectedEventIds(initialIds);
+//                 }
+//             } catch (e) {
+//                 console.log('restore events error', e);
+//             }
+//         };
+//         loadSavedEvents();
+//     }, [primary?.route?.id, primary?.events, userId]);
+
+//     // 2. Load API event suggestions without stepping on selected states
+//     const loadEventSuggestions = useCallback(async () => {
+//         if (!primary) return;
+//         setLoadingEvents(true);
+//         try {
+//             const locationLabel =
+//                 cityLabel || [primary.route.city_name, primary.route.country].filter(Boolean).join(', ');
+//             const results = await fetchUpcomingEventSuggestions({
+//                 locationLabel,
+//                 tagIds: primary.route.tag_ids || [],
+//                 limit: 20,
+//             });
+//             setSuggestedEvents(results);
+//             // REMOVED: setSelectedEventIds([]); which cleared your choices!
+//         } catch (error) {
+//             const message =
+//                 error instanceof Error ? error.message : 'Unable to load event suggestions right now.';
+//             showError('Event Suggestions Unavailable', message);
+//         } finally {
+//             setLoadingEvents(false);
+//         }
+//     }, [cityLabel, primary]);
+
+//     useEffect(() => {
+//         loadEventSuggestions();
+//     }, [loadEventSuggestions]);
+
+//     const resetToCreateTour = useCallback(() => {
+//         bypassGuardRef.current = true;
+//         navigation.dispatch(
+//             CommonActions.reset({
+//                 index: 1,
+//                 routes: [{ name: 'MyTour' }, { name: 'CreateTour' }],
+//             })
+//         );
+//     }, [navigation]);
+
+//     const showDiscardAlert = useCallback((onDiscard: () => void) => {
+//         CustomAlert.alert(
+//             'Discard Tour?',
+//             "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
+//             [
+//                 { text: 'Stay', style: 'cancel' },
+//                 {
+//                     text: 'Discard',
+//                     style: 'destructive',
+//                     onPress: onDiscard,
+//                 },
+//             ]
+//         );
+//     }, []);
+
+//     const removePlace = async (placeId: string) => {
+//         const nextPlaces = places.filter((place) => place.id !== placeId);
+//         setPlaces(nextPlaces);
+
+//         if (!userId || !primary || !existingTourId) {
+//             return;
+//         }
+
+//         try {
+//             if (isFavorite(placeId)) {
+//                 await removeFromFavorites(placeId, 'Place');
+//             }
+//             await removeTourPlaceFromUserAndRecord({
+//                 userId,
+//                 tourId: existingTourId,
+//                 placeId,
+//             });
+
+//             const { places: orderedPlaces, tourOrigin: savedOrigin } =
+//                 await optimizePlacesForTour(nextPlaces, tourOrigin);
+
+//             setPlaces(orderedPlaces);
+//             if (savedOrigin) {
+//                 setTourOrigin(savedOrigin);
+//             }
+
+//             await saveUserTour({
+//                 tourId: existingTourId,
+//                 userId,
+//                 userName: authUser?.name || '',
+//                 userEmail: authUser?.email || '',
+//                 route: primary.route,
+//                 title: tourName,
+//                 places: orderedPlaces,
+//                 events: selectedEvents,
+//                 placeProgress: {},
+//                 currentStopIndex: 0,
+//                 isEdited: true,
+//                 status: 'saved',
+//                 scheduledDate: null,
+//                 tourOrigin: savedOrigin,
+//                 navigableRoute: buildNavigableRouteFromStops(
+//                     orderedPlaces.map((place) => ({ id: place.id, kind: 'place' as const }))
+//                 ),
+//             });
+//         } catch {
+//             showError('Remove Failed', 'Unable to remove this location from your tour.');
+//         }
+//     };
+
+//     useEffect(() => {
+//         const addedPlaceId = params?.addedPlaceId;
+//         if (!addedPlaceId) return;
+
+//         fetchPlacesByIds([addedPlaceId]).then((fetchedPlaces) => {
+//             const addedPlace = fetchedPlaces[0];
+//             if (!addedPlace) return;
+//             setPlaces((prev) => {
+//                 if (prev.some((place) => place.id === addedPlace.id)) return prev;
+//                 return [...prev, addedPlace];
+//             });
+//         });
+//         navigation.setParams({ addedPlaceId: undefined, timestamp: undefined });
+//     }, [navigation, params?.addedPlaceId, params?.timestamp]);
+
+//     const toggleLocationDetails = (placeId: string) => {
+//         setExpandedLocations((prev) => ({
+//             ...prev,
+//             [placeId]: !prev[placeId],
+//         }));
+//     };
+
+//     useEffect(() => {
+//         navigation.setParams({ hasUnsavedChanges: !saved });
+//     }, [navigation, saved]);
+
+//     useEffect(() => {
+//         const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+//             if (saved || bypassGuardRef.current) return;
+//             event.preventDefault();
+//             showDiscardAlert(() => {
+//                 bypassGuardRef.current = true;
+//                 navigation.dispatch(event.data.action);
+//             });
+//         });
+//         return unsubscribe;
+//     }, [navigation, saved, showDiscardAlert]);
+
+//     useEffect(() => {
+//         const ancestors = [
+//             navigation.getParent(),
+//             navigation.getParent()?.getParent(),
+//             navigation.getParent()?.getParent()?.getParent(),
+//         ].filter(Boolean);
+//         if (ancestors.length === 0) return;
+
+//         const unsubscribers = ancestors.map((ancestor) =>
+//             ancestor.addListener('tabPress', (event) => {
+//                 if (saved || bypassGuardRef.current) return;
+//                 const state = ancestor.getState();
+//                 const targetRoute = state.routes.find((item) => item.key === event.target);
+//                 const isTabNavigator = state.routes.some((item) => TAB_ROUTE_NAMES.has(item.name));
+//                 if (!isTabNavigator || !targetRoute || targetRoute.name === 'MyTours') return;
+
+//                 event.preventDefault();
+//                 showDiscardAlert(() => {
+//                     resetToCreateTour();
+//                     requestAnimationFrame(() => {
+//                         ancestor.navigate(targetRoute.name as never);
+//                     });
+//                 });
+//             })
+//         );
+//         return () => {
+//             unsubscribers.forEach((unsubscribe) => unsubscribe());
+//         };
+//     }, [navigation, resetToCreateTour, saved, showDiscardAlert]);
+
+//     useEffect(() => {
+//         if (places.length < 2) {
+//             return;
+//         }
+
+//         const requestId = optimizeRequestRef.current + 1;
+//         optimizeRequestRef.current = requestId;
+
+//         optimizePlacesForTour(places, tourOrigin).then(({ places: ordered, tourOrigin: origin }) => {
+//             if (optimizeRequestRef.current !== requestId) {
+//                 return;
+//             }
+//             setPlaces(ordered);
+//             if (origin) {
+//                 setTourOrigin(origin);
+//             }
+//         });
+//     }, [places.map((place) => place.id).join(','), tourOrigin?.[0], tourOrigin?.[1]]);
+
+//     const handleSave = async () => {
+//         if (!userId || recommendations.length === 0 || !primary) {
+//             navigation.goBack();
+//             return;
+//         }
+//         setSaving(true);
+//         const now = new Date().toISOString();
+//         try {
+//             const selectedEventsToSave = [...selectedEvents];
+//             const { places: orderedPlaces, tourOrigin: savedOrigin } =
+//                 await optimizePlacesForTour(places, tourOrigin);
+//             setPlaces(orderedPlaces);
+//             if (savedOrigin) {
+//                 setTourOrigin(savedOrigin);
+//             }
+
+//             const savedId =             await saveUserTour({
+//                 tourId: existingTourId,
+//                 userId,
+//                 userName: authUser?.name || '',
+//                 userEmail: authUser?.email || '',
+//                 route: primary.route,
+//                 title: tourName,
+//                 places: orderedPlaces,
+//                 events: selectedEventsToSave,
+//                 placeProgress: {},
+//                 currentStopIndex: 0,
+//                 isEdited: places.length !== initialPlaces.length || selectedEventsToSave.length > 0,
+//                 status: 'saved',
+//                 scheduledDate: null,
+//                 tourOrigin: savedOrigin,
+//                 navigableRoute: buildNavigableRouteFromStops(
+//                     orderedPlaces.map((place) => ({ id: place.id, kind: 'place' as const }))
+//                 ),
+//             });
+
+//             await firestore().collection('tours').doc(savedId).set(
+//                 { event_ids: selectedEventIds },
+//                 { merge: true }
+//             );
+
+//             setSaved(true);
+//             bypassGuardRef.current = true;
+
+//             navigation.navigate('MyTour', {
+//                 pendingCreate: {
+//                     status: 'saved',
+//                     scheduledDate: null,
+//                     createdAt: now,
+//                     tourName,
+//                     recommendations: [{ ...primary, places: orderedPlaces, events: selectedEventsToSave }],
+//                 },
+//             });
+//         } catch (error) {
+//             const message = error instanceof Error ? error.message : 'Unable to save this tour right now.';
+//             showError('Save Failed', message);
+//         } finally {
+//             setSaving(false);
+//         }
+//     };
+
+//     if (recommendations.length === 0) {
+//         return (
+//             <View style={styles.container}>
+//                 <TopHeader title="My Tour" />
+//                 <View style={styles.emptyWrap}>
+//                     <Text style={styles.emptyText}>No suggestions available.</Text>
+//                 </View>
+//             </View>
+//         );
+//     }
+
+//     return (
+//         <View style={styles.container}>
+//             <TopHeader title="My Tour" />
+//             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+//                 <View style={styles.tourCard}>
+//                     <View style={styles.cardTop}>
+//                         <Image source={{ uri: previewImage }} style={styles.thumb} />
+//                         <View style={styles.cardInfo}>
+//                             <View style={styles.cardHeaderRow}>
+//                                 <Text style={styles.tourTitle}>{tourName}</Text>
+//                                 <View style={styles.topIcons}>
+//                                     <IconUp width={16} height={16} />
+//                                 </View>
+//                             </View>
+//                             <View style={styles.iconInfoRow}>
+//                                 <View style={styles.iconTextGroup}>
+//                                     <TourLocationIcon width={20} height={20} />
+//                                     <Text style={styles.textInfo}>Visit {places.length} Locations</Text>
+//                                 </View>
+//                                 {dateLabel ? (
+//                                     <View style={styles.iconTextGroup}>
+//                                         <TourDateIcon width={20} height={20} />
+//                                         <Text style={styles.textInfo}>{dateLabel}</Text>
+//                                     </View>
+//                                 ) : null}
+//                             </View>
+//                             <View style={styles.iconInfoRow}>
+//                                 <View style={styles.iconTextGroup}>
+//                                     <EarnedPointIcon width={20} height={20} />
+//                                     <Text style={styles.textInfo}>
+//                                         Earn <Text style={styles.pointsValue}>+{totalPoints}</Text> Points
+//                                     </Text>
+//                                 </View>
+//                             </View>
+//                         </View>
+//                     </View>
+//                     <View style={styles.cardBottom}>
+//                         <View style={styles.locationHeader}>
+//                             <Text style={styles.locationTitle}>Locations</Text>
+//                             <TouchableOpacity
+//                                 style={styles.addLocBtn}
+//                                 onPress={() =>
+//                                     navigation.navigate('AddLocations', {
+//                                         routeId: primary?.route?.id,
+//                                         cityLabel,
+//                                         fromScreen: 'TourSuggestion',
+//                                     })
+//                                 }
+//                             >
+//                                 <IconPlus width={11} height={11} />
+//                                 <Text style={styles.addLocation}>Add Locations</Text>
+//                             </TouchableOpacity>
+//                         </View>
+//                         {places.map((place) => {
+//                             const isExpanded = Boolean(expandedLocations[place.id]);
+//                             const hasDetails = Boolean(place.address || place.description);
+//                             return (
+//                                 <View key={place.id} style={styles.locationCard}>
+//                                     <View style={styles.locationRow}>
+//                                         <View style={styles.locationLeft}>
+//                                             <CreatedTourLocationIcon width={20} height={20} />
+//                                             <Text style={styles.locationText}>{place.name}</Text>
+//                                         </View>
+//                                         <View style={styles.locationActions}>
+//                                             {hasDetails ? (
+//                                                 <TouchableOpacity
+//                                                     onPress={() => toggleLocationDetails(place.id)}
+//                                                     hitSlop={8}
+//                                                     style={styles.locationToggle}
+//                                                 >
+//                                                     {isExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
+//                                                 </TouchableOpacity>
+//                                             ) : null}
+//                                             <TouchableOpacity onPress={() => removePlace(place.id)} hitSlop={8}>
+//                                                 <IconDelete width={15} height={15} />
+//                                             </TouchableOpacity>
+//                                         </View>
+//                                     </View>
+//                                     {isExpanded && (
+//                                         <View style={styles.locationDetails}>
+//                                             {place.address && <Text style={styles.locationMetaText}>{place.address}</Text>}
+//                                             {place.description && <Text style={styles.locationDescription}>{place.description}</Text>}
+//                                         </View>
+//                                     )}
+//                                 </View>
+//                             );
+//                         })}
+//                         <View style={styles.disclaimerBox}>
+//                             <Text style={styles.disclaimerTitle}>Event Selection</Text>
+//                             <Text style={styles.disclaimerText}>
+//                                 Select events from the next 3 months to include in this tour.
+//                                 Selected events will appear during the tour at their scheduled time.
+//                             </Text>
+//                         </View>
+//                         {selectedEvents.length > 0 && (
+//                             <>
+//                                 <View style={styles.eventsSectionHeader}>
+//                                     <Text style={styles.eventsTitle}>Events</Text>
+//                                     <Text style={styles.eventCountText}>{selectedEvents.length} selected</Text>
+//                                 </View>
+//                                 <View style={styles.selectedEventsList}>
+//                                     {selectedEvents.map((event) => {
+//                                         const eventDate = event.startDate ? new Date(event.startDate).toLocaleDateString() : '';
+//                                         const eventTime = event.startTime || '';
+//                                         return (
+//                                             <View key={event.id} style={styles.selectedEventCard}>
+//                                                 <View style={styles.selectedEventContent}>
+//                                                     <CreatedTourLocationIcon width={20} height={20} />
+//                                                     <View style={styles.selectedEventInfo}>
+//                                                         <Text style={styles.locationText} numberOfLines={1}>{event.title}</Text>
+//                                                         <Text style={styles.selectedEventMeta}>
+//                                                             {eventDate}
+//                                                             {eventTime ? ` • ${eventTime}` : ''}
+//                                                             {event.city_name ? ` • ${event.city_name}` : ''}
+//                                                         </Text>
+//                                                     </View>
+//                                                     <TouchableOpacity onPress={() => removeSelectedEvent(event.id)} hitSlop={8}>
+//                                                         <IconDelete width={18} height={18} />
+//                                                     </TouchableOpacity>
+//                                                 </View>
+//                                             </View>
+//                                         );
+//                                     })}
+//                                 </View>
+//                             </>
+//                         )}
+//                         <View style={styles.eventsSectionHeader}>
+//                             <Text style={styles.eventsTitle}>Event Suggestions</Text>
+//                             {availableSuggestions.length > 0 && (
+//                                 <TouchableOpacity onPress={removeAllSuggestions}>
+//                                     <Text style={styles.clearAllText}>Clear all</Text>
+//                                 </TouchableOpacity>
+//                             )}
+//                         </View>
+//                         {loadingEvents ? (
+//                             <ActivityIndicator color={COLORS.BUTTON_COLOR} />
+//                         ) : availableSuggestions.length === 0 ? (
+//                             <Text style={styles.noEventsText}>
+//                                 {selectedEvents.length > 0 ? 'No more event suggestions available.' : 'No upcoming event suggestions available.'}
+//                             </Text>
+//                         ) : (
+//                             <View style={styles.eventList}>
+//                                 {availableSuggestions.map((event) => {
+//                                     const isExpanded = Boolean(expandedLocations[event.id]);
+//                                     const eventDate = event.startDate ? new Date(event.startDate).toLocaleDateString() : '';
+//                                     const eventTime = event.startTime || '';
+//                                     const hasDetails = Boolean(event.description || event.city_name || eventDate);
+//                                     return (
+//                                         <View key={event.id} style={styles.locationCard}>
+//                                             <View style={styles.locationRow}>
+//                                                 <View style={styles.locationLeft}>
+//                                                     <CreatedTourLocationIcon width={20} height={20} />
+//                                                     <View style={{ flex: 1 }}>
+//                                                         <Text style={styles.locationText} numberOfLines={1}>{event.title}</Text>
+//                                                         <Text style={styles.selectedEventMeta}>
+//                                                             {eventDate}
+//                                                             {eventTime ? ` • ${eventTime}` : ''}
+//                                                             {event.city_name ? ` • ${event.city_name}` : ''}
+//                                                         </Text>
+//                                                     </View>
+//                                                 </View>
+//                                                 <View style={styles.locationActions}>
+//                                                     {hasDetails && (
+//                                                         <TouchableOpacity
+//                                                             onPress={() => toggleLocationDetails(event.id)}
+//                                                             hitSlop={8}
+//                                                             style={styles.locationToggle}
+//                                                         >
+//                                                             {isExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
+//                                                         </TouchableOpacity>
+//                                                     )}
+//                                                     <TouchableOpacity style={styles.addEventBtn} onPress={() => toggleEventSelection(event.id)} activeOpacity={0.8}>
+//                                                         {/* <IconPlus width={10} height={10} /> */}
+//                                                         <Text style={{ color: COLORS.BUTTON_COLOR }}>+</Text>
+//                                                         <Text style={styles.addEventText}>Add</Text>
+//                                                     </TouchableOpacity>
+//                                                     <TouchableOpacity onPress={() => removeEventSuggestion(event.id)} hitSlop={8}>
+//                                                         <CloseIcon width={15} height={15} />
+//                                                     </TouchableOpacity>
+//                                                 </View>
+//                                             </View>
+//                                             {isExpanded && (
+//                                                 <View style={styles.locationDetails}>
+//                                                     {event.description && <Text style={styles.locationDescription}>{event.description}</Text>}
+//                                                 </View>
+//                                             )}
+//                                         </View>
+//                                     );
+//                                 })}
+//                             </View>
+//                         )}
+//                     </View>
+//                 </View>
+//             </ScrollView>
+//             <View style={styles.footer}>
+//                 <TouchableOpacity
+//                     activeOpacity={0.85}
+//                     style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
+//                     onPress={handleSave}
+//                     disabled={saving || places.length === 0}
+//                 >
+//                     {saving ? <ActivityIndicator color={COLORS.WHITE} /> : <Text style={styles.saveText}>Save Tour</Text>}
+//                 </TouchableOpacity>
+//             </View>
+//         </View>
+//     );
+// };
+// export default TourSuggestion;
+
+// const styles = StyleSheet.create({
+//     addEventBtn: {
+//         flexDirection: 'row',
+//         alignItems: 'center',
+//         // gap: 4,
+//         paddingHorizontal: 10,
+//         paddingVertical: 5,
+//         borderRadius: 20,
+//         backgroundColor: '#E8F4FF',
+//     },
+
+//     addEventText: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_SemiBold,
+//         color: COLORS.BUTTON_COLOR,
+//     },
+//     container: {
+//         flex: 1,
+//         backgroundColor: '#F9F9F9',
+//     },
+//     emptyWrap: {
+//         flex: 1,
+//         alignItems: 'center',
+//         justifyContent: 'center',
+//     },
+//     emptyText: {
+//         fontSize: FONT_SIZE.TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Medium,
+//         color: COLORS.TEXT_SECONDARY,
+//     },
+//     scrollContent: {
+//         paddingHorizontal: 23,
+//         paddingTop: 20,
+//         paddingBottom: 120,
+//     },
+//     tourCard: {
+//         width: '100%',
+//         borderRadius: 16,
+//         backgroundColor: COLORS.WHITE,
+//         overflow: 'hidden',
+//         elevation: 2,
+//         shadowColor: '#000',
+//         shadowOffset: { width: 0, height: 2 },
+//         shadowOpacity: 0.1,
+//         shadowRadius: 4,
+//     },
+//     cardTop: {
+//         flexDirection: 'row',
+//         padding: 16,
+//         alignItems: 'center',
+//         justifyContent: 'space-between',
+//     },
+//     thumb: {
+//         width: 70,
+//         height: 100,
+//         borderRadius: 6.7,
+//         backgroundColor: '#EDEDED',
+//     },
+//     cardInfo: {
+//         flex: 1,
+//         marginLeft: 12,
+//         gap: 5,
+//     },
+//     cardHeaderRow: {
+//         flexDirection: 'row',
+//         justifyContent: 'space-between',
+//         alignItems: 'center',
+//     },
+//     tourTitle: {
+//         flex: 1,
+//         fontSize: FONT_SIZE.SMALL_TEXT,
+//         fontFamily: FONT_FAMILY.Poppins_SemiBold,
+//         color: COLORS.TEXT_PRIMARY,
+//     },
+//     topIcons: {
+//         height: 20,
+//         width: 20,
+//         alignItems: 'center',
+//         justifyContent: 'center',
+//     },
+//     iconInfoRow: {
+//         flexDirection: 'row',
+//         alignItems: 'center',
+//         flexWrap: 'nowrap',
+//         gap: 12,
+//     },
+//     iconTextGroup: {
+//         flexDirection: 'row',
+//         alignItems: 'center',
+//         gap: 6,
+//         flexShrink: 1,
+//     },
+//     textInfo: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//         flexShrink: 1,
+//     },
+//     pointsValue: {
+//         color: COLORS.TEXT_GREEN,
+//         fontFamily: FONT_FAMILY.InterTight_SemiBold,
+//     },
+//     cardBottom: {
+//         marginHorizontal: 16,
+//         marginBottom: 16,
+//         paddingHorizontal: 12,
+//         paddingVertical: 18,
+//         borderRadius: 12,
+//         backgroundColor: '#95D8EA20',
+//     },
+//     locationHeader: {
+//         marginBottom: 10,
+//         flexDirection: 'row',
+//         justifyContent: 'space-between',
+//         alignItems: 'center',
+//     },
+//     locationTitle: {
+//         fontSize: FONT_SIZE.TEXT,
+//         fontFamily: FONT_FAMILY.Poppins_SemiBold,
+//         color: COLORS.TEXT_PRIMARY,
+//     },
+//     addLocBtn: {
+//         flexDirection: 'row',
+//         alignItems: 'center',
+//         gap: 5,
+//     },
+//     addLocation: {
+//         fontSize: FONT_SIZE.SMALL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Medium,
+//         color: COLORS.BUTTON_COLOR,
+//     },
+//     locationCard: {
+//         paddingVertical: 6,
+//     },
+//     locationRow: {
+//         flexDirection: 'row',
+//         justifyContent: 'space-between',
+//         alignItems: 'center',
+//     },
+//     locationLeft: {
+//         flex: 1,
+//         flexDirection: 'row',
+//         alignItems: 'center',
+//         gap: 9,
+//     },
+//     locationText: {
+//         flex: 1,
+//         fontSize: FONT_SIZE.TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_PRIMARY,
+//     },
+//     locationActions: {
+//         flexDirection: 'row',
+//         justifyContent: 'space-between',
+//         alignItems: 'center',
+//         // gap: 12,
+//     },
+//     locationToggle: {
+//         width: 20,
+//         height: 20,
+//         alignItems: 'center',
+//         justifyContent: 'center',
+//     },
+//     locationDetails: {
+//         marginTop: 8,
+//         marginLeft: 29,
+//         gap: 4,
+//     },
+//     locationMetaText: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Medium,
+//         color: COLORS.TEXT_PRIMARY,
+//         lineHeight: 18,
+//     },
+//     locationDescription: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//         lineHeight: 18,
+//     },
+//     selectedEventsList: {
+//         marginBottom: 16,
+//         gap: 10,
+//     },
+//     selectedEventCard: {
+//         // padding: 14,
+//         borderRadius: 14,
+//     },
+//     selectedEventContent: {
+//         flexDirection: 'row',
+//         justifyContent: 'space-between',
+//         alignItems: 'center',
+//         gap: 10,
+//     },
+//     selectedEventInfo: {
+//         flex: 1,
+//     },
+//     selectedEventName: {
+//         fontSize: FONT_SIZE.TEXT,
+//         fontFamily: FONT_FAMILY.Poppins_SemiBold,
+//         color: COLORS.TEXT_PRIMARY,
+//         marginBottom: 4,
+//     },
+//     selectedEventMeta: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//     },
+//     eventsTitle: {
+//         marginTop: 10,
+//         marginBottom: 6,
+//         fontSize: FONT_SIZE.TEXT,
+//         fontFamily: FONT_FAMILY.Poppins_SemiBold,
+//         color: COLORS.TEXT_PRIMARY,
+//     },
+//     eventCountText: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//     },
+//     disclaimerBox: {
+//         marginTop: 6,
+//         padding: 10,
+//         borderRadius: 14,
+//         backgroundColor: '#EEF6FF',
+//         borderWidth: 1,
+//         borderColor: '#D0E6FB',
+//     },
+//     disclaimerTitle: {
+//         fontSize: FONT_SIZE.SMALL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_SemiBold,
+//         color: COLORS.TEXT_PRIMARY,
+//         marginBottom: 8,
+//     },
+//     disclaimerText: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//         lineHeight: 18,
+//         marginBottom: 4,
+//     },
+//     eventsSectionHeader: {
+//         flexDirection: 'row',
+//         justifyContent: 'space-between',
+//         alignItems: 'center',
+//     },
+//     clearAllText: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_SemiBold,
+//         color: COLORS.LOGOUT_TEXT,
+//     },
+//     noEventsText: {
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//         marginTop: 8,
+//     },
+//     eventList: {
+//         gap: 10,
+//     },
+//     eventCard: {
+//         padding: 14,
+//         borderRadius: 14,
+//         backgroundColor: COLORS.WHITE,
+//         borderWidth: 1,
+//         borderColor: '#E5E7EB',
+//     },
+//     eventRow: {
+//         flexDirection: 'row',
+//         justifyContent: 'space-between',
+//         alignItems: 'flex-start',
+//         gap: 10,
+//     },
+//     eventName: {
+//         flex: 1,
+//         fontSize: FONT_SIZE.TEXT,
+//         fontFamily: FONT_FAMILY.Poppins_SemiBold,
+//         color: COLORS.TEXT_PRIMARY,
+//     },
+//     eventMeta: {
+//         marginTop: 6,
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//     },
+//     eventDescription: {
+//         marginTop: 6,
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Regular,
+//         color: COLORS.TEXT_SECONDARY,
+//         lineHeight: 18,
+//     },
+//     eventSelectedLabel: {
+//         marginTop: 8,
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_SemiBold,
+//         color: COLORS.BUTTON_COLOR,
+//     },
+//     eventUnselectedLabel: {
+//         marginTop: 8,
+//         fontSize: FONT_SIZE.PILL_TEXT,
+//         fontFamily: FONT_FAMILY.InterTight_Medium,
+//         color: COLORS.TEXT_SECONDARY,
+//     },
+//     saveBtn: {
+//         paddingVertical: 16,
+//         paddingHorizontal: 32,
+//         borderRadius: 14,
+//         backgroundColor: COLORS.BUTTON_COLOR,
+//         alignItems: 'center',
+//     },
+//     saveBtnDisabled: {
+//         opacity: 0.5,
+//     },
+//     saveText: {
+//         fontSize: FONT_SIZE.TEXT,
+//         fontFamily: FONT_FAMILY.Poppins_SemiBold,
+//         color: COLORS.WHITE,
+//     },
+//     footer: {
+//         position: 'absolute',
+//         bottom: 0,
+//         left: 0,
+//         right: 0,
+//         paddingHorizontal: 23,
+//         paddingVertical: 16,
+//         backgroundColor: COLORS.WHITE,
+//         borderTopWidth: 1,
+//         borderTopColor: '#F0F0F0',
+//     },
+// });
+
+
+
+
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     View,
@@ -6,12 +981,12 @@ import {
     ScrollView,
     StyleSheet,
     TouchableOpacity,
-    Alert,
     ActivityIndicator,
 } from 'react-native';
 import { CommonActions, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSelector } from 'react-redux';
+import { CustomAlert } from '../../utils/CustomAlert';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
@@ -24,19 +999,25 @@ import {
     IconUp,
     TourDateIcon,
     TourLocationIcon,
+    CloseIcon,
 } from '../../constants/icons';
 import { showError } from '../../components/common/AppToast';
 import { MyTourStackParamList } from '../../types/types';
 import { RootState } from '../../Redux/store';
+import { fetchUpcomingEventSuggestions } from '../../services/myTourService';
+import firestore from '@react-native-firebase/firestore';
 import {
+    FirebaseEvent,
     FirebasePlace,
     fetchPlacesByIds,
     RecommendedRoute,
+    removeTourPlaceFromUserAndRecord,
     saveUserTour,
+    buildNavigableRouteFromStops,
 } from '../../services/myTourService';
+import { useFavorites } from '../../context/FavoritesContext';
 
 type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'TourSuggestion'>;
-
 const POINTS_PER_LOCATION = 15;
 const TAB_ROUTE_NAMES = new Set(['MyTours', 'Map', 'ForYou', 'Favorites']);
 
@@ -45,6 +1026,7 @@ const TourSuggestion: React.FC = () => {
     const route = useRoute<any>();
     const authUser = useSelector((state: RootState) => state.auth.user);
     const userId = authUser?.id;
+    const { removeFromFavorites, isFavorite } = useFavorites();
 
     const params = route.params as {
         tourName?: string;
@@ -59,24 +1041,130 @@ const TourSuggestion: React.FC = () => {
     const cityLabel = params?.cityLabel || '';
     const primary = recommendations[0];
     const initialPlaces: FirebasePlace[] = primary?.places || [];
-    const events = primary?.events || [];
 
     const [places, setPlaces] = useState<FirebasePlace[]>(initialPlaces);
     const [expandedLocations, setExpandedLocations] = useState<Record<string, boolean>>({});
-
     const totalPoints = useMemo(() => places.length * POINTS_PER_LOCATION, [places.length]);
+
+    const [saving, setSaving] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [suggestedEvents, setSuggestedEvents] = useState<FirebaseEvent[]>([]);
+    const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
+    const [loadingEvents, setLoadingEvents] = useState(false);
+    const [existingTourId, setExistingTourId] = useState<string | null>(null);
+    const bypassGuardRef = useRef(false);
+
+    // Combine current route template events with external live suggestions
+    const allAvailableEvents = useMemo(() => {
+        const templateEvents = primary?.events || [];
+        // Prevent duplicate IDs if suggested matches template
+        const templateIds = new Set(templateEvents.map(e => e.id));
+        const filteredSuggestions = suggestedEvents.filter(e => !templateIds.has(e.id));
+        return [...templateEvents, ...filteredSuggestions];
+    }, [suggestedEvents, primary?.events]);
+
+    // Derive selected event objects using the master array list
+    const selectedEvents = useMemo(() => {
+        return allAvailableEvents.filter((event) =>
+            selectedEventIds.includes(event.id)
+        );
+    }, [allAvailableEvents, selectedEventIds]);
+
+    // Filter suggestions pool to exclude anything selected
+    const availableSuggestions = useMemo(
+        () => suggestedEvents.filter((event) => !selectedEventIds.includes(event.id)),
+        [suggestedEvents, selectedEventIds]
+    );
 
     const previewImage =
         places[0]?.imageUrl ||
         primary?.favoritePlace?.imageUrl ||
-        events[0]?.coverImage ||
+        allAvailableEvents[0]?.coverImage ||
         '';
-
     const dateLabel = primary?.route?.dateRange?.startDate;
 
-    const [saving, setSaving] = useState(false);
-    const [saved, setSaved] = useState(false);
-    const bypassGuardRef = useRef(false);
+    const toggleEventSelection = useCallback((eventId: string) => {
+        setSelectedEventIds((prev) => {
+            if (prev.includes(eventId)) {
+                return prev.filter((id) => id !== eventId);
+            }
+            return [...prev, eventId];
+        });
+    }, []);
+
+    const removeEventSuggestion = useCallback((eventId: string) => {
+        setSuggestedEvents((prev) => prev.filter((event) => event.id !== eventId));
+        setSelectedEventIds((prev) => prev.filter((id) => id !== eventId));
+    }, []);
+
+    const removeAllSuggestions = useCallback(() => {
+        setSuggestedEvents([]);
+        // Only remove event selections that belong to the dynamic suggestions pool
+        const templateIds = (primary?.events || []).map(e => e.id);
+        setSelectedEventIds((prev) => prev.filter((id) => templateIds.includes(id)));
+    }, [primary?.events]);
+
+    const removeSelectedEvent = useCallback((eventId: string) => {
+        setSelectedEventIds((prev) => prev.filter((id) => id !== eventId));
+    }, []);
+
+    // 1. First, fetch already saved document entries if they exist
+    useEffect(() => {
+        const loadSavedEvents = async () => {
+            try {
+                if (!primary?.route?.id || !userId) return;
+                const doc = await firestore()
+                    .collection('tours')
+                    .where('user_id', '==', userId)
+                    .where('route_id', '==', primary.route.id)
+                    .where('status', '==', 'saved')
+                    .limit(1)
+                    .get();
+                if (!doc.empty) {
+                    const tourDoc = doc.docs[0];
+                    const data = tourDoc.data();
+                    const ids = data?.event_ids || [];
+                    setExistingTourId(tourDoc.id);
+                    setSelectedEventIds(ids);
+                } else {
+                    setExistingTourId(null);
+                    // Fallback: Default pre-select all standard template route events if no document exists yet
+                    const initialIds = (primary?.events || []).map(e => e.id);
+                    setSelectedEventIds(initialIds);
+                }
+            } catch (e) {
+                console.log('restore events error', e);
+            }
+        };
+        loadSavedEvents();
+    }, [primary?.route?.id, primary?.events, userId]);
+
+    // 2. Load API event suggestions without stepping on selected states
+    const loadEventSuggestions = useCallback(async () => {
+        if (!primary) return;
+        setLoadingEvents(true);
+        try {
+            const locationLabel =
+                cityLabel || [primary.route.city_name, primary.route.country].filter(Boolean).join(', ');
+            const results = await fetchUpcomingEventSuggestions({
+                locationLabel,
+                tagIds: primary.route.tag_ids || [],
+                limit: 20,
+            });
+            setSuggestedEvents(results);
+            // REMOVED: setSelectedEventIds([]); which cleared your choices!
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'Unable to load event suggestions right now.';
+            showError('Event Suggestions Unavailable', message);
+        } finally {
+            setLoadingEvents(false);
+        }
+    }, [cityLabel, primary]);
+
+    useEffect(() => {
+        loadEventSuggestions();
+    }, [loadEventSuggestions]);
 
     const resetToCreateTour = useCallback(() => {
         bypassGuardRef.current = true;
@@ -89,7 +1177,7 @@ const TourSuggestion: React.FC = () => {
     }, [navigation]);
 
     const showDiscardAlert = useCallback((onDiscard: () => void) => {
-        Alert.alert(
+        CustomAlert.alert(
             'Discard Tour?',
             "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
             [
@@ -103,31 +1191,62 @@ const TourSuggestion: React.FC = () => {
         );
     }, []);
 
-    const removePlace = (placeId: string) => {
-        setPlaces((prev) => prev.filter((p) => p.id !== placeId));
+    const removePlace = async (placeId: string) => {
+        const nextPlaces = places.filter((place) => place.id !== placeId);
+        setPlaces(nextPlaces);
+
+        if (!userId || !primary || !existingTourId) {
+            return;
+        }
+
+        try {
+            if (isFavorite(placeId)) {
+                await removeFromFavorites(placeId, 'Place');
+            }
+            await removeTourPlaceFromUserAndRecord({
+                userId,
+                tourId: existingTourId,
+                placeId,
+            });
+
+            setPlaces(nextPlaces);
+
+            await saveUserTour({
+                tourId: existingTourId,
+                userId,
+                userName: authUser?.name || '',
+                userEmail: authUser?.email || '',
+                route: primary.route,
+                title: tourName,
+                places: nextPlaces,
+                events: selectedEvents,
+                placeProgress: {},
+                currentStopIndex: 0,
+                isEdited: true,
+                status: 'saved',
+                scheduledDate: null,
+                tourOrigin: null,
+                navigableRoute: buildNavigableRouteFromStops(
+                    nextPlaces.map((place) => ({ id: place.id, kind: 'place' as const }))
+                ),
+            });
+        } catch {
+            showError('Remove Failed', 'Unable to remove this location from your tour.');
+        }
     };
 
     useEffect(() => {
         const addedPlaceId = params?.addedPlaceId;
-        if (!addedPlaceId) {
-            return;
-        }
+        if (!addedPlaceId) return;
 
         fetchPlacesByIds([addedPlaceId]).then((fetchedPlaces) => {
             const addedPlace = fetchedPlaces[0];
-            if (!addedPlace) {
-                return;
-            }
-
+            if (!addedPlace) return;
             setPlaces((prev) => {
-                if (prev.some((place) => place.id === addedPlace.id)) {
-                    return prev;
-                }
-
+                if (prev.some((place) => place.id === addedPlace.id)) return prev;
                 return [...prev, addedPlace];
             });
         });
-
         navigation.setParams({ addedPlaceId: undefined, timestamp: undefined });
     }, [navigation, params?.addedPlaceId, params?.timestamp]);
 
@@ -159,23 +1278,16 @@ const TourSuggestion: React.FC = () => {
             navigation.getParent(),
             navigation.getParent()?.getParent(),
             navigation.getParent()?.getParent()?.getParent(),
-        ].filter(Boolean);
-
-        if (ancestors.length === 0) {
-            return;
-        }
+        ].filter((ancestor): ancestor is NonNullable<typeof ancestor> => Boolean(ancestor));
+        if (ancestors.length === 0) return;
 
         const unsubscribers = ancestors.map((ancestor) =>
-            ancestor.addListener('tabPress', (event) => {
+            ancestor.addListener('tabPress' as any, (event: any) => {
                 if (saved || bypassGuardRef.current) return;
-
                 const state = ancestor.getState();
                 const targetRoute = state.routes.find((item) => item.key === event.target);
                 const isTabNavigator = state.routes.some((item) => TAB_ROUTE_NAMES.has(item.name));
-
-                if (!isTabNavigator || !targetRoute || targetRoute.name === 'MyTours') {
-                    return;
-                }
+                if (!isTabNavigator || !targetRoute || targetRoute.name === 'MyTours') return;
 
                 event.preventDefault();
                 showDiscardAlert(() => {
@@ -186,7 +1298,6 @@ const TourSuggestion: React.FC = () => {
                 });
             })
         );
-
         return () => {
             unsubscribers.forEach((unsubscribe) => unsubscribe());
         };
@@ -197,41 +1308,49 @@ const TourSuggestion: React.FC = () => {
             navigation.goBack();
             return;
         }
-
         setSaving(true);
         const now = new Date().toISOString();
-
         try {
-            await saveUserTour({
-                tourId: null,
+            const selectedEventsToSave = [...selectedEvents];
+            const savedId = await saveUserTour({
+                tourId: existingTourId,
                 userId,
                 userName: authUser?.name || '',
                 userEmail: authUser?.email || '',
                 route: primary.route,
                 title: tourName,
                 places,
-                events: primary.events,
+                events: selectedEventsToSave,
                 placeProgress: {},
                 currentStopIndex: 0,
-                isEdited: places.length !== initialPlaces.length,
+                isEdited: places.length !== initialPlaces.length || selectedEventsToSave.length > 0,
                 status: 'saved',
                 scheduledDate: null,
+                tourOrigin: null,
+                navigableRoute: buildNavigableRouteFromStops(
+                    places.map((place) => ({ id: place.id, kind: 'place' as const }))
+                ),
             });
+
+            await firestore().collection('tours').doc(savedId).set(
+                { event_ids: selectedEventIds },
+                { merge: true }
+            );
 
             setSaved(true);
             bypassGuardRef.current = true;
+
             navigation.navigate('MyTour', {
                 pendingCreate: {
                     status: 'saved',
                     scheduledDate: null,
                     createdAt: now,
                     tourName,
-                    recommendations: [{ ...primary, places }],
+                    recommendations: [{ ...primary, places, events: selectedEventsToSave }],
                 },
             });
         } catch (error) {
-            const message =
-                error instanceof Error ? error.message : 'Unable to save this tour right now.';
+            const message = error instanceof Error ? error.message : 'Unable to save this tour right now.';
             showError('Save Failed', message);
         } finally {
             setSaving(false);
@@ -252,11 +1371,7 @@ const TourSuggestion: React.FC = () => {
     return (
         <View style={styles.container}>
             <TopHeader title="My Tour" />
-
-            <ScrollView
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-            >
+            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 <View style={styles.tourCard}>
                     <View style={styles.cardTop}>
                         <Image source={{ uri: previewImage }} style={styles.thumb} />
@@ -267,15 +1382,11 @@ const TourSuggestion: React.FC = () => {
                                     <IconUp width={16} height={16} />
                                 </View>
                             </View>
-
                             <View style={styles.iconInfoRow}>
                                 <View style={styles.iconTextGroup}>
                                     <TourLocationIcon width={20} height={20} />
-                                    <Text style={styles.textInfo}>
-                                        Visit {places.length} Locations
-                                    </Text>
+                                    <Text style={styles.textInfo}>Visit {places.length} Locations</Text>
                                 </View>
-
                                 {dateLabel ? (
                                     <View style={styles.iconTextGroup}>
                                         <TourDateIcon width={20} height={20} />
@@ -283,7 +1394,6 @@ const TourSuggestion: React.FC = () => {
                                     </View>
                                 ) : null}
                             </View>
-
                             <View style={styles.iconInfoRow}>
                                 <View style={styles.iconTextGroup}>
                                     <EarnedPointIcon width={20} height={20} />
@@ -294,7 +1404,6 @@ const TourSuggestion: React.FC = () => {
                             </View>
                         </View>
                     </View>
-
                     <View style={styles.cardBottom}>
                         <View style={styles.locationHeader}>
                             <Text style={styles.locationTitle}>Locations</Text>
@@ -312,11 +1421,9 @@ const TourSuggestion: React.FC = () => {
                                 <Text style={styles.addLocation}>Add Locations</Text>
                             </TouchableOpacity>
                         </View>
-
                         {places.map((place) => {
                             const isExpanded = Boolean(expandedLocations[place.id]);
                             const hasDetails = Boolean(place.address || place.description);
-
                             return (
                                 <View key={place.id} style={styles.locationCard}>
                                     <View style={styles.locationRow}>
@@ -331,56 +1438,131 @@ const TourSuggestion: React.FC = () => {
                                                     hitSlop={8}
                                                     style={styles.locationToggle}
                                                 >
-                                                    {isExpanded ? (
-                                                        <IconUp width={16} height={16} />
-                                                    ) : (
-                                                        <DownArrow width={16} height={16} />
-                                                    )}
+                                                    {isExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
                                                 </TouchableOpacity>
                                             ) : null}
-                                            <TouchableOpacity
-                                                onPress={() => removePlace(place.id)}
-                                                hitSlop={8}
-                                            >
+                                            <TouchableOpacity onPress={() => removePlace(place.id)} hitSlop={8} style={styles.deleteBtn}>
                                                 <IconDelete width={15} height={15} />
                                             </TouchableOpacity>
                                         </View>
                                     </View>
-                                    {isExpanded ? (
+                                    {isExpanded && (
                                         <View style={styles.locationDetails}>
-                                            {place.address ? (
-                                                <Text style={styles.locationMetaText}>
-                                                    {place.address}
-                                                </Text>
-                                            ) : null}
-                                            {place.description ? (
-                                                <Text style={styles.locationDescription}>
-                                                    {place.description}
-                                                </Text>
-                                            ) : null}
+                                            {place.address && <Text style={styles.locationMetaText}>{place.address}</Text>}
+                                            {place.description && <Text style={styles.locationDescription}>{place.description}</Text>}
                                         </View>
-                                    ) : null}
+                                    )}
                                 </View>
                             );
                         })}
-
-                        {events.length > 0 ? (
+                        <View style={styles.disclaimerBox}>
+                            <Text style={styles.disclaimerTitle}>Event Selection</Text>
+                            <Text style={styles.disclaimerText}>
+                                Select events from the next 3 months to include in this tour.
+                                Selected events will appear during the tour at their scheduled time.
+                            </Text>
+                        </View>
+                        {selectedEvents.length > 0 && (
                             <>
-                                <Text style={styles.eventsTitle}>Events</Text>
-                                {events.map((event) => (
-                                    <View key={event.id} style={styles.locationRow}>
-                                        <View style={styles.locationLeft}>
-                                            <CreatedTourLocationIcon width={20} height={20} />
-                                            <Text style={styles.locationText}>{event.title}</Text>
-                                        </View>
-                                    </View>
-                                ))}
+                                <View style={styles.eventsSectionHeader}>
+                                    <Text style={styles.eventsTitle}>Events</Text>
+                                    <Text style={styles.eventCountText}>{selectedEvents.length} selected</Text>
+                                </View>
+                                <View style={styles.selectedEventsList}>
+                                    {selectedEvents.map((event) => {
+                                        const eventDate = event.startDate ? new Date(event.startDate).toLocaleDateString() : '';
+                                        const eventTime = event.startTime || '';
+                                        return (
+                                            <View key={event.id} style={styles.selectedEventCard}>
+                                                <View style={styles.selectedEventContent}>
+                                                    <CreatedTourLocationIcon width={20} height={20} />
+                                                    <View style={styles.selectedEventInfo}>
+                                                        <Text style={styles.locationText} numberOfLines={1}>{event.title}</Text>
+                                                        <Text style={styles.selectedEventMeta}>
+                                                            {eventDate}
+                                                            {eventTime ? ` • ${eventTime}` : ''}
+                                                            {event.city_name ? ` • ${event.city_name}` : ''}
+                                                        </Text>
+                                                    </View>
+                                                    <TouchableOpacity onPress={() => removeSelectedEvent(event.id)} hitSlop={8} style={styles.deleteBtn}>
+                                                        <IconDelete width={18} height={18} />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        );
+                                    })}
+                                </View>
                             </>
-                        ) : null}
+                        )}
+                        <View style={styles.eventsSectionHeader}>
+                            <Text style={styles.eventsTitle}>Event Suggestions</Text>
+                            {availableSuggestions.length > 0 && (
+                                <TouchableOpacity onPress={removeAllSuggestions}>
+                                    <Text style={styles.clearAllText}>Clear all</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                        {loadingEvents ? (
+                            <ActivityIndicator color={COLORS.BUTTON_COLOR} />
+                        ) : availableSuggestions.length === 0 ? (
+                            <Text style={styles.noEventsText}>
+                                {selectedEvents.length > 0 ? 'No more event suggestions available.' : 'No upcoming event suggestions available.'}
+                            </Text>
+                        ) : (
+                            <View style={styles.eventList}>
+                                {availableSuggestions.map((event) => {
+                                    const isExpanded = Boolean(expandedLocations[event.id]);
+                                    const eventDate = event.startDate ? new Date(event.startDate).toLocaleDateString() : '';
+                                    const eventTime = event.startTime || '';
+                                    const hasDetails = Boolean(event.description || event.city_name || eventDate);
+                                    return (
+                                        <View key={event.id} style={styles.locationCard}>
+                                            <View style={styles.locationRow}>
+                                                <View style={styles.locationLeft}>
+                                                    <CreatedTourLocationIcon width={20} height={20} />
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={styles.locationText} numberOfLines={1}>{event.title}</Text>
+                                                        <Text style={styles.selectedEventMeta}>
+                                                            {eventDate}
+                                                            {eventTime ? ` • ${eventTime}` : ''}
+                                                            {event.city_name ? ` • ${event.city_name}` : ''}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                                <View style={styles.locationActions}>
+                                                    {hasDetails && (
+                                                        <TouchableOpacity
+                                                            onPress={() => toggleLocationDetails(event.id)}
+                                                            hitSlop={8}
+                                                            style={styles.locationToggle}
+                                                        >
+                                                            {isExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
+                                                        </TouchableOpacity>
+                                                    )}
+                                                    <TouchableOpacity style={styles.addEventBtn} onPress={() => toggleEventSelection(event.id)} activeOpacity={0.8}>
+                                                        {/* <IconPlus width={10} height={10} /> */}
+                                                        <Text style={{color: COLORS.BUTTON_COLOR}}>+</Text>
+                                                        <Text style={styles.addEventText}>Add</Text>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity onPress={() => removeEventSuggestion(event.id)} hitSlop={8} style={styles.deleteBtn}>
+                                                        {/* <CloseIcon width={15} height={15} /> */}
+                                                        <Text style={{color: COLORS.LOGOUT_TEXT}}>x</Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                            {isExpanded && (
+                                                <View style={styles.locationDetails}>
+                                                    {event.description && <Text style={styles.locationDescription}>{event.description}</Text>}
+                                                </View>
+                                            )}
+                                        </View>
+                                    );
+                                })}
+                            </View>
+                        )}
                     </View>
                 </View>
             </ScrollView>
-
             <View style={styles.footer}>
                 <TouchableOpacity
                     activeOpacity={0.85}
@@ -388,20 +1570,31 @@ const TourSuggestion: React.FC = () => {
                     onPress={handleSave}
                     disabled={saving || places.length === 0}
                 >
-                    {saving ? (
-                        <ActivityIndicator color={COLORS.WHITE} />
-                    ) : (
-                        <Text style={styles.saveText}>Save Tour</Text>
-                    )}
+                    {saving ? <ActivityIndicator color={COLORS.WHITE} /> : <Text style={styles.saveText}>Save Tour</Text>}
                 </TouchableOpacity>
             </View>
         </View>
     );
 };
-
 export default TourSuggestion;
 
 const styles = StyleSheet.create({
+    addEventBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        // backgroundColor:COLORS.BUTTON_DISABLED,
+        backgroundColor:'#cde6fc',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 6,
+        gap: 5,
+    },
+
+    addEventText: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_SemiBold,
+        color: COLORS.BUTTON_COLOR,
+    },
     container: {
         flex: 1,
         backgroundColor: '#F9F9F9',
@@ -517,6 +1710,9 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.InterTight_Medium,
         color: COLORS.BUTTON_COLOR,
     },
+    deleteBtn: {
+        marginLeft: 12,
+    },
     locationCard: {
         paddingVertical: 6,
     },
@@ -539,14 +1735,17 @@ const styles = StyleSheet.create({
     },
     locationActions: {
         flexDirection: 'row',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        gap: 12,
+        // backgroundColor:'red'
+        // gap: 12,
     },
     locationToggle: {
         width: 20,
         height: 20,
         alignItems: 'center',
         justifyContent: 'center',
+        marginRight: 5,
     },
     locationDetails: {
         marginTop: 8,
@@ -565,6 +1764,34 @@ const styles = StyleSheet.create({
         color: COLORS.TEXT_SECONDARY,
         lineHeight: 18,
     },
+    selectedEventsList: {
+        marginBottom: 16,
+        gap: 10,
+    },
+    selectedEventCard: {
+        // padding: 14,
+        borderRadius: 14,
+    },
+    selectedEventContent: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 10,
+    },
+    selectedEventInfo: {
+        flex: 1,
+    },
+    selectedEventName: {
+        fontSize: FONT_SIZE.TEXT,
+        fontFamily: FONT_FAMILY.Poppins_SemiBold,
+        color: COLORS.TEXT_PRIMARY,
+        marginBottom: 4,
+    },
+    selectedEventMeta: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+    },
     eventsTitle: {
         marginTop: 10,
         marginBottom: 6,
@@ -572,36 +1799,119 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.Poppins_SemiBold,
         color: COLORS.TEXT_PRIMARY,
     },
-    footer: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        paddingHorizontal: 20,
-        paddingTop: 12,
-        paddingBottom: 26,
-        backgroundColor: '#F9F9F9',
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: '#ECECEC',
+    eventCountText: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+    },
+    disclaimerBox: {
+        marginTop: 6,
+        padding: 10,
+        borderRadius: 14,
+        backgroundColor: '#EEF6FF',
+        borderWidth: 1,
+        borderColor: '#D0E6FB',
+    },
+    disclaimerTitle: {
+        fontSize: FONT_SIZE.SMALL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_SemiBold,
+        color: COLORS.TEXT_PRIMARY,
+        marginBottom: 8,
+    },
+    disclaimerText: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+        lineHeight: 18,
+        marginBottom: 4,
+    },
+    eventsSectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    clearAllText: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_SemiBold,
+        color: COLORS.LOGOUT_TEXT,
+    },
+    noEventsText: {
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+        marginTop: 8,
+    },
+    eventList: {
+        gap: 10,
+    },
+    eventCard: {
+        padding: 14,
+        borderRadius: 14,
+        backgroundColor: COLORS.WHITE,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    eventRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        gap: 10,
+    },
+    eventName: {
+        flex: 1,
+        fontSize: FONT_SIZE.TEXT,
+        fontFamily: FONT_FAMILY.Poppins_SemiBold,
+        color: COLORS.TEXT_PRIMARY,
+    },
+    eventMeta: {
+        marginTop: 6,
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+    },
+    eventDescription: {
+        marginTop: 6,
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY,
+        lineHeight: 18,
+    },
+    eventSelectedLabel: {
+        marginTop: 8,
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_SemiBold,
+        color: COLORS.BUTTON_COLOR,
+    },
+    eventUnselectedLabel: {
+        marginTop: 8,
+        fontSize: FONT_SIZE.PILL_TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Medium,
+        color: COLORS.TEXT_SECONDARY,
     },
     saveBtn: {
-        height: 52,
-        borderRadius: 26,
+        paddingVertical: 16,
+        paddingHorizontal: 32,
+        borderRadius: 14,
         backgroundColor: COLORS.BUTTON_COLOR,
         alignItems: 'center',
-        justifyContent: 'center',
-        shadowColor: COLORS.BUTTON_COLOR,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.25,
-        shadowRadius: 10,
-        elevation: 4,
     },
     saveBtnDisabled: {
-        opacity: 0.7,
+        opacity: 0.5,
     },
     saveText: {
-        color: COLORS.WHITE,
         fontSize: FONT_SIZE.TEXT,
-        fontFamily: FONT_FAMILY.InterTight_SemiBold,
+        fontFamily: FONT_FAMILY.Poppins_SemiBold,
+        color: COLORS.WHITE,
+    },
+    footer: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        paddingHorizontal: 23,
+        paddingVertical: 16,
+        backgroundColor: COLORS.WHITE,
+        borderTopWidth: 1,
+        borderTopColor: '#F0F0F0',
     },
 });

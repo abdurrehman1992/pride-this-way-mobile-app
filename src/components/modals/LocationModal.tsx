@@ -10,7 +10,6 @@ import {
     Keyboard,
     Platform,
     ActivityIndicator,
-    Alert,
     Animated,
     PanResponder,
     KeyboardAvoidingView
@@ -22,6 +21,7 @@ import {
     getAddressFromCoords,
 } from "../../utils/location";
 import { suggestLocations } from "../../services/aiService";
+import { CustomAlert } from "../../utils/CustomAlert";
 
 import {
     ModalCloseIcon,
@@ -181,6 +181,35 @@ const LocationModal: React.FC<Props> = ({
         ? !!loadingSuggestions
         : aiLoading;
 
+    const normalizeLocationString = (address: string) => {
+        const parts = address
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean);
+
+        if (parts.length === 0) return "";
+
+        const country = parts[parts.length - 1];
+
+        const cleanPart = (part: string) =>
+            part
+                .replace(/\b(City|Tehsil|District|Division|Province|Region|State|County|Municipality|Union Council)\b/gi, "")
+                .replace(/\s+/g, " ")
+                .trim();
+
+        const cleaned = parts.map(cleanPart).filter(Boolean);
+        if (cleaned.length === 1) return cleaned[0];
+
+        for (let i = cleaned.length - 2; i >= 0; i -= 1) {
+            const part = cleaned[i];
+            if (/^\d{3,}$/.test(part)) continue;
+            if (/^(Punjab|Sindh|Balochistan|Khyber Pakhtunkhwa|KP|Gilgit|Azad Kashmir|Islamabad)$/i.test(part)) continue;
+            return `${part}, ${country}`;
+        }
+
+        return `${cleaned[0]}, ${country}`;
+    };
+
     const handleSelect = (item: string) => {
         if (onSearchChange) {
             onSearchChange(item);
@@ -194,7 +223,7 @@ const LocationModal: React.FC<Props> = ({
     const getCurrentLocation = async () => {
         const hasPermission = await requestLocationPermission();
         if (!hasPermission) {
-            Alert.alert(
+            CustomAlert.alert(
                 "Permission Required",
                 "Please allow location access in your device settings."
             );
@@ -223,16 +252,18 @@ const LocationModal: React.FC<Props> = ({
                 pos.coords.latitude,
                 pos.coords.longitude
             );
+            const normalizedAddress = normalizeLocationString(addr);
 
             if (onSearchChange) {
-                onSearchChange(addr);
+                onSearchChange(normalizedAddress);
             } else {
-                setInternalSearch(addr);
+                setInternalSearch(normalizedAddress);
             }
-            setSelected(addr);
+            setSelected(normalizedAddress);
+            console.log("Current location :", normalizedAddress)
         } catch (error) {
             console.log("LOCATION ERROR:", error);
-            Alert.alert("Error", "Unable to fetch location");
+            CustomAlert.alert("Error", "Unable to fetch location");
         } finally {
             setLoadingLocation(false);
         }

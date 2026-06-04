@@ -7,16 +7,22 @@ import { PersistGate } from "redux-persist/integration/react";
 import Toast from "react-native-toast-message";
 import { toastConfig } from "./utils/toastConfig";
 import { FavoritesProvider } from "./context/FavoritesContext";
+import { AlertProvider } from "./context/AlertContext";
+import CustomAlertModal from "./components/modals/CustomAlertModal";
+
 const App = () => {
   return (
     <SafeAreaProvider>
       <Provider store={store}>
         <PersistGate loading={null} persistor={persistor}>
           <FavoritesProvider>
-            <SafeAreaProvider>
-              <RootNavigator />
-              <Toast config={toastConfig} />
-            </SafeAreaProvider>
+            <AlertProvider>
+              <SafeAreaProvider>
+                <RootNavigator />
+                <CustomAlertModal />
+                <Toast config={toastConfig} />
+              </SafeAreaProvider>
+            </AlertProvider>
           </FavoritesProvider>
         </PersistGate>
       </Provider>

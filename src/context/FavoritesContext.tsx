@@ -53,6 +53,14 @@ type FavoritesContextType = {
 const FavoritesContext = createContext<FavoritesContextType | null>(null);
 
 const USERS_COLLECTION = "users";
+/** Firestore field for place favorites (admin dashboard reads this). */
+const FAVOURITE_PLACES_FIELD = "favoritePlaces";
+const LEGACY_FAVORITES_FIELD = "favorites";
+
+const firestoreFieldForBucket = (bucket: FavoriteBucket): string => {
+  if (bucket === "favorites") return FAVOURITE_PLACES_FIELD;
+  return bucket;
+};
 
 const AI_ID_PREFIXES = [
   "fallback_",
@@ -110,18 +118,11 @@ export const FavoritesProvider = ({ children }: any) => {
       .onSnapshot(
         (snapshot) => {
           const data = snapshot.data();
-          const places = extractIds(data?.favorites);
+          const fromFavouritePlaces = extractIds(data?.[FAVOURITE_PLACES_FIELD]);
+          const fromLegacy = extractIds(data?.[LEGACY_FAVORITES_FIELD]);
+          const places = [...new Set([...fromFavouritePlaces, ...fromLegacy])];
           const tours = extractIds(data?.favoriteTours);
           const events = extractIds(data?.favoriteEvents);
-
-          console.log('[FavoritesContext] snapshot fields:', {
-            favoritesRaw: data?.favorites,
-            favoriteToursRaw: data?.favoriteTours,
-            favoriteEventsRaw: data?.favoriteEvents,
-            extractedPlaces: places,
-            extractedTours: tours,
-            extractedEvents: events,
-          });
 
           setFavorites(places);
           setFavoriteTours(tours);
@@ -150,16 +151,21 @@ export const FavoritesProvider = ({ children }: any) => {
         return;
       }
       const bucket = bucketForCategory(item.category);
+      const field = firestoreFieldForBucket(bucket);
+      const payload: Record<string, unknown> = {
+        [field]: firestore.FieldValue.arrayUnion(item.id),
+      };
+
+      if (bucket === "favorites") {
+        // Migrate legacy buckets so admin + app stay in sync.
+        payload[LEGACY_FAVORITES_FIELD] = firestore.FieldValue.arrayRemove(item.id);
+        payload.favoriteEvents = firestore.FieldValue.arrayRemove(item.id);
+      }
 
       await firestore()
         .collection(USERS_COLLECTION)
         .doc(userId)
-        .set(
-          {
-            [bucket]: firestore.FieldValue.arrayUnion(item.id),
-          },
-          { merge: true }
-        );
+        .set(payload, { merge: true });
     },
     [userId]
   );
@@ -172,19 +178,22 @@ export const FavoritesProvider = ({ children }: any) => {
 
       if (category) {
         const bucket = bucketForCategory(category);
-        await userRef.set(
-          {
-            [bucket]: firestore.FieldValue.arrayRemove(id),
-          },
-          { merge: true }
-        );
+        const field = firestoreFieldForBucket(bucket);
+        const payload: Record<string, unknown> = {
+          [field]: firestore.FieldValue.arrayRemove(id),
+        };
+        if (bucket === "favorites") {
+          payload[LEGACY_FAVORITES_FIELD] = firestore.FieldValue.arrayRemove(id);
+        }
+        await userRef.set(payload, { merge: true });
         return;
       }
 
       // Category unknown — remove from all buckets to be safe
       await userRef.set(
         {
-          favorites: firestore.FieldValue.arrayRemove(id),
+          [FAVOURITE_PLACES_FIELD]: firestore.FieldValue.arrayRemove(id),
+          [LEGACY_FAVORITES_FIELD]: firestore.FieldValue.arrayRemove(id),
           favoriteTours: firestore.FieldValue.arrayRemove(id),
           favoriteEvents: firestore.FieldValue.arrayRemove(id),
         },

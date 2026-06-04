@@ -112,18 +112,22 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
       <View style={styles.divider} />
       
       <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact]}>
-        <View style={styles.infoItem}>
-          <StarIcon width={15} height={14} />
-          <Text style={styles.infoText}>{rating}</Text>
-        </View>
+        {rating ? (
+          <View style={styles.infoItem}>
+            <StarIcon width={15} height={14} />
+            <Text style={styles.infoText}>{rating}</Text>
+          </View>
+        ) : null}
         <View style={styles.infoItem}>
           <LocationIcon width={10} height={12} />
           <Text style={styles.infoText}>{location}</Text>
         </View>
-        <View style={styles.infoItem}>
-          <TimeIcon width={13} height={13} />
-          <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{time}</Text>
-        </View>
+        {time ? (
+          <View style={styles.infoItem}>
+            <TimeIcon width={13} height={13} />
+            <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{time}</Text>
+          </View>
+        ) : null}
       </View>
     </View>
   );

@@ -1,7 +1,8 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Alert, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { CommonActions } from "@react-navigation/native";
+import { CustomAlert } from "../utils/CustomAlert";
 import { TabParamList } from "../types/types";
 import { COLORS } from "../constants/colors";
 
@@ -84,7 +85,7 @@ const TabNavigator: React.FC = () => {
 
           if (tourIsActive) {
             event.preventDefault();
-            Alert.alert(
+            CustomAlert.alert(
               "Leave Tour?",
               "Your tour is in progress. Pause it before leaving — you can resume from where you left off.",
               [
@@ -133,7 +134,7 @@ const TabNavigator: React.FC = () => {
           }
 
           event.preventDefault();
-          Alert.alert(
+          CustomAlert.alert(
             "Discard Tour?",
             "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
             [

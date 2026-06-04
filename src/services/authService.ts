@@ -147,7 +147,7 @@ const buildAuthSession = async (
       phone: profile?.phone || null,
       profileImage: profile?.profileImage || null,
       points: Number(profile?.points || 0),
-      favorites: extractIds(profile?.favorites),
+      favorites: extractIds(profile?.favouritePlaces ?? profile?.favorites),
       favoriteTours: extractIds(profile?.favoriteTours),
       favoriteEvents: extractIds(profile?.favoriteEvents),
     },

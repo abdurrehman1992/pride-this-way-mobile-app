@@ -1,6 +1,5 @@
 import React, { useCallback } from 'react';
 import {
-  Alert,
   View,
   Text,
   StyleSheet,
@@ -12,6 +11,8 @@ import {
 import { DrawerContentScrollView } from '@react-navigation/drawer';
 import { CommonActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { CustomAlert } from '../../utils/CustomAlert';
 
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
@@ -76,7 +77,7 @@ const CustomDrawer = ({ navigation }: any) => {
         proceed();
         return;
       }
-      Alert.alert(
+      CustomAlert.alert(
         'Leave Tour?',
         'Your tour is in progress. Pause it before leaving — you can resume from where you left off.',
         [
@@ -135,7 +136,7 @@ const CustomDrawer = ({ navigation }: any) => {
           return;
         }
 
-        Alert.alert(
+        CustomAlert.alert(
           'Discard Tour?',
           "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
           [
