@@ -20,7 +20,7 @@ const Profile = () => {
   const navigation = useNavigation<NavigationProp>();
   const dispatch = useDispatch();
   const user = useSelector((state: RootState) => state.auth.user);
-  // console.log(user)
+ // console.log(user)
   const handleLogout = async () => {
     try {
       await logoutUser();

@@ -119,7 +119,7 @@ const Login: React.FC = () => {
       // showSuccess("Login Successful", "Welcome back to Pride this way!","top");
       showSuccess("Login Successful", "Welcome back to Pride this way!");
     } catch (error) {
-      console.log("LOGIN ERROR:", error);
+      // console.log("LOGIN ERROR:", error);
       const message =
         error instanceof Error ? error.message : "Unable to sign in.";
       dispatch(loginFailure(message));

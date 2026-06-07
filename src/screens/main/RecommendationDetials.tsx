@@ -99,7 +99,7 @@ const RecommendationDetials = () => {
                 title,
             });
         } catch (e) {
-            console.log("Share error:", e);
+            // console.log("Share error:", e);
         }
     };
     const gallery = [

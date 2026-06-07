@@ -55,6 +55,7 @@ import {
   recordTourFavoritedPlace,
   saveUserTour,
   sortPlacesByIdOrder,
+  buildNavigableRouteFromStops,
   removeTourPlaceFromUserAndRecord,
 } from '../../services/myTourService';
 import { scheduleStopsWithEventTiming } from '../../utils/tourRouteScheduling';
@@ -739,12 +740,28 @@ const MyTourStart = () => {
         if (savedTour) {
           const placeIdsInOrder = [...savedTour.all_places]
             .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-            .map((item) => item.place_id);
+            .map((item) => item.place_id)
+            .filter(Boolean);
           const savedPlaces = sortPlacesByIdOrder(
             await fetchPlacesByIds(placeIdsInOrder),
             placeIdsInOrder
           );
-          const savedEvents = await fetchEventsByIds(savedTour.event_ids || []);
+
+          // Extract events from all_places (new merged structure)
+          const eventEntries = savedTour.all_places
+            .filter((item: any) => item.event_id)
+            .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+
+          // If no events in all_places (legacy data), try to fetch from top-level event_ids field
+          let savedEvents: FirebaseEvent[] = [];
+          const eventIdsFromEntries = eventEntries.map((entry: any) => entry.event_id);
+          const remainingEventIds = (savedTour.event_ids || []).filter(
+            (id) => !eventIdsFromEntries.includes(id)
+          );
+          const allEventIds = [...eventIdsFromEntries, ...remainingEventIds];
+          if (allEventIds.length > 0) {
+            savedEvents = await fetchEventsByIds(allEventIds);
+          }
 
           nextDetails = {
             ...data,
@@ -753,27 +770,42 @@ const MyTourStart = () => {
             places: savedPlaces,
             events: savedEvents,
           };
-          nextProgress = savedTour.all_places.reduce<
-            Record<
-              string,
-              {
-                visited: boolean;
-                visitedAt?: string | null;
-                proofImageUri?: string | null;
-                pointsEarned?: number;
-                addedByUser?: boolean;
-              }
-            >
-          >((acc, item) => {
-            acc[item.place_id] = {
-              visited: item.visited,
-              visitedAt: item.visitedAt,
-              proofImageUri: item.proofImageUri,
-              pointsEarned: item.pointsEarned,
-              addedByUser: item.addedByUser,
-            };
-            return acc;
-          }, {});
+          nextProgress = savedTour.all_places
+            .filter((item: any) => item.place_id)
+            .reduce(
+              (
+                acc: Record<
+                  string,
+                  {
+                    visited: boolean;
+                    visitedAt?: string | null;
+                    proofImageUri?: string | null;
+                    pointsEarned?: number;
+                    addedByUser?: boolean;
+                  }
+                >,
+                item: any
+              ) => {
+                acc[item.place_id] = {
+                  visited: item.visited,
+                  visitedAt: item.visitedAt,
+                  proofImageUri: item.proofImageUri,
+                  pointsEarned: item.pointsEarned,
+                  addedByUser: item.addedByUser,
+                };
+                return acc;
+              },
+              {} as Record<
+                string,
+                {
+                  visited: boolean;
+                  visitedAt?: string | null;
+                  proofImageUri?: string | null;
+                  pointsEarned?: number;
+                  addedByUser?: boolean;
+                }
+              >
+            );
           const wasPaused = savedTour.status === 'paused';
           const wasCompleted = savedTour.status === 'completed';
           const shouldAutoStart = Boolean(route.params?.autoStart) && !wasCompleted;
@@ -794,12 +826,25 @@ const MyTourStart = () => {
 
         setPlaceProgress(nextProgress);
         // Restore persisted per-event progress (attended/dismissed) if present
-        const nextEventProgress: Record<string, {
+        // Extract from all_places entries that have event_progress field (new structure)
+        let nextEventProgress: Record<string, {
           attended?: boolean;
           dismissed?: boolean;
           visitedAt?: string | null;
           proofImageUri?: string | null;
-        }> = (savedTour?.event_progress as any) || {};
+        }> = {};
+        
+        const persistedEventProgress = savedTour?.event_progress || {};
+        nextEventProgress = {
+          ...persistedEventProgress,
+          ...((savedTour?.all_places || [])
+            .filter((item: any) => item.event_id && item.event_progress)
+            .reduce((acc: any, item: any) => {
+              acc[item.event_id] = item.event_progress;
+              return acc;
+            }, {} as Record<string, any>)),
+        };
+        
         setEventProgress(nextEventProgress);
         setRouteDetails(nextDetails);
 
@@ -1172,6 +1217,7 @@ const MyTourStart = () => {
       startedAt: startedAt || new Date().toISOString(),
       completedAt: null,
       tourOrigin: tourOriginRef.current,
+      navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
     })
       .then((savedId) => { if (savedId !== tourId) setTourId(savedId); })
       .catch(() => { });
@@ -1219,6 +1265,7 @@ const MyTourStart = () => {
       startedAt: startedAt || new Date().toISOString(),
       completedAt: isCompletedTour ? new Date().toISOString() : null,
       tourOrigin: tourOriginRef.current,
+      navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
     }).catch(() => { });
   }, [
     isCompletedTour,
@@ -1940,6 +1987,7 @@ useEffect(() => {
             startedAt: startedAt || new Date().toISOString(),
             completedAt: null,
             tourOrigin: tourOriginRef.current,
+            navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
           });
         } catch {
           showError('Remove Failed', 'Unable to remove this event from the tour right now.');
@@ -2100,6 +2148,7 @@ useEffect(() => {
         startedAt: nextStartedAt || new Date().toISOString(),
         completedAt: status === 'completed' ? new Date().toISOString() : null,
         tourOrigin: tourOriginRef.current,
+        navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
       });
       tourIdRef.current = savedId;
       setTourId(savedId);

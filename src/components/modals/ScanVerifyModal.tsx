@@ -95,7 +95,7 @@ const ScanVerifyModal: React.FC<Props> = ({
   useEffect(() => {
     if (device && hasPermission && visible && step === "scan") {
       const timer = setTimeout(() => {
-        console.log("Camera is ready");
+        // console.log("Camera is ready");
       }, 500);
       return () => clearTimeout(timer);
     }
@@ -137,7 +137,7 @@ const ScanVerifyModal: React.FC<Props> = ({
 
     try {
       setIsCapturing(true);
-      console.log("Attempting to take photo...");
+      // console.log("Attempting to take photo...");
 
       const ref: any = cameraRef.current;
       if (!ref) {
@@ -158,14 +158,14 @@ const ScanVerifyModal: React.FC<Props> = ({
         return;
       }
 
-      console.log("Capture response:", photo);
+      // console.log("Capture response:", photo);
       const rawPath = photo?.filePath || photo?.path || photo?.uri;
       if (rawPath) {
         const uri = rawPath.startsWith("file://") || rawPath.startsWith("content://")
           ? rawPath
           : `file://${rawPath}`;
 
-        console.log("Resolved capture URI:", uri);
+        // console.log("Resolved capture URI:", uri);
         setCapturedImage({ uri });
         setStep("confirm");
         return;
@@ -174,7 +174,7 @@ const ScanVerifyModal: React.FC<Props> = ({
       if (photo && typeof photo.toEncodedImageDataAsync === "function") {
         try {
           const uri = await imageToDataUri(photo);
-          console.log("Resolved snapshot URI:", uri);
+          // console.log("Resolved snapshot URI:", uri);
           setCapturedImage({ uri });
           setStep("confirm");
           return;
@@ -296,8 +296,8 @@ const ScanVerifyModal: React.FC<Props> = ({
                   }
                   style={styles.capturedImage}
                   resizeMode="cover"
-                  onError={(error) => console.log("Image error:", error)}
-                  onLoad={() => console.log("Image loaded successfully")}
+                  // onError={(error) => console.log("Image error:", error)}
+                  // onLoad={() => console.log("Image loaded successfully")}
                 />
               </View>
             )}

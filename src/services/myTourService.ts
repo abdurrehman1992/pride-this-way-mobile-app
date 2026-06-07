@@ -132,6 +132,16 @@
 //   // stop order stays identical across pause/resume and app restarts.
 //   tourOrigin?: [number, number] | null;
 //   navigable_route?: NavigableRouteEntry[];
+//   // persisted per-event progress (attended/dismissed timestamps)
+//   event_progress?: Record<
+//     string,
+//     {
+//       attended?: boolean;
+//       dismissed?: boolean;
+//       visitedAt?: string | null;
+//       proofImageUri?: string | null;
+//     }
+//   >;
 // };
 
 // export type RewardsSummary = {
@@ -316,6 +326,12 @@
 //       kind: item.kind === 'event' ? 'event' : 'place',
 //     })
 //   ),
+//   event_progress: (data?.event_progress || {}) as Record<string, {
+//     attended?: boolean;
+//     dismissed?: boolean;
+//     visitedAt?: string | null;
+//     proofImageUri?: string | null;
+//   }>,
 // });
 
 // const buildLocationLabel = (city?: string, country?: string) => {
@@ -1031,6 +1047,7 @@
 //   places,
 //   events,
 //   placeProgress,
+//   eventProgress,
 //   currentStopIndex,
 //   isEdited,
 //   status,
@@ -1056,6 +1073,15 @@
 //       proofImageUri?: string | null;
 //       pointsEarned?: number;
 //       addedByUser?: boolean;
+//     }
+//   >;
+//   eventProgress?: Record<
+//     string,
+//     {
+//       attended?: boolean;
+//       dismissed?: boolean;
+//       visitedAt?: string | null;
+//       proofImageUri?: string | null;
 //     }
 //   >;
 //   currentStopIndex: number;
@@ -1108,6 +1134,7 @@
 //     scheduledDate: scheduledDate || null,
 //     all_places: allPlaces,
 //     event_ids: events.map((event) => event.id),
+//     event_progress: (eventProgress || {}) as Record<string, unknown>,
 //     tourOrigin: tourOrigin ?? null,
 //     navigable_route: navigableRoute ?? [],
 //     updatedAt: now,
@@ -1518,7 +1545,6 @@
 //     tours: rewardTours,
 //   };
 // };
-
 
 
 
@@ -2564,6 +2590,36 @@ export const fetchEventsByIds = async (
     );
 };
 
+const startOfCalendarDay = (date: Date) => {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+};
+
+const endOfCalendarDay = (date: Date) => {
+  const copy = new Date(date);
+  copy.setHours(23, 59, 59, 999);
+  return copy;
+};
+
+const isEventScheduledOnDay = (event: FirebaseEvent, day: Date) => {
+  if (!event.startDate) {
+    return false;
+  }
+
+  const dayStart = startOfCalendarDay(day).getTime();
+  const dayEnd = endOfCalendarDay(day).getTime();
+  const eventStart = startOfCalendarDay(new Date(event.startDate)).getTime();
+  const eventEnd = event.endDate
+    ? endOfCalendarDay(new Date(event.endDate)).getTime()
+    : endOfCalendarDay(new Date(event.startDate)).getTime();
+
+  return eventStart <= dayEnd && eventEnd >= dayStart;
+};
+
+const isTodayEvent = (event: FirebaseEvent, now = new Date()) =>
+  isEventScheduledOnDay(event, now);
+
 export const saveUserTour = async ({
   tourId,
   userId,
@@ -2627,10 +2683,9 @@ export const saveUserTour = async ({
     });
   }
 
-  const allPlaces = places.map((place, index) => {
+  const allPlaces = places.map((place) => {
     const progress = placeProgress[place.id];
     return {
-      order: index + 1,
       place_id: place.id,
       visited: Boolean(progress?.visited),
       visitedAt: progress?.visitedAt || null,
@@ -2639,8 +2694,74 @@ export const saveUserTour = async ({
       addedByUser: Boolean(progress?.addedByUser),
     };
   });
+
+  const todayEvents = (events || []).filter((event) =>
+    isTodayEvent(event)
+  );
+
+  // Create event entries only for today's route events. Non-today events are still
+  // persisted via top-level event_ids/event_progress so they remain available later.
+  const eventEntries = todayEvents
+    .map((event) => ({
+      event_id: event.id,
+      title: event.title,
+      startDate: event.startDate || '',
+      startTime: event.startTime || '',
+      event_progress: (eventProgress && (eventProgress as any)[event.id]) || {},
+    }))
+    .sort((a, b) => {
+      const dateCompare = (a.startDate || '').localeCompare(b.startDate || '');
+      if (dateCompare !== 0) return dateCompare;
+      return (a.startTime || '').localeCompare(b.startTime || '');
+    });
+
+  console.log('DEBUG saveUserTour - events param:', events);
+  console.log('DEBUG saveUserTour - today eventEntries:', eventEntries);
+
+  const placeMap = new Map(allPlaces.map((place) => [place.place_id, place]));
+  const eventMap = new Map(eventEntries.map((entry) => [entry.event_id, entry]));
+  const includedPlaceIds = new Set<string>();
+  const includedEventIds = new Set<string>();
+
+  const orderedEntries = navigableRoute
+    ? navigableRoute.reduce<any[]>((acc, entry) => {
+        if (entry.kind === 'place') {
+          const place = placeMap.get(entry.stop_id);
+          if (place && !includedPlaceIds.has(entry.stop_id)) {
+            acc.push(place);
+            includedPlaceIds.add(entry.stop_id);
+          }
+        } else if (entry.kind === 'event') {
+          const eventEntry = eventMap.get(entry.stop_id);
+          if (eventEntry && !includedEventIds.has(entry.stop_id)) {
+            acc.push(eventEntry);
+            includedEventIds.add(entry.stop_id);
+          }
+        }
+        return acc;
+      }, [])
+    : [];
+
+  const remainingPlaces = allPlaces.filter(
+    (place) => !includedPlaceIds.has(place.place_id)
+  );
+  const remainingEvents = eventEntries.filter(
+    (entry) => !includedEventIds.has(entry.event_id)
+  );
+
+  const allPlacesAndEvents = [
+    ...orderedEntries,
+    ...remainingPlaces,
+    ...remainingEvents,
+  ].map((item, index) => ({
+    ...item,
+    order: index + 1,
+  }));
+
+  console.log('DEBUG saveUserTour - allPlacesAndEvents:', allPlacesAndEvents);
+
   const totalPoints = allPlaces.reduce(
-    (sum, item) => sum + Number(item.pointsEarned || 0),
+    (sum, item) => sum + Number((item as any).pointsEarned || 0),
     0
   );
 
@@ -2657,9 +2778,9 @@ export const saveUserTour = async ({
     startedAt: startedAt || now,
     completedAt: completedAt || null,
     scheduledDate: scheduledDate || null,
-    all_places: allPlaces,
     event_ids: events.map((event) => event.id),
     event_progress: (eventProgress || {}) as Record<string, unknown>,
+    all_places: allPlacesAndEvents,
     tourOrigin: tourOrigin ?? null,
     navigable_route: navigableRoute ?? [],
     updatedAt: now,
@@ -2670,7 +2791,12 @@ export const saveUserTour = async ({
     await firestore()
       .collection(TOURS_COLLECTION)
       .doc(tourId)
-      .set(payload, { merge: true });
+      .set(
+        {
+          ...payload,
+        },
+        { merge: true }
+      );
     savedId = tourId;
   } else {
     const docRef = await firestore()

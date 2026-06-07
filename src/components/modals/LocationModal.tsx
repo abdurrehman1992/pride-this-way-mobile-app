@@ -260,9 +260,9 @@ const LocationModal: React.FC<Props> = ({
                 setInternalSearch(normalizedAddress);
             }
             setSelected(normalizedAddress);
-            console.log("Current location :", normalizedAddress)
+            // console.log("Current location :", normalizedAddress)
         } catch (error) {
-            console.log("LOCATION ERROR:", error);
+            // console.log("LOCATION ERROR:", error);
             CustomAlert.alert("Error", "Unable to fetch location");
         } finally {
             setLoadingLocation(false);

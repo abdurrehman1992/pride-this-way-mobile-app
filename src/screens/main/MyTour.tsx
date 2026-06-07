@@ -1823,9 +1823,19 @@ const MyTour = () => {
             const allPlaceIds = Array.from(
                 new Set(tours.flatMap((t) => t.all_places?.map((p) => p.place_id) || []))
             );
+            // Extract event IDs from all_places (new merged structure)
             const allEventIds = Array.from(
-                new Set(tours.flatMap((t) => t.event_ids || []))
+                new Set(
+                    tours.flatMap((t) => {
+                        const eventIds = (t.all_places || [])
+                            .filter((item: any) => item.event_id)
+                            .map((item: any) => item.event_id);
+                        console.log(`DEBUG MyTour - tour ${t.id} has ${eventIds.length} events in all_places:`, eventIds);
+                        return eventIds;
+                    })
+                )
             );
+            console.log('DEBUG MyTour - totalEventIds to fetch:', allEventIds);
 
             const [globalPlaces, globalEvents, ...allRouteDetails] = await Promise.all([
                 allPlaceIds.length > 0 ? fetchPlacesByIds(allPlaceIds) : Promise.resolve([]),
@@ -1834,6 +1844,8 @@ const MyTour = () => {
                     fetchRouteDetails({ routeId: t.route_id, userId }).catch(() => null)
                 ),
             ]);
+
+            console.log('DEBUG MyTour - fetched events:', globalEvents?.length);
 
             const placesMap = new Map((globalPlaces || []).map((p) => [p.id, p]));
             const eventsMap = new Map((globalEvents || []).map((e) => [e.id, e]));
@@ -1870,9 +1882,22 @@ const MyTour = () => {
                     )
                 );
 
-                const tourEvents = (tour.event_ids || [])
-                    .map((eventId) => eventsMap.get(eventId))
+                // Extract events from all_places (new merged structure)
+                const tourEventIds = (tour.all_places || [])
+                    .filter((item: any) => item.event_id)
+                    .map((item: any) => item.event_id);
+                
+                console.log(`DEBUG MyTour - tour card "${tour.title}" - tourEventIds:`, tourEventIds);
+                
+                const tourEvents = tourEventIds
+                    .map((eventId) => {
+                        const event = eventsMap.get(eventId);
+                        console.log(`DEBUG MyTour - looking up event ${eventId}:`, event ? 'FOUND' : 'NOT FOUND');
+                        return event;
+                    })
                     .filter((event): event is FirebaseEvent => Boolean(event));
+                    
+                console.log(`DEBUG MyTour - tour card "${tour.title}" - found ${tourEvents.length} events`);
 
                 return {
                     ...fallbackRoute,
@@ -2169,8 +2194,17 @@ const MyTour = () => {
                     placesToPersist =
                         orderedPersistedPlaces.length > 0 ? orderedPersistedPlaces : allPlaces;
 
-                    if (eventsToPersist.length === 0 && (existingSavedTour.event_ids?.length || 0) > 0) {
-                        eventsToPersist = await fetchEventsByIds(existingSavedTour.event_ids);
+                    // Extract events from all_places (new structure) instead of legacy event_ids
+                    if (eventsToPersist.length === 0) {
+                        const eventIds = (existingSavedTour.all_places || [])
+                            .filter((item: any) => item.event_id)
+                            .map((item: any) => item.event_id);
+                        if (eventIds.length > 0) {
+                            eventsToPersist = await fetchEventsByIds(eventIds);
+                        } else if ((existingSavedTour.event_ids?.length || 0) > 0) {
+                            // Fallback to legacy event_ids if no events in all_places
+                            eventsToPersist = await fetchEventsByIds(existingSavedTour.event_ids);
+                        }
                     }
                 }
 
@@ -2247,13 +2281,18 @@ const MyTour = () => {
                                     .filter((p): p is FirebasePlace => Boolean(p));
 
                                 let eventsToPersist = tour.events;
-                                if (
-                                    eventsToPersist.length === 0 &&
-                                    (existingSavedTour.event_ids?.length || 0) > 0
-                                ) {
-                                    eventsToPersist = await fetchEventsByIds(
-                                        existingSavedTour.event_ids
-                                    );
+                                if (eventsToPersist.length === 0) {
+                                    const eventIds = (existingSavedTour.all_places || [])
+                                        .filter((item: any) => item.event_id)
+                                        .map((item: any) => item.event_id);
+                                    if (eventIds.length > 0) {
+                                        eventsToPersist = await fetchEventsByIds(eventIds);
+                                    } else if ((existingSavedTour.event_ids?.length || 0) > 0) {
+                                        // Fallback to legacy event_ids if no events in all_places
+                                        eventsToPersist = await fetchEventsByIds(
+                                            existingSavedTour.event_ids
+                                        );
+                                    }
                                 }
 
                                 await saveUserTour({
@@ -2573,7 +2612,7 @@ const MyTour = () => {
                             );
                         })}
 
-                        {tour.events.length > 0 ? (
+                        {tour.events && tour.events.length > 0 ? (
                             <>
                                 <Text style={styles.eventsTitle}>Events</Text>
                                 {tour.events.map((event) => {

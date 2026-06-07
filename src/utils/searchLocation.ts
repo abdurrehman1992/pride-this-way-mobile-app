@@ -6,9 +6,9 @@ const searchLocation = async (query: string) => {
 
     const data = await response.json();
 
-    console.log(data);
+    // console.log(data);
 
   } catch (error) {
-    console.log(error);
+    // console.log(error);
   }
 };

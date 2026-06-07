@@ -52,7 +52,7 @@ const Support = () => {
 
     } catch (error) {
 
-      console.log("SUPPORT ERROR:", error);
+      // console.log("SUPPORT ERROR:", error);
 
       showError(
         "Action Failed",

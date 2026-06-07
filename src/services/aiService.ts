@@ -220,7 +220,7 @@ async function callOpenAI(prompt: string, systemMessage: string): Promise<any> {
     throw new Error('OPENAI_API_KEY missing. Paste your key in .env and restart Metro with --reset-cache');
   }
 
-  console.log('[aiService] calling OpenAI, key length:', OPENAI_API_KEY.length);
+  // console.log('[aiService] calling OpenAI, key length:', OPENAI_API_KEY.length);
 
   let response: Response;
   try {

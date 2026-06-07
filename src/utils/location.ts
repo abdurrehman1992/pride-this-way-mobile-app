@@ -27,7 +27,7 @@ export const requestLocationPermission = async (): Promise<boolean> => {
 
         return granted === PermissionsAndroid.RESULTS.GRANTED;
     } catch (error) {
-        console.log("PERMISSION ERROR:", error);
+        // console.log("PERMISSION ERROR:", error);
         return false;
     }
 };
@@ -103,7 +103,7 @@ export const getAddressFromCoords = async (
 
             return null;
         } catch (err) {
-            console.log("FALLBACK ERROR:", err);
+            // console.log("FALLBACK ERROR:", err);
             return null;
         }
     };
@@ -131,7 +131,7 @@ export const getAddressFromCoords = async (
 
         return fallback || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
     } catch (error) {
-        console.log("REVERSE GEO ERROR:", error);
+        // console.log("REVERSE GEO ERROR:", error);
 
         const fallback = await getFallbackAddress();
         return fallback || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
