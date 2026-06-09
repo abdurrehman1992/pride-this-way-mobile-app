@@ -3130,11 +3130,6 @@ return (
               { left: cardPosition.x, top: cardPosition.y },
             ]}
           >
-            {/* <Image
-              source={{ uri: selectedStop.place?.imageUrl || currentRoute.image }}
-              style={styles.cardImage}
-            /> */}
-
             <View style={styles.topRow}>
               <ImageBackground
                 source={{ uri: selectedStop.place?.imageUrl || currentRoute.image }}

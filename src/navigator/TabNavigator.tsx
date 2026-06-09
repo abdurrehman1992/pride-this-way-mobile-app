@@ -72,11 +72,6 @@ const TabNavigator: React.FC = () => {
           if (!targetTab || !VALID_TABS.has(targetTab.name)) {
             return;
           }
-
-          // Active-tour guard: if the user is currently on MyTourStart with a
-          // running tour, block ALL tab switches (including back to MyTours
-          // itself) until they explicitly pause. The MyTourStart screen sets
-          // `tourActive: true` on its route params while the tour is running.
           const activeNestedRoute = getDeepestActiveRoute(currentTab?.state);
           const tourIsActive =
             currentTab?.name === "MyTours" &&

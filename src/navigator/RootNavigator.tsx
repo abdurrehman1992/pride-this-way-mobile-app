@@ -50,10 +50,7 @@ const RootNavigator: React.FC = () => {
 
     return () => clearTimeout(bootstrapTimeout);
   }, [dispatch]);
-
-  // Resolve "resume active tour on cold start" before mounting the navigator.
-  // If the user has a tour with status='active' in Firestore, deep-route them
-  // into MyTourStart so they land back where they left off.
+  
   useEffect(() => {
     if (!initialized) return;
     if (!isLoggedIn || !userId) {
