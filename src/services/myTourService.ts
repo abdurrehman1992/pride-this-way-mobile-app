@@ -2667,6 +2667,7 @@ export const saveUserTour = async ({
   placeProgress,
   eventProgress,
   allPlacesAndEvents,
+  navigableRoute,
   currentStopIndex,
   isEdited,
   status,
@@ -2702,6 +2703,7 @@ export const saveUserTour = async ({
     }
   >;
   allPlacesAndEvents?: Record<string, any>[];
+  navigableRoute?: NavigableRouteEntry[];
   currentStopIndex: number;
   isEdited: boolean;
   status: 'active' | 'completed' | 'paused' | 'scheduled' | 'saved';
@@ -2730,13 +2732,12 @@ export const saveUserTour = async ({
     };
   });
 
-  const todayEvents = (events || []).filter((event) =>
-    isTodayEvent(event)
-  );
+  const eventCandidates = events || [];
 
   // Create event entries with same fields as place entries for consistency.
-  // Events are stored in all_places with visit-tracking fields (visited, pointsEarned, etc.)
-  const eventEntries = todayEvents
+  // Persist all route events in all_places so saved tours preserve schedule
+  // order, progress, and resume behavior correctly.
+  const eventEntries = eventCandidates
     .map((event) => {
       const progress = (eventProgress && (eventProgress as any)[event.id]) || {};
       return {
@@ -2749,8 +2750,8 @@ export const saveUserTour = async ({
       };
     })
     .sort((a, b) => {
-      const eventA = todayEvents.find((e) => e.id === a.event_id);
-      const eventB = todayEvents.find((e) => e.id === b.event_id);
+      const eventA = eventCandidates.find((e) => e.id === a.event_id);
+      const eventB = eventCandidates.find((e) => e.id === b.event_id);
       const dateCompare = (eventA?.startDate || '').localeCompare(
         eventB?.startDate || ''
       );
@@ -2759,9 +2760,14 @@ export const saveUserTour = async ({
     });
 
   console.log('DEBUG saveUserTour - events param:', events);
-  console.log('DEBUG saveUserTour - today eventEntries:', eventEntries);
+  console.log('DEBUG saveUserTour - eventEntries:', eventEntries);
 
-
+  const placeEntriesById = new Map(
+    allPlaces.map((item) => [item.place_id, item])
+  );
+  const eventEntriesById = new Map(
+    eventEntries.map((item) => [item.event_id, item])
+  );
 
   let allPlacesAndEventsFinal: Record<string, any>[] = [];
 
@@ -2794,15 +2800,66 @@ export const saveUserTour = async ({
           };
         }
         return null;
-        })
-        .filter(Boolean) as Record<string, any>[];
+      })
+      .filter(Boolean) as Record<string, any>[];
+  } else if (Array.isArray(navigableRoute) && navigableRoute.length > 0) {
+    const orderedStops = [...navigableRoute].sort((a, b) => a.order - b.order);
+    const orderedEntries: Record<string, any>[] = orderedStops
+      .map((entry) => {
+        if (entry.kind === 'place') {
+          const place = placeEntriesById.get(entry.stop_id);
+          if (!place) return null;
+          const progress = placeProgress[place.place_id] || {};
+          return {
+            ...place,
+            visited: Boolean(progress.visited) || Boolean(place.visited),
+            visitedAt: progress.visitedAt || place.visitedAt || null,
+            pointsEarned: Number(progress.pointsEarned || place.pointsEarned || 0),
+            proofImageUri: progress.proofImageUri || place.proofImageUri || null,
+            addedByUser: Boolean(progress.addedByUser || place.addedByUser),
+          };
+        }
+        if (entry.kind === 'event') {
+          const event = eventEntriesById.get(entry.stop_id);
+          if (!event) return null;
+          const progress = (eventProgress && (eventProgress as any)[entry.stop_id]) || {};
+          return {
+            ...event,
+            visited: Boolean(progress.visited || progress.attended) || Boolean(event.visited),
+            visitedAt: progress.visitedAt || event.visitedAt || null,
+            proofImageUri: progress.proofImageUri || event.proofImageUri || null,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean) as Record<string, any>[];
+
+    const orderedIds = new Set(orderedEntries.map((entry) => entry.place_id || entry.event_id));
+    const missingPlaces = allPlaces
+      .filter((item) => !orderedIds.has(item.place_id))
+      .map((item, index) => ({
+        ...item,
+        order: orderedEntries.length + index + 1,
+      }));
+    const missingEvents = eventEntries
+      .filter((item) => !orderedIds.has(item.event_id))
+      .map((item, index) => ({
+        ...item,
+        order: orderedEntries.length + missingPlaces.length + index + 1,
+      }));
+
+    allPlacesAndEventsFinal = [
+      ...orderedEntries.map((item, index) => ({ ...item, order: index + 1 })),
+      ...missingPlaces,
+      ...missingEvents,
+    ];
   } else {
     // Fallback: combine allPlaces and eventEntries if not provided by caller
     allPlacesAndEventsFinal = [
       ...allPlaces.map((item, index) => ({ ...item, order: index + 1 })),
-      ...eventEntries.map((item, index) => ({ 
-        ...item, 
-        order: allPlaces.length + index + 1 
+      ...eventEntries.map((item, index) => ({
+        ...item,
+        order: allPlaces.length + index + 1,
       })),
     ];
   }
