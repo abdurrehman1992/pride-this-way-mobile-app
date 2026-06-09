@@ -33,6 +33,8 @@ type PlacesAroundCardProps = {
   width?: DimensionValue;
   variant?: "default" | "compact";
   category?: string;
+  hideTime?: boolean;
+  hideRating?: boolean;
 };
 
 const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
@@ -46,6 +48,8 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   width,
   variant = "default",
   category = "Event",
+  hideTime = false,
+  hideRating = false,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
@@ -111,24 +115,34 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
 
       <View style={styles.divider} />
       
-      <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact]}>
-        {rating ? (
-          <View style={styles.infoItem}>
-            <StarIcon width={15} height={14} />
-            <Text style={styles.infoText}>{rating}</Text>
-          </View>
-        ) : null}
-        <View style={styles.infoItem}>
-          <LocationIcon width={10} height={12} />
-          <Text style={styles.infoText}>{location}</Text>
-        </View>
-        {time ? (
-          <View style={styles.infoItem}>
-            <TimeIcon width={13} height={13} />
-            <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{time}</Text>
-          </View>
-        ) : null}
-      </View>
+      {
+        (() => {
+          const showRating = Boolean(rating) && !hideRating;
+          const showTime = Boolean(time) && !hideTime;
+          const visibleCount = (showRating ? 1 : 0) + (location ? 1 : 0) + (showTime ? 1 : 0);
+          const justify = visibleCount === 1 ? 'center' : 'space-between';
+          return (
+            <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact, { justifyContent: justify as any }]}>
+              {showRating ? (
+                <View style={styles.infoItem}>
+                  <StarIcon width={15} height={14} />
+                  <Text style={styles.infoText}>{rating}</Text>
+                </View>
+              ) : null}
+              <View style={styles.infoItem}>
+                <LocationIcon width={10} height={12} />
+                <Text style={styles.infoText}>{location}</Text>
+              </View>
+              {showTime ? (
+                <View style={styles.infoItem}>
+                  <TimeIcon width={13} height={13} />
+                  <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{time}</Text>
+                </View>
+              ) : null}
+            </View>
+          );
+        })()
+      }
     </View>
   );
 };

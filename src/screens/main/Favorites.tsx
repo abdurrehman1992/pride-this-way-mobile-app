@@ -191,6 +191,8 @@ const Favorites = () => {
                 rating={String(item.rating || 0)}
                 image={item.imageUrl || ''}
                 location={[item.city_name, item.country].filter(Boolean).join(', ')}
+                // In Favorites places view we hide the green time label
+                hideTime
                 category="Place"
             />
         </TouchableOpacity>
@@ -209,6 +211,9 @@ const Favorites = () => {
                 image={item.coverImage || ''}
                 location={[item.city_name, item.country].filter(Boolean).join(', ')}
                 category="Route"
+                // For favorite tours hide rating and time; only show location
+                hideRating
+                hideTime
             />
         </TouchableOpacity>
     );
