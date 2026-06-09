@@ -55,7 +55,6 @@ import {
   recordTourFavoritedPlace,
   saveUserTour,
   sortPlacesByIdOrder,
-  buildNavigableRouteFromStops,
   removeTourPlaceFromUserAndRecord,
 } from '../../services/myTourService';
 import { scheduleStopsWithEventTiming } from '../../utils/tourRouteScheduling';
@@ -79,7 +78,7 @@ type TourStop = {
   place?: FirebasePlace;
   event?: FirebaseEvent;
   kind?: 'place' | 'event';
-  eventStatus?: 'active' | 'expired';
+  eventStatus?: 'active' | 'expired' | 'completed';
   sortTime?: number;
 };
 
@@ -267,7 +266,7 @@ const isEventTimeExpired = (event: FirebaseEvent, now = new Date()): boolean => 
 
 const eventToTourStop = (
   event: FirebaseEvent,
-  status: 'active' | 'expired'
+  status: 'active' | 'expired' | 'completed'
 ): TourStop => ({
   id: event.id,
   title: event.title,
@@ -566,8 +565,10 @@ const MyTourStart = () => {
   const [userHeading, setUserHeading] = useState<number>(0);
 
   const pendingEditSaveRef = useRef(false);
+  const pendingSaveInProgressRef = useRef(false);
   const introPlayedRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
+
   const fetchRoadSegment = useCallback(
     async (from: [number, number], to: [number, number]): Promise<[number, number][] | null> => {
       const dist = distanceMetersBetween(from, to);
@@ -741,7 +742,7 @@ const MyTourStart = () => {
           const placeIdsInOrder = [...savedTour.all_places]
             .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
             .map((item) => item.place_id)
-            .filter(Boolean);
+            .filter((id): id is string => Boolean(id));
           const savedPlaces = sortPlacesByIdOrder(
             await fetchPlacesByIds(placeIdsInOrder),
             placeIdsInOrder
@@ -817,16 +818,12 @@ const MyTourStart = () => {
           setTourId(savedTour.id);
           setStartedAt(savedTour.startedAt || null);
           setIsEdited(savedTour.isEdited || isEdited);
-          // Restore the GPS anchor so the optimized stop order remains
-          // identical to the previous session.
-          if (savedTour.tourOrigin) {
-            setTourOrigin(savedTour.tourOrigin);
-          }
         }
 
         setPlaceProgress(nextProgress);
+        
         // Restore persisted per-event progress (attended/dismissed) if present
-        // Extract from all_places entries that have event_progress field (new structure)
+        // Extract from all_places entries that have event_progress field or from saved doc
         let nextEventProgress: Record<string, {
           attended?: boolean;
           dismissed?: boolean;
@@ -834,19 +831,36 @@ const MyTourStart = () => {
           proofImageUri?: string | null;
         }> = {};
         
-        const persistedEventProgress = savedTour?.event_progress || {};
-        nextEventProgress = {
-          ...persistedEventProgress,
-          ...((savedTour?.all_places || [])
-            .filter((item: any) => item.event_id && item.event_progress)
-            .reduce((acc: any, item: any) => {
-              acc[item.event_id] = item.event_progress;
-              return acc;
-            }, {} as Record<string, any>)),
-        };
+        // Build event progress from all_places order field entries
+        (savedTour?.all_places || [])
+          .filter((item: any) => item.event_id)
+          .forEach((item: any) => {
+            nextEventProgress[item.event_id] = {
+              attended: item.visited || false,
+              visitedAt: item.visitedAt || null,
+              proofImageUri: item.proofImageUri || null,
+            };
+          });
         
         setEventProgress(nextEventProgress);
         setRouteDetails(nextDetails);
+
+        // Extract route order from all_places using the order field
+        const savedRouteOrder: string[] = [];
+        (savedTour?.all_places || [])
+          .sort((a: any, b: any) => (a.order || 0) - (b.order || 0))
+          .forEach((item: any) => {
+            if (item.place_id) {
+              savedRouteOrder.push(item.place_id);
+            } else if (item.event_id) {
+              savedRouteOrder.push(item.event_id);
+            }
+          });
+        
+        if (savedRouteOrder.length > 0) {
+          setSavedTourOrder(savedRouteOrder);
+        }
+
 
         // Strictly exclude any place whose ID also exists as an event
         // This prevents dirty Firebase data (event IDs in selected_places) from
@@ -915,7 +929,6 @@ const MyTourStart = () => {
         [addedPlace.id]: { ...prev[addedPlace.id], visited: Boolean(prev[addedPlace.id]?.visited), addedByUser: true },
       }));
       setIsEdited(true);
-      setSavedTourOrder(null);
       setOptimizedOrder(null);
       pendingEditSaveRef.current = true;
     });
@@ -939,10 +952,11 @@ const MyTourStart = () => {
     [eventProgress, placeProgress]
   );
 
-  const { activeTodayEventStops, expiredTodayEventStops } = useMemo(() => {
+  const { activeTodayEventStops, expiredTodayEventStops, completedTodayEventStops } = useMemo(() => {
     const today = new Date();
     const active: TourStop[] = [];
     const expired: TourStop[] = [];
+    const completed: TourStop[] = [];
 
     (routeDetails?.events || [])
       .filter((event) => !isEventInPast(event, today))
@@ -954,9 +968,13 @@ const MyTourStart = () => {
       )
       .forEach((event) => {
         const progress = eventProgress[event.id];
+        
+        // Attended events go into completed array (still visible but styled differently)
         if (progress?.attended) {
+          completed.push(eventToTourStop(event, 'completed'));
           return;
         }
+        
         if (progress?.dismissed && progress.visitedAt) {
           if (isSameCalendarDay(new Date(progress.visitedAt), today)) {
             return;
@@ -977,18 +995,29 @@ const MyTourStart = () => {
     return {
       activeTodayEventStops: active.sort(byTime),
       expiredTodayEventStops: expired.sort(byTime),
+      completedTodayEventStops: completed.sort(byTime),
     };
   }, [eventProgress, routeDetails?.events]);
 
   /** Places only — Mapbox optimizes driving order without pulling events forward. */
   const routePlaceStops = useMemo(() => placeStops, [placeStops]);
 
-  const allRouteStops = useMemo(() => {
-    if (!tourStarted) {
-      return routePlaceStops;
-    }
-    return [...activeTodayEventStops, ...routePlaceStops];
-  }, [activeTodayEventStops, routePlaceStops, tourStarted]);
+  useEffect(() => {
+    if (!routeDetails || !user?.id) return;
+    if (!tourStarted) return;
+    if (savedTourOrder) return;
+    if (pendingEditSaveRef.current) return;
+    if (routePlaceStops.length === 0) return;
+
+    pendingEditSaveRef.current = true;
+  }, [routeDetails, routePlaceStops.length, savedTourOrder, tourStarted, user?.id]);
+
+  const allTodayEventStops = useMemo(() =>
+    [...activeTodayEventStops, ...expiredTodayEventStops, ...completedTodayEventStops].sort(
+      (a, b) => (a.sortTime || 0) - (b.sortTime || 0)
+    ),
+    [activeTodayEventStops, completedTodayEventStops, expiredTodayEventStops]
+  );
 
   useEffect(() => {
     if (!tourStarted || !routeDetails?.events?.length) {
@@ -1029,7 +1058,7 @@ const MyTourStart = () => {
   }, [routeDetails?.events, tourStarted]);
 
   const visitedStopsInVisitOrder = useMemo(() => {
-    const eventStops = [...activeTodayEventStops, ...expiredTodayEventStops];
+    const eventStops = [...activeTodayEventStops, ...expiredTodayEventStops, ...completedTodayEventStops];
     const visitedPlaces = tourStops
         .filter((stop) => Boolean(placeProgress[stop.id]?.visited))
       .map((stop) => ({
@@ -1048,6 +1077,7 @@ const MyTourStart = () => {
       .map((item) => item.stop);
   }, [
     activeTodayEventStops,
+    completedTodayEventStops,
     eventProgress,
     expiredTodayEventStops,
     isStopComplete,
@@ -1123,10 +1153,6 @@ const MyTourStart = () => {
   }, [routePlaceStops, orderingAnchor, optimizedOrder]);
 
   const mapOptimizedPlaceStops = useMemo(() => {
-    if (savedTourOrder) {
-      return routePlaceStops;
-    }
-
     if (!optimizedOrder && !orderingAnchor) {
       return routePlaceStops;
     }
@@ -1150,22 +1176,30 @@ const MyTourStart = () => {
   }, [routePlaceStops, optimizedOrder, orderingAnchor, savedTourOrder]);
 
   const orderedNavigableStops = useMemo(() => {
-    if (!tourStarted) {
+    if (!tourStarted && !isPausedTour) {
       return mapOptimizedPlaceStops;
     }
 
+    // Always use current location first when live rerouting.
+    // If GPS is available, the next route should be based on the user's real position,
+    // not the coordinate of the last visited stop.
     const anchor =
+      currentLocation ||
       visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1]?.coordinate ||
       orderingAnchor;
 
+    // Recalculate route order when the tour is active or paused so the next stop
+    // honors current GPS instead of the original completed-location anchor.
     return scheduleStopsWithEventTiming(
-      [...mapOptimizedPlaceStops, ...activeTodayEventStops],
+      [...mapOptimizedPlaceStops, ...allTodayEventStops],
       isStopComplete,
       anchor,
       Date.now()
     );
   }, [
-    activeTodayEventStops,
+    allTodayEventStops,
+    currentLocation,
+    isPausedTour,
     isStopComplete,
     mapOptimizedPlaceStops,
     orderingAnchor,
@@ -1173,7 +1207,10 @@ const MyTourStart = () => {
     visitedStopsInVisitOrder,
   ]);
 
+
   const orderedPlaceStops = orderedNavigableStops;
+
+  const allRouteStops = useMemo(() => orderedNavigableStops, [orderedNavigableStops]);
 
   const orderedPlacesForSave = useMemo(
     () =>
@@ -1183,11 +1220,135 @@ const MyTourStart = () => {
     [orderedNavigableStops]
   );
 
+  useEffect(() => {
+    if (!pendingEditSaveRef.current) return;
+    if (!routeDetails || !user?.id) return;
+    if (!tourStarted) return;
+    if (!optimizedOrder && !savedTourOrder && routePlaceStops.length > 1) return;
+    if (pendingSaveInProgressRef.current) return;
+
+    pendingSaveInProgressRef.current = true;
+    const routeOrderKey = orderedNavigableStops.map((stop) => stop.id).join(',');
+    (async () => {
+      try {
+        const activePlaceStops = tourStops.map((stop) => stop.place!).filter(Boolean);
+        const placesToSave =
+          orderedPlacesForSave.length > 0 ? orderedPlacesForSave : activePlaceStops;
+        if (placesToSave.length === 0) return;
+
+        const nextCurrentStopIndex = placesToSave.findIndex(
+          (place) => !placeProgress[place.id]?.visited
+        );
+        const remainingStops = placesToSave.filter(
+          (place) => !placeProgress[place.id]?.visited
+        );
+        const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
+
+        const savedId = await saveUserTour({
+          tourId: tourIdRef.current,
+          userId: user.id,
+          userName: user.name || '',
+          userEmail: user.email || '',
+          route: routeDetails.route,
+          title: route.params?.tourName || routeDetails.route.name,
+          places: placesToSave,
+          events: routeDetails.events,
+          placeProgress,
+          eventProgress,
+          currentStopIndex:
+            nextCurrentStopIndex < 0 ? placesToSave.length : nextCurrentStopIndex,
+          isEdited,
+          status: computedStatus,
+          startedAt: startedAt || new Date().toISOString(),
+          completedAt: computedStatus === 'completed' ? new Date().toISOString() : null,
+          allPlacesAndEvents: buildAllPlacesArray(orderedNavigableStops),
+        });
+
+        if (savedId) {
+          tourIdRef.current = savedId;
+          setTourId(savedId);
+          pendingEditSaveRef.current = false;
+          lastSavedRouteOrderKeyRef.current = routeOrderKey;
+        }
+      } catch {
+        // Preserve pending flag so we can retry later.
+      } finally {
+        pendingSaveInProgressRef.current = false;
+      }
+    })();
+  }, [
+    optimizedOrder?.key,
+    savedTourOrder,
+    routeDetails,
+    tourStarted,
+    user?.id,
+    orderedPlacesForSave,
+    tourStops,
+    placeProgress,
+    eventProgress,
+    isEdited,
+    startedAt,
+    tourOrigin,
+    orderedNavigableStops,
+    route.params?.tourName,
+  ]);
+
+  const buildAllPlacesArray = (orderedStops: TourStop[]) =>
+    orderedStops
+      .map((stop, index) => {
+        if (stop.place) {
+          const progress = placeProgress[stop.place.id] || {};
+          return {
+            place_id: stop.place.id,
+            visited: Boolean(progress.visited),
+            visitedAt: progress.visitedAt || null,
+            pointsEarned: Number(progress.pointsEarned || 0),
+            proofImageUri: progress.proofImageUri || null,
+            addedByUser: Boolean(progress.addedByUser),
+            order: index + 1,
+          } as any;
+        }
+        if (stop.event) {
+          const progress = eventProgress[stop.event.id] || {};
+          return {
+            event_id: stop.event.id,
+            visited: Boolean(progress.attended),
+            visitedAt: progress.visitedAt || null,
+            pointsEarned: 0,
+            proofImageUri: progress.proofImageUri || null,
+            addedByUser: false,
+            order: index + 1,
+          } as any;
+        }
+        return null;
+      })
+      .filter(Boolean);
+
   const lastSavedOptimizedOrderKeyRef = useRef<string | null>(null);
+  const lastSavedRouteOrderKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     lastSavedOptimizedOrderKeyRef.current = null;
+    lastSavedRouteOrderKeyRef.current = null;
   }, [tourId]);
+
+  useEffect(() => {
+    if (!routeDetails || !user?.id) return;
+    if (!tourStarted && !isPausedTour) return;
+    if (pendingSaveInProgressRef.current) return;
+
+    const routeOrderKey = orderedNavigableStops.map((stop) => stop.id).join(',');
+    if (!routeOrderKey) return;
+    if (routeOrderKey === lastSavedRouteOrderKeyRef.current) return;
+
+    pendingEditSaveRef.current = true;
+  }, [
+    orderedNavigableStops,
+    routeDetails,
+    tourStarted,
+    isPausedTour,
+    user?.id,
+  ]);
 
   // Persist to Firestore after tourStops updates from AddLocations
   useEffect(() => {
@@ -1213,11 +1374,16 @@ const MyTourStart = () => {
       eventProgress,
       currentStopIndex: 0,
       isEdited: true,
-      status: 'active',
+      status: isCompletedTour
+        ? 'completed'
+        : isPausedTour
+          ? 'paused'
+          : tourStarted
+            ? 'active'
+            : 'saved',
       startedAt: startedAt || new Date().toISOString(),
       completedAt: null,
-      tourOrigin: tourOriginRef.current,
-      navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
+      allPlacesAndEvents: buildAllPlacesArray(orderedNavigableStops),
     })
       .then((savedId) => { if (savedId !== tourId) setTourId(savedId); })
       .catch(() => { });
@@ -1264,8 +1430,7 @@ const MyTourStart = () => {
             : 'saved',
       startedAt: startedAt || new Date().toISOString(),
       completedAt: isCompletedTour ? new Date().toISOString() : null,
-      tourOrigin: tourOriginRef.current,
-      navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
+      allPlacesAndEvents: buildAllPlacesArray(orderedNavigableStops),
     }).catch(() => { });
   }, [
     isCompletedTour,
@@ -1285,8 +1450,8 @@ const MyTourStart = () => {
 
   const routeAnchor = useMemo<[number, number] | null>(() => {
     return (
-      visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1]?.coordinate ||
       currentLocation ||
+      visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1]?.coordinate ||
       null
     );
   }, [currentLocation, visitedStopsInVisitOrder]);
@@ -1330,7 +1495,7 @@ const MyTourStart = () => {
     }
     const lastVisited = visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1];
     const fromCoord: [number, number] | null =
-      lastVisited?.coordinate || tourOrigin || currentLocation;
+      currentLocation || lastVisited?.coordinate || tourOrigin;
     if (!fromCoord) {
       setActiveLeg(null);
       return;
@@ -1949,6 +2114,12 @@ useEffect(() => {
       }
 
       const nextEvents = routeDetails.events.filter((event) => event.id !== eventId);
+      const nextEventProgress = { ...eventProgress };
+      delete nextEventProgress[eventId];
+      const nextOrderedStops = orderedNavigableStops.filter(
+        (stop) => stop.event?.id !== eventId
+      );
+
       setRouteDetails((prev) =>
         prev
           ? {
@@ -1957,16 +2128,21 @@ useEffect(() => {
             }
           : prev
       );
-      setEventProgress((prev) => {
-        const next = { ...prev };
-        delete next[eventId];
-        return next;
-      });
+      setEventProgress(nextEventProgress);
       setSelectedEvent(null);
       setIsEdited(true);
+      pendingEditSaveRef.current = true;
 
       if (user?.id) {
         try {
+          const placesToSave =
+            orderedPlacesForSave.length > 0
+              ? orderedPlacesForSave
+              : tourStops.map((stop) => stop.place!).filter(Boolean);
+          const nextCurrentStopIndex = placesToSave.findIndex(
+            (place) => !placeProgress[place.id]?.visited
+          );
+
           await saveUserTour({
             tourId: tourIdRef.current,
             userId: user.id,
@@ -1974,20 +2150,17 @@ useEffect(() => {
             userEmail: user.email || '',
             route: routeDetails.route,
             title: route.params?.tourName || routeDetails.route.name,
-            places:
-              orderedPlacesForSave.length > 0
-                ? orderedPlacesForSave
-                : tourStops.map((stop) => stop.place!).filter(Boolean),
+            places: placesToSave,
             events: nextEvents,
             placeProgress,
-            eventProgress,
-            currentStopIndex: 0,
+            eventProgress: nextEventProgress,
+            currentStopIndex:
+              nextCurrentStopIndex < 0 ? placesToSave.length : nextCurrentStopIndex,
             isEdited: true,
-            status: tourStarted ? 'active' : 'paused',
+            status: isPausedTour ? 'paused' : tourStarted ? 'active' : 'saved',
             startedAt: startedAt || new Date().toISOString(),
             completedAt: null,
-            tourOrigin: tourOriginRef.current,
-            navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
+            allPlacesAndEvents: buildAllPlacesArray(nextOrderedStops),
           });
         } catch {
           showError('Remove Failed', 'Unable to remove this event from the tour right now.');
@@ -2005,6 +2178,9 @@ useEffect(() => {
       user?.email,
       user?.id,
       user?.name,
+      orderedNavigableStops,
+      eventProgress,
+      isPausedTour,
     ]
   );
 
@@ -2113,7 +2289,6 @@ useEffect(() => {
 
       const shouldDeferActiveSave =
         tourStarted &&
-        !!tourIdRef.current &&
         !optimizedOrder &&
         !savedTourOrder &&
         routePlaceStops.length > 1;
@@ -2147,8 +2322,7 @@ useEffect(() => {
         status,
         startedAt: nextStartedAt || new Date().toISOString(),
         completedAt: status === 'completed' ? new Date().toISOString() : null,
-        tourOrigin: tourOriginRef.current,
-        navigableRoute: buildNavigableRouteFromStops(orderedNavigableStops),
+        allPlacesAndEvents: buildAllPlacesArray(orderedNavigableStops),
       });
       tourIdRef.current = savedId;
       setTourId(savedId);
@@ -2370,18 +2544,63 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
       }
 
       const visitedAt = new Date().toISOString();
-      setEventProgress((prev) => ({
-        ...prev,
+      const nextEventProgress = {
+        ...(eventProgress || {}),
         [event.id]: {
-          ...prev[event.id],
+          ...((eventProgress || {})[event.id] || {}),
           attended: true,
+          visited: true,
           visitedAt,
           proofImageUri: imageUri,
         },
-      }));
+      };
+
+      setEventProgress(nextEventProgress);
       setSelectedEvent(null);
       setSelectedStop(null);
+      setTourOrigin((prev) => prev || coords);
+      setCurrentLocation(coords);
       showSuccess('Event Attended', `You checked in at ${event.title}.`);
+
+      // Persist updated event progress immediately so event shows as visited
+      // in `all_places` when saved to Firestore.
+      try {
+        const activePlaceStops = tourStops.map((stop) => stop.place!).filter(Boolean);
+        const placesToSave =
+          orderedPlacesForSave.length > 0 ? orderedPlacesForSave : activePlaceStops;
+
+        const nextCurrentStopIndex = placesToSave.findIndex(
+          (place) => !placeProgress[place.id]?.visited
+        );
+        const remainingStops = placesToSave.filter((place) => !placeProgress[place.id]?.visited);
+        const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
+
+        const savedId = await saveUserTour({
+          tourId: tourIdRef.current,
+          userId: user?.id || '',
+          userName: user?.name || '',
+          userEmail: user?.email || '',
+          route: routeDetails!.route,
+          title: route.params?.tourName || routeDetails!.route.name,
+          places: placesToSave,
+          events: routeDetails!.events,
+          placeProgress,
+          eventProgress: nextEventProgress,
+          currentStopIndex:
+            nextCurrentStopIndex < 0 ? placesToSave.length : nextCurrentStopIndex,
+          isEdited,
+          status: computedStatus,
+          startedAt: startedAt || new Date().toISOString(),
+          completedAt: computedStatus === 'completed' ? new Date().toISOString() : null,
+          allPlacesAndEvents: buildAllPlacesArray(orderedNavigableStops),
+        });
+        if (savedId) {
+          tourIdRef.current = savedId;
+          setTourId(savedId);
+        }
+      } catch (err) {
+        console.error('persist after event attendance failed', err);
+      }
 
       const nextUnvisited = orderedRemainingStops.find(
         (stop) => stop.id !== event.id && !isStopComplete(stop)
@@ -2465,7 +2684,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
       };
 
       setTourOrigin((prev) => prev || coords);
-      setCurrentLocation(selectedStop.coordinate);
+      setCurrentLocation(coords);
       setPlaceProgress(nextProgress);
       setTourStarted(true);
       const nextStartedAt = startedAt || new Date().toISOString();
@@ -2721,6 +2940,29 @@ return (
                         style={styles.markerTapArea}
                       >
                         <View style={styles.eventMarkerExpired}>
+                          <EventMarkerIcon event={stop.event!} size={26} />
+                        </View>
+                      </TouchableOpacity>
+                    </Mapbox.MarkerView>
+                  ))
+                : null}
+
+              {tourStarted
+                ? completedTodayEventStops.map((stop) => (
+                    <Mapbox.MarkerView
+                      key={`event-completed-${stop.id}`}
+                      id={`event-completed-${stop.id}`}
+                      coordinate={[...stop.coordinate]}
+                      anchor={{ x: 0.5, y: 1 }}
+                    >
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Show completed event ${stop.title}`}
+                        onPress={() => handleMarkerPress(stop)}
+                        style={styles.markerTapArea}
+                      >
+                        <View style={styles.eventMarkerCompleted}>
                           <EventMarkerIcon event={stop.event!} size={26} />
                         </View>
                       </TouchableOpacity>
@@ -3200,6 +3442,21 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     backgroundColor: '#EAB308',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  eventMarkerCompleted: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#9AA3AF',
     borderWidth: 3,
     borderColor: '#FFFFFF',
     alignItems: 'center',

@@ -40,6 +40,7 @@ import {
     saveUserTour,
     buildNavigableRouteFromStops,
 } from '../../services/myTourService';
+import { scheduleStopsWithEventTiming } from '../../utils/tourRouteScheduling';
 import { useFavorites } from '../../context/FavoritesContext';
 
 type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'TourSuggestion'>;
@@ -114,6 +115,63 @@ const TourSuggestion: React.FC = () => {
         () => suggestedEvents.filter((event) => !selectedEventIds.includes(event.id)),
         [suggestedEvents, selectedEventIds]
     );
+
+    const parseEventSortTime = (event: FirebaseEvent) => {
+        if (!event.startDate) {
+            return Number.MAX_SAFE_INTEGER;
+        }
+        const parsed = new Date(`${event.startDate}T${event.startTime || '00:00'}`).getTime();
+        return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+    };
+
+    const buildSuggestedNavigableRoute = (
+        routePlaces: FirebasePlace[],
+        routeEvents: FirebaseEvent[]
+    ) => {
+        const placeStops = routePlaces
+            .filter((place) =>
+                place.coordinates?.longitude !== undefined &&
+                place.coordinates?.latitude !== undefined
+            )
+            .map((place) => ({
+                id: place.id,
+                kind: 'place' as const,
+                coordinate: [
+                    Number(place.coordinates?.longitude),
+                    Number(place.coordinates?.latitude),
+                ] as [number, number],
+            }));
+
+        const eventStops = routeEvents
+            .filter((event) =>
+                event.coordinates?.longitude !== undefined &&
+                event.coordinates?.latitude !== undefined
+            )
+            .map((event) => ({
+                id: event.id,
+                kind: 'event' as const,
+                event,
+                sortTime: parseEventSortTime(event),
+                coordinate: [
+                    Number(event.coordinates?.longitude),
+                    Number(event.coordinates?.latitude),
+                ] as [number, number],
+            }));
+
+        const stops = [...placeStops, ...eventStops];
+        if (stops.length === 0) {
+            return [];
+        }
+
+        const orderedStops = scheduleStopsWithEventTiming(
+            stops,
+            () => false,
+            stops[0].coordinate,
+            Date.now()
+        );
+
+        return buildNavigableRouteFromStops(orderedStops);
+    };
 
     const previewImage =
         places[0]?.imageUrl ||
@@ -272,9 +330,9 @@ const TourSuggestion: React.FC = () => {
                 isEdited: true,
                 status: 'saved',
                 scheduledDate: null,
-                tourOrigin: null,
-                navigableRoute: buildNavigableRouteFromStops(
-                    nextPlaces.map((place) => ({ id: place.id, kind: 'place' as const }))
+                navigableRoute: buildSuggestedNavigableRoute(
+                    nextPlaces,
+                    selectedEvents
                 ),
             });
         } catch {
@@ -376,9 +434,9 @@ const TourSuggestion: React.FC = () => {
                 isEdited: places.length !== initialPlaces.length || selectedEventsToSave.length > 0,
                 status: 'saved',
                 scheduledDate: null,
-                tourOrigin: null,
-                navigableRoute: buildNavigableRouteFromStops(
-                    places.map((place) => ({ id: place.id, kind: 'place' as const }))
+                navigableRoute: buildSuggestedNavigableRoute(
+                    places,
+                    selectedEventsToSave
                 ),
             });
 

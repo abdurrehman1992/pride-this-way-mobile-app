@@ -9,7 +9,7 @@ export type SchedulableTourStop = {
   event?: FirebaseEvent;
 };
 
-const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 /** Start heading to the event when within this window before start. */
 const EVENT_GO_WINDOW_MS = 25 * 60 * 1000;
 /** If we would arrive earlier than this, visit other stops first. */
@@ -45,10 +45,10 @@ const estimateTravelMs = (from: Coord, to: Coord): number => {
   return Math.max((meters / TRAVEL_SPEED_MPS) * 1000, 3 * 60 * 1000);
 };
 
-const pickNearestStop = (
-  candidates: SchedulableTourStop[],
+const pickNearestStop = <T extends SchedulableTourStop>(
+  candidates: T[],
   from: Coord
-): SchedulableTourStop => {
+): T => {
   let nearest = candidates[0];
   let nearestDistance = distanceMetersBetween(from, nearest.coordinate);
 
@@ -74,18 +74,14 @@ export function scheduleStopsWithEventTiming<T extends SchedulableTourStop>(
   anchorCoord: Coord | null,
   nowMs: number = Date.now()
 ): T[] {
-  const completed = stops.filter((stop) => isStopComplete(stop));
   let remaining = stops.filter((stop) => !isStopComplete(stop));
-
-  if (remaining.length === 0) {
-    return [...completed];
+  if (remaining.length <= 1) {
+    return remaining;
   }
 
-  const result: T[] = [...completed];
+  const result: T[] = [];
   let cursorCoord: Coord =
-    anchorCoord ??
-    completed[completed.length - 1]?.coordinate ??
-    remaining[0].coordinate;
+    anchorCoord ?? remaining[0].coordinate;
   let cursorTimeMs = nowMs;
 
   while (remaining.length > 0) {
@@ -103,9 +99,7 @@ export function scheduleStopsWithEventTiming<T extends SchedulableTourStop>(
       const minutesEarly =
         eventStartMs - EVENT_GO_WINDOW_MS - arrivalIfLeaveNowMs;
 
-      const shouldVisitPlacesFirst =
-        timeUntilEventMs > TWO_HOURS_MS ||
-        minutesEarly > EVENT_TOO_EARLY_MS;
+      const shouldVisitPlacesFirst = timeUntilEventMs > THREE_HOURS_MS;
 
       if (shouldVisitPlacesFirst) {
         const nearestPlace = pickNearestStop(pendingPlaces, cursorCoord);
@@ -127,8 +121,9 @@ export function scheduleStopsWithEventTiming<T extends SchedulableTourStop>(
       const withinGoWindow =
         arrivalIfLeaveNowMs >= eventStartMs - EVENT_GO_WINDOW_MS;
       const pastGoTime = cursorTimeMs >= eventStartMs - EVENT_GO_WINDOW_MS;
+      const eventIsImminent = eventStartMs - cursorTimeMs <= THREE_HOURS_MS;
 
-      if (noPlacesLeft || withinGoWindow || pastGoTime) {
+      if (noPlacesLeft || eventIsImminent || withinGoWindow || pastGoTime) {
         result.push(nextEvent);
         remaining = remaining.filter((stop) => stop.id !== nextEvent.id);
         cursorTimeMs += travelToEventMs + ESTIMATED_EVENT_DURATION_MS;

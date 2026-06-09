@@ -1827,11 +1827,13 @@ const MyTour = () => {
             const allEventIds = Array.from(
                 new Set(
                     tours.flatMap((t) => {
-                        const eventIds = (t.all_places || [])
+                        const eventIdsFromPlaces = (t.all_places || [])
                             .filter((item: any) => item.event_id)
                             .map((item: any) => item.event_id);
-                        console.log(`DEBUG MyTour - tour ${t.id} has ${eventIds.length} events in all_places:`, eventIds);
-                        return eventIds;
+                        const topLevelIds = Array.isArray(t.event_ids) ? t.event_ids : [];
+                        const combined = [...eventIdsFromPlaces, ...topLevelIds];
+                        console.log(`DEBUG MyTour - tour ${t.id} has events (places:${eventIdsFromPlaces.length} top:${topLevelIds.length}):`, combined);
+                        return combined;
                     })
                 )
             );
@@ -1852,6 +1854,31 @@ const MyTour = () => {
             const routeDetailsMap = new Map(
                 tours.map((t, index) => [t.route_id, allRouteDetails[index]])
             );
+
+                // Fallback: if any tour references event IDs that weren't returned
+                // by the global fetch (e.g. eventual consistency), fetch missing ones
+                const missingEventIds = new Set<string>();
+                tours.forEach((t) => {
+                    const tourEventIds = [
+                        ...(t.all_places || [])
+                            .filter((item: any) => item.event_id)
+                            .map((item: any) => item.event_id),
+                        ...(Array.isArray(t.event_ids) ? t.event_ids : []),
+                    ];
+                    tourEventIds.forEach((id) => {
+                        if (!eventsMap.has(id)) missingEventIds.add(id);
+                    });
+                });
+
+                if (missingEventIds.size > 0) {
+                    try {
+                        const fetchedMissing = await fetchEventsByIds(Array.from(missingEventIds));
+                        (fetchedMissing || []).forEach((e) => eventsMap.set(e.id, e));
+                        console.log('DEBUG MyTour - fetched missing events:', fetchedMissing.map((e) => e.id));
+                    } catch (err) {
+                        console.warn('DEBUG MyTour - failed to fetch missing events', err);
+                    }
+                }
 
             const cards = tours.map((tour) => {
                 const details = routeDetailsMap.get(tour.route_id);
@@ -1882,21 +1909,23 @@ const MyTour = () => {
                     )
                 );
 
-                // Extract events from all_places (new merged structure)
-                const tourEventIds = (tour.all_places || [])
-                    .filter((item: any) => item.event_id)
-                    .map((item: any) => item.event_id);
-                
-                console.log(`DEBUG MyTour - tour card "${tour.title}" - tourEventIds:`, tourEventIds);
-                
+                // Prefer top-level `event_ids` (user-added) and fall back to embedded
+                // event refs in `all_places`. Use a Set to avoid duplicates.
+                const tourEventIds = Array.from(
+                    new Set([
+                        ...(Array.isArray(tour.event_ids) ? tour.event_ids : []),
+                        ...(tour.all_places || [])
+                            .filter((item: any) => item.event_id)
+                            .map((item: any) => item.event_id),
+                    ])
+                );
+
+                console.log(`DEBUG MyTour - tour card "${tour.title}" - combinedEventIds:`, tourEventIds);
+
                 const tourEvents = tourEventIds
-                    .map((eventId) => {
-                        const event = eventsMap.get(eventId);
-                        console.log(`DEBUG MyTour - looking up event ${eventId}:`, event ? 'FOUND' : 'NOT FOUND');
-                        return event;
-                    })
+                    .map((eventId) => eventsMap.get(eventId))
                     .filter((event): event is FirebaseEvent => Boolean(event));
-                    
+
                 console.log(`DEBUG MyTour - tour card "${tour.title}" - found ${tourEvents.length} events`);
 
                 return {

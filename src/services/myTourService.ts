@@ -1644,15 +1644,35 @@ export type LocationSuggestion = {
   coordinates?: [number, number];
 };
 
+export type SavedTourEventEntry = {
+  order: number;
+  event_id: string;
+  place_id?: string;
+  visited: boolean;
+  visitedAt: string | null;
+  pointsEarned: number;
+  proofImageUri?: string | null;
+  addedByUser?: boolean;
+  event_progress?: {
+    attended?: boolean;
+    dismissed?: boolean;
+    visitedAt?: string | null;
+    proofImageUri?: string | null;
+  };
+};
+
 export type SavedTourPlace = {
   order: number;
   place_id: string;
+  event_id?: string;
   visited: boolean;
   visitedAt: string | null;
   pointsEarned: number;
   proofImageUri?: string | null;
   addedByUser?: boolean;
 };
+
+export type SavedTourItem = SavedTourPlace | SavedTourEventEntry;
 
 /** Live navigable stop sequence (places + today's events) for admin route view. */
 export type NavigableRouteEntry = {
@@ -1677,11 +1697,8 @@ export type SavedTour = {
   completedAt?: string | null;
   updatedAt?: string;
   createdAt?: string;
-  all_places: SavedTourPlace[];
+  all_places: SavedTourItem[];
   event_ids: string[];
-  // GPS anchor used for the Mapbox Optimization API. Persisted so the
-  // stop order stays identical across pause/resume and app restarts.
-  tourOrigin?: [number, number] | null;
   navigable_route?: NavigableRouteEntry[];
   // persisted per-event progress (attended/dismissed timestamps)
   event_progress?: Record<
@@ -1857,19 +1874,37 @@ const parseSavedTour = (
   createdAt: data?.createdAt || '',
   updatedAt: data?.updatedAt || '',
   event_ids: toArray<string>(data?.event_ids),
-  all_places: toArray<Record<string, any>>(data?.all_places).map((item, index) => ({
-    order: Number(item.order || index + 1),
-    place_id: item.place_id || '',
-    visited: Boolean(item.visited),
-    visitedAt: item.visitedAt || null,
-    pointsEarned: Number(item.pointsEarned || 0),
-    proofImageUri: item.proofImageUri || null,
-    addedByUser: Boolean(item.addedByUser),
-  })),
-  tourOrigin:
-    Array.isArray(data?.tourOrigin) && data.tourOrigin.length === 2
-      ? [Number(data.tourOrigin[0]), Number(data.tourOrigin[1])]
-      : null,
+  all_places: toArray<Record<string, any>>(data?.all_places).map((item, index) => {
+    if (item.event_id) {
+      return {
+        order: Number(item.order || index + 1),
+        event_id: String(item.event_id),
+        visited: Boolean(item.visited || item.attended),
+        visitedAt: item.visitedAt || null,
+        pointsEarned: Number(item.pointsEarned || 0),
+        proofImageUri: item.proofImageUri || null,
+        addedByUser: Boolean(item.addedByUser),
+        event_progress: item.event_progress
+          ? {
+              attended: item.event_progress.attended,
+              dismissed: item.event_progress.dismissed,
+              visitedAt: item.event_progress.visitedAt,
+              proofImageUri: item.event_progress.proofImageUri,
+            }
+          : undefined,
+      };
+    }
+
+    return {
+      order: Number(item.order || index + 1),
+      place_id: item.place_id || '',
+      visited: Boolean(item.visited),
+      visitedAt: item.visitedAt || null,
+      pointsEarned: Number(item.pointsEarned || 0),
+      proofImageUri: item.proofImageUri || null,
+      addedByUser: Boolean(item.addedByUser),
+    };
+  }),
   navigable_route: toArray<Record<string, unknown>>(data?.navigable_route).map(
     (item, index) => ({
       order: Number(item.order || index + 1),
@@ -2579,15 +2614,17 @@ export const fetchEventsByIds = async (
   const snapshot = await firestore()
     .collection(EVENTS_COLLECTION)
     .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
-  const wanted = new Set(eventIds);
-  return snapshot.docs
-    .filter(
-      (doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
-        wanted.has(doc.id)
-    )
-    .map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
-      parseEvent(doc.id, doc.data())
-    );
+  const docsById = new Map<string, FirebaseFirestoreTypes.DocumentData>(
+    snapshot.docs.map((doc) => [doc.id, doc.data()])
+  );
+
+  return eventIds
+    .map((eventId) => {
+      const data = docsById.get(eventId);
+      if (!data) return null;
+      return parseEvent(eventId, data);
+    })
+    .filter((event): event is FirebaseEvent => Boolean(event));
 };
 
 const startOfCalendarDay = (date: Date) => {
@@ -2629,14 +2666,13 @@ export const saveUserTour = async ({
   events,
   placeProgress,
   eventProgress,
+  allPlacesAndEvents,
   currentStopIndex,
   isEdited,
   status,
   startedAt,
   completedAt,
   scheduledDate,
-  tourOrigin,
-  navigableRoute,
 }: {
   tourId?: string | null;
   userId: string;
@@ -2665,14 +2701,13 @@ export const saveUserTour = async ({
       proofImageUri?: string | null;
     }
   >;
+  allPlacesAndEvents?: Record<string, any>[];
   currentStopIndex: number;
   isEdited: boolean;
   status: 'active' | 'completed' | 'paused' | 'scheduled' | 'saved';
   startedAt?: string;
   completedAt?: string | null;
   scheduledDate?: string | null;
-  tourOrigin?: [number, number] | null;
-  navigableRoute?: NavigableRouteEntry[];
 }) => {
   const now = new Date().toISOString();
   if (status === 'active') {
@@ -2699,66 +2734,80 @@ export const saveUserTour = async ({
     isTodayEvent(event)
   );
 
-  // Create event entries only for today's route events. Non-today events are still
-  // persisted via top-level event_ids/event_progress so they remain available later.
+  // Create event entries with same fields as place entries for consistency.
+  // Events are stored in all_places with visit-tracking fields (visited, pointsEarned, etc.)
   const eventEntries = todayEvents
-    .map((event) => ({
-      event_id: event.id,
-      title: event.title,
-      startDate: event.startDate || '',
-      startTime: event.startTime || '',
-      event_progress: (eventProgress && (eventProgress as any)[event.id]) || {},
-    }))
+    .map((event) => {
+      const progress = (eventProgress && (eventProgress as any)[event.id]) || {};
+      return {
+        event_id: event.id,
+        visited: Boolean(progress.visited || progress.attended),
+        visitedAt: progress.visitedAt || null,
+        pointsEarned: 0,
+        proofImageUri: progress.proofImageUri || null,
+        addedByUser: false,
+      };
+    })
     .sort((a, b) => {
-      const dateCompare = (a.startDate || '').localeCompare(b.startDate || '');
+      const eventA = todayEvents.find((e) => e.id === a.event_id);
+      const eventB = todayEvents.find((e) => e.id === b.event_id);
+      const dateCompare = (eventA?.startDate || '').localeCompare(
+        eventB?.startDate || ''
+      );
       if (dateCompare !== 0) return dateCompare;
-      return (a.startTime || '').localeCompare(b.startTime || '');
+      return (eventA?.startTime || '').localeCompare(eventB?.startTime || '');
     });
 
   console.log('DEBUG saveUserTour - events param:', events);
   console.log('DEBUG saveUserTour - today eventEntries:', eventEntries);
 
-  const placeMap = new Map(allPlaces.map((place) => [place.place_id, place]));
-  const eventMap = new Map(eventEntries.map((entry) => [entry.event_id, entry]));
-  const includedPlaceIds = new Set<string>();
-  const includedEventIds = new Set<string>();
 
-  const orderedEntries = navigableRoute
-    ? navigableRoute.reduce<any[]>((acc, entry) => {
-        if (entry.kind === 'place') {
-          const place = placeMap.get(entry.stop_id);
-          if (place && !includedPlaceIds.has(entry.stop_id)) {
-            acc.push(place);
-            includedPlaceIds.add(entry.stop_id);
-          }
-        } else if (entry.kind === 'event') {
-          const eventEntry = eventMap.get(entry.stop_id);
-          if (eventEntry && !includedEventIds.has(entry.stop_id)) {
-            acc.push(eventEntry);
-            includedEventIds.add(entry.stop_id);
-          }
+
+  let allPlacesAndEventsFinal: Record<string, any>[] = [];
+
+  if (Array.isArray(allPlacesAndEvents) && allPlacesAndEvents.length > 0) {
+    // Use the explicit array provided by the caller, but overlay visit progress
+    allPlacesAndEventsFinal = allPlacesAndEvents
+      .map((item, index) => {
+        if (item.place_id) {
+          const progress = placeProgress[item.place_id] || {};
+          return {
+            place_id: item.place_id,
+            visited: Boolean(progress.visited) || Boolean(item.visited),
+            visitedAt: progress.visitedAt || item.visitedAt || null,
+            pointsEarned: Number(progress.pointsEarned || item.pointsEarned || 0),
+            proofImageUri: progress.proofImageUri || item.proofImageUri || null,
+            addedByUser: Boolean(progress.addedByUser || item.addedByUser),
+            order: index + 1,
+          };
         }
-        return acc;
-      }, [])
-    : [];
+        if (item.event_id) {
+          const progress = (eventProgress && (eventProgress as any)[item.event_id]) || {};
+          return {
+            event_id: item.event_id,
+            visited: Boolean(progress.visited || progress.attended) || Boolean(item.visited),
+            visitedAt: progress.visitedAt || item.visitedAt || null,
+            pointsEarned: Number(item.pointsEarned || 0),
+            proofImageUri: progress.proofImageUri || item.proofImageUri || null,
+            addedByUser: Boolean(item.addedByUser || false),
+            order: index + 1,
+          };
+        }
+        return null;
+        })
+        .filter(Boolean) as Record<string, any>[];
+  } else {
+    // Fallback: combine allPlaces and eventEntries if not provided by caller
+    allPlacesAndEventsFinal = [
+      ...allPlaces.map((item, index) => ({ ...item, order: index + 1 })),
+      ...eventEntries.map((item, index) => ({ 
+        ...item, 
+        order: allPlaces.length + index + 1 
+      })),
+    ];
+  }
 
-  const remainingPlaces = allPlaces.filter(
-    (place) => !includedPlaceIds.has(place.place_id)
-  );
-  const remainingEvents = eventEntries.filter(
-    (entry) => !includedEventIds.has(entry.event_id)
-  );
 
-  const allPlacesAndEvents = [
-    ...orderedEntries,
-    ...remainingPlaces,
-    ...remainingEvents,
-  ].map((item, index) => ({
-    ...item,
-    order: index + 1,
-  }));
-
-  console.log('DEBUG saveUserTour - allPlacesAndEvents:', allPlacesAndEvents);
 
   const totalPoints = allPlaces.reduce(
     (sum, item) => sum + Number((item as any).pointsEarned || 0),
@@ -2779,10 +2828,7 @@ export const saveUserTour = async ({
     completedAt: completedAt || null,
     scheduledDate: scheduledDate || null,
     event_ids: events.map((event) => event.id),
-    event_progress: (eventProgress || {}) as Record<string, unknown>,
-    all_places: allPlacesAndEvents,
-    tourOrigin: tourOrigin ?? null,
-    navigable_route: navigableRoute ?? [],
+    all_places: allPlacesAndEventsFinal,
     updatedAt: now,
   };
 
