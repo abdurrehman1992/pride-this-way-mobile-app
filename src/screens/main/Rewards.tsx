@@ -54,6 +54,9 @@ const Rewards = () => {
     );
   }, [userId]);
 
+  const nextUnlock = Math.max(1500, totalPoints + 250);
+  const progressRatio = nextUnlock > 0 ? Math.min(1, totalPoints / nextUnlock) : 0;
+
   useFocusEffect(
     useCallback(() => {
       loadRewards().catch(() => { });
@@ -107,11 +110,13 @@ const Rewards = () => {
             </View>
 
             <Text style={styles.textCongrats}>
-              Great job! Explore more tours to earn additional rewards.
+              {rewards.length > 0
+                ? 'Great job! Explore more tours to earn additional rewards.'
+                : 'Start a tour to begin earning rewards — your rewards will appear here after you start.'}
             </Text>
 
             <View style={styles.progressOuter}>
-              <View style={styles.progressInner} />
+              <View style={[styles.progressInner, { width: `${Math.round(progressRatio * 100)}%` }]} />
             </View>
 
             <Text style={styles.textCongrats}>

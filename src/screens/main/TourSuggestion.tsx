@@ -564,7 +564,7 @@ const TourSuggestion: React.FC = () => {
                             <Text style={styles.disclaimerTitle}>Event Selection</Text>
                             <Text style={styles.disclaimerText}>
                                 Select events from the next 3 months to include in this tour.
-                                Selected events will appear during the tour at their scheduled time.
+                                Selected events will appear during the tour at their scheduled day and time.
                             </Text>
                         </View>
                         {selectedEvents.length > 0 && (

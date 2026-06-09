@@ -35,6 +35,8 @@ type PlacesAroundCardProps = {
   category?: string;
   hideTime?: boolean;
   hideRating?: boolean;
+  hideLocation?: boolean;
+  hideDivider?: boolean;
 };
 
 const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
@@ -50,6 +52,8 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   category = "Event",
   hideTime = false,
   hideRating = false,
+  hideLocation = false,
+  hideDivider = false,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
@@ -81,8 +85,15 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
     }
   };
 
+  const showRating = Boolean(rating) && !hideRating;
+  const showTime = Boolean(time) && !hideTime;
+  const showLocation = Boolean(location) && !hideLocation;
+  const visibleCount = (showRating ? 1 : 0) + (showLocation ? 1 : 0) + (showTime ? 1 : 0);
+  const hasBottom = visibleCount > 0;
+  const containerHeight = hasBottom ? 126 : 96;
+
   return (
-    <View style={[styles.container, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact]}>
+    <View style={[{ ...styles.container, height: containerHeight }, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact]}>
       <View style={styles.topSection}>
         <Image
           source={resolvedImage}
@@ -113,13 +124,10 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
         </TouchableOpacity>
       </View>
 
-      <View style={styles.divider} />
-      
-      {
+      {!hideDivider && <View style={styles.divider} />}
+
+      {hasBottom ? (
         (() => {
-          const showRating = Boolean(rating) && !hideRating;
-          const showTime = Boolean(time) && !hideTime;
-          const visibleCount = (showRating ? 1 : 0) + (location ? 1 : 0) + (showTime ? 1 : 0);
           const justify = visibleCount === 1 ? 'center' : 'space-between';
           return (
             <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact, { justifyContent: justify as any }]}>
@@ -129,10 +137,14 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
                   <Text style={styles.infoText}>{rating}</Text>
                 </View>
               ) : null}
-              <View style={styles.infoItem}>
-                <LocationIcon width={10} height={12} />
-                <Text style={styles.infoText}>{location}</Text>
-              </View>
+
+              {showLocation ? (
+                <View style={styles.infoItem}>
+                  <LocationIcon width={10} height={12} />
+                  <Text style={styles.infoText}>{location}</Text>
+                </View>
+              ) : null}
+
               {showTime ? (
                 <View style={styles.infoItem}>
                   <TimeIcon width={13} height={13} />
@@ -142,7 +154,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
             </View>
           );
         })()
-      }
+      ) : null}
     </View>
   );
 };

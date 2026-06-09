@@ -167,7 +167,7 @@ const Favorites = () => {
     };
 
     const handleTourTap = (tour: SavedTour) => {
-        navigation.navigate('MyTour', {
+        navigation.navigate('MyTours', {
             screen: 'MyTourStart',
             params: {
                 routeId: tour.route_id,
@@ -211,15 +211,30 @@ const Favorites = () => {
                 image={item.coverImage || ''}
                 location={[item.city_name, item.country].filter(Boolean).join(', ')}
                 category="Route"
-                // For favorite tours hide rating and time; only show location
+                // For favorite tours hide rating, time and bottom location/underline
                 hideRating
                 hideTime
+                hideLocation
+                hideDivider
             />
         </TouchableOpacity>
     );
 
     const renderEventItem = ({ item }: { item: FirebaseEvent }) => (
         <TouchableOpacity
+            onPress={() => navigation.navigate('ForYou', {
+                screen: 'RecommendationDetials',
+                params: {
+                    item: {
+                        id: item.id,
+                        title: item.title,
+                        description: item.description || item.address || '',
+                        rating: String(item.rating || ''),
+                        image: item.coverImage || '',
+                        category: 'Event',
+                    },
+                },
+            })}
             activeOpacity={0.9}
             style={styles.itemWrapper}
         >
