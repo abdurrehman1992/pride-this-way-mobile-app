@@ -1252,6 +1252,7 @@ export const saveUserTour = async ({
       })
       .filter(Boolean) as Record<string, any>[];
   } else if (Array.isArray(navigableRoute) && navigableRoute.length > 0) {
+    console.log('DEBUG saveUserTour - navigableRoute param:', navigableRoute);
     const orderedStops = [...navigableRoute].sort((a, b) => a.order - b.order);
     const orderedEntries: Record<string, any>[] = orderedStops
       .map((entry) => {
@@ -1296,6 +1297,9 @@ export const saveUserTour = async ({
         ...item,
         order: orderedEntries.length + missingPlaces.length + index + 1,
       }));
+    console.log('DEBUG saveUserTour - orderedEntries (from navigableRoute):', orderedEntries);
+    console.log('DEBUG saveUserTour - missingPlaces:', missingPlaces);
+    console.log('DEBUG saveUserTour - missingEvents:', missingEvents);
 
     allPlacesAndEventsFinal = [
       ...orderedEntries.map((item, index) => ({ ...item, order: index + 1 })),
@@ -1337,6 +1341,8 @@ export const saveUserTour = async ({
     all_places: allPlacesAndEventsFinal,
     updatedAt: now,
   };
+
+  console.log('DEBUG saveUserTour - final all_places payload:', allPlacesAndEventsFinal.map(p=>p.place_id || p.event_id));
 
   let savedId: string;
   if (tourId) {

@@ -1096,6 +1096,25 @@ const MyTourStart = () => {
     [currentLocation, tourOrigin]
   );
 
+  // Anchor used specifically for optimization when we want to prefer the
+  // user's live GPS while the tour is active. This differs from
+  // `orderingAnchor` which prefers the locked tour origin for non-active
+  // scenarios.
+  const optimizationAnchor = useMemo<[number, number] | null>(() => {
+    if (tourStarted || isPausedTour) {
+      return (
+        currentLocation ||
+        (visitedStopsInVisitOrder.length > 0
+          ? visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1]?.coordinate
+          : null) ||
+        tourOrigin ||
+        null
+      );
+    }
+
+    return tourOrigin ?? currentLocation;
+  }, [currentLocation, tourOrigin, tourStarted, isPausedTour, visitedStopsInVisitOrder]);
+
   // Cached "true" road-distance order from Mapbox Optimization API.
   // Keyed by stop ids in current set so we don't refetch needlessly.
   const [optimizedOrder, setOptimizedOrder] = useState<{
@@ -1104,10 +1123,13 @@ const MyTourStart = () => {
   } | null>(null);
 
   useEffect(() => {
-    if (savedTourOrder) {
+    // If a saved tour order exists and the tour is not active/paused, don't
+    // re-run optimization. But if the tour is active or paused we should
+    // re-optimize anchored to the live position.
+    if (savedTourOrder && !tourStarted && !isPausedTour) {
       return;
     }
-    if (!orderingAnchor || routePlaceStops.length < 2) {
+    if (!optimizationAnchor || routePlaceStops.length < 2) {
       return;
     }
     if (!Config.MAPBOX_TOKEN) {
@@ -1115,12 +1137,12 @@ const MyTourStart = () => {
     }
 
     const ids = routePlaceStops.map((s) => s.id).join(',');
-    const key = `${orderingAnchor[0].toFixed(4)},${orderingAnchor[1].toFixed(4)}|${ids}`;
+    const key = `${optimizationAnchor[0].toFixed(4)},${optimizationAnchor[1].toFixed(4)}|${ids}`;
     if (optimizedOrder?.key === key) {
       return;
     }
 
-    const coords = [orderingAnchor, ...routePlaceStops.map((s) => s.coordinate)]
+    const coords = [optimizationAnchor, ...routePlaceStops.map((s) => s.coordinate)]
       .map((c) => `${c[0]},${c[1]}`)
       .join(';');
 
@@ -1153,7 +1175,7 @@ const MyTourStart = () => {
     return () => {
       cancelled = true;
     };
-  }, [routePlaceStops, orderingAnchor, optimizedOrder]);
+  }, [routePlaceStops, optimizationAnchor, optimizedOrder, savedTourOrder, tourStarted, isPausedTour]);
 
   const mapOptimizedPlaceStops = useMemo(() => {
     if (savedTourOrder && savedTourOrder.length > 0) {
@@ -1165,7 +1187,7 @@ const MyTourStart = () => {
       return [...ordered, ...missing];
     }
 
-    if (!optimizedOrder && !orderingAnchor) {
+    if (!optimizedOrder && !optimizationAnchor) {
       return routePlaceStops;
     }
 
@@ -1178,10 +1200,10 @@ const MyTourStart = () => {
         .filter((s): s is TourStop => Boolean(s));
       const missing = routePlaceStops.filter((s) => !optimizedOrder.ids.includes(s.id));
       if (missing.length > 0) {
-        ordered = [...ordered, ...orderStopsByNearest(missing, orderingAnchor)];
+        ordered = [...ordered, ...orderStopsByNearest(missing, optimizationAnchor)];
       }
     } else {
-      ordered = orderStopsByNearest(routePlaceStops, orderingAnchor);
+      ordered = orderStopsByNearest(routePlaceStops, optimizationAnchor);
     }
 
     return ordered;
@@ -1198,7 +1220,7 @@ const MyTourStart = () => {
     const anchor =
       currentLocation ||
       visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1]?.coordinate ||
-      orderingAnchor;
+      optimizationAnchor;
 
     // Recalculate route order when the tour is active or paused so the next stop
     // honors current GPS instead of the original completed-location anchor.
@@ -1270,6 +1292,62 @@ const MyTourStart = () => {
     return ordered;
   }, [orderedNavigableStops, persistedEventStops, savedTourOrder, tourStops]);
 
+  // For DB persistence: include both visited (completed) and unvisited (remaining) stops
+  // in a coherent order: visited stops first (in visit order), then remaining stops (optimized).
+  // IMPORTANT: Include all places from tourStops to ensure no completed places are lost.
+  const allStopsForPersistence = useMemo(() => {
+    const visitedStops = visitedStopsInVisitOrder;
+    const remainingStops = orderedNavigableStops;
+    
+    // Combine: visited stops (in order), then remaining stops (optimized order), then any missing places from tourStops
+    const byId = new Map<string, TourStop>();
+    const result: TourStop[] = [];
+
+    // Add visited stops first (in their visit order)
+    visitedStops.forEach((stop) => {
+      if (!byId.has(stop.id)) {
+        byId.set(stop.id, stop);
+        result.push(stop);
+      }
+    });
+
+    // Add remaining stops (optimized order)
+    remainingStops.forEach((stop) => {
+      if (!byId.has(stop.id)) {
+        byId.set(stop.id, stop);
+        result.push(stop);
+      }
+    });
+
+    // Add any places from tourStops that weren't included above to prevent data loss
+    tourStops.forEach((stop) => {
+      if (!byId.has(stop.id)) {
+        byId.set(stop.id, stop);
+        result.push(stop);
+      }
+    });
+
+    // Add any events from routeDetails that aren't already included
+    (routeDetails?.events || []).forEach((event) => {
+      const eventStop: TourStop = {
+        id: event.id,
+        title: event.title,
+        coordinate: [
+          Number(event.coordinates?.longitude || 0),
+          Number(event.coordinates?.latitude || 0),
+        ] as [number, number],
+        event,
+        kind: 'event',
+      };
+      if (!byId.has(eventStop.id)) {
+        byId.set(eventStop.id, eventStop);
+        result.push(eventStop);
+      }
+    });
+
+    return result;
+  }, [orderedNavigableStops, routeDetails?.events, tourStops, visitedStopsInVisitOrder]);
+
   const orderedPlacesForSave = useMemo(
     () =>
       persistableTourStops
@@ -1281,12 +1359,13 @@ const MyTourStart = () => {
   useEffect(() => {
     if (!pendingEditSaveRef.current) return;
     if (!routeDetails || !user?.id) return;
-    if (!tourStarted) return;
     if (!optimizedOrder && !savedTourOrder && routePlaceStops.length > 1) return;
     if (pendingSaveInProgressRef.current) return;
 
     pendingSaveInProgressRef.current = true;
-    const routeOrderKey = persistableTourStops.map((stop) => stop.id).join(',');
+    const routeOrderKey = allStopsForPersistence.map((stop) => stop.id).join(',');
+    const nextSavedRouteOrder = allStopsForPersistence.map((stop) => stop.id);
+    setSavedTourOrder(nextSavedRouteOrder);
     (async () => {
       try {
         const activePlaceStops = tourStops.map((stop) => stop.place!).filter(Boolean);
@@ -1300,7 +1379,20 @@ const MyTourStart = () => {
         const remainingStops = placesToSave.filter(
           (place) => !placeProgress[place.id]?.visited
         );
-        const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
+        const computedStatus = isCompletedTour
+          ? 'completed'
+          : tourStarted
+            ? 'active'
+            : isPausedTour
+              ? 'paused'
+              : 'saved';
+
+        const debugNavigableRoute = allStopsForPersistence.map((stop, i) => ({
+          order: i + 1,
+          kind: stop.place ? 'place' : 'event',
+          stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+        }));
+        console.log('[DEBUG] saveUserTour payload routeOrderKey:', routeOrderKey, 'navigableRoute:', debugNavigableRoute, 'persistableIds:', allStopsForPersistence.map(s=>s.id));
 
         const savedId = await saveUserTour({
           tourId: tourIdRef.current,
@@ -1319,13 +1411,18 @@ const MyTourStart = () => {
           status: computedStatus,
           startedAt: startedAt || new Date().toISOString(),
           completedAt: computedStatus === 'completed' ? new Date().toISOString() : null,
-          allPlacesAndEvents: buildAllPlacesArray(persistableTourStops),
+          navigableRoute: allStopsForPersistence.map((stop, i) => ({
+            order: i + 1,
+            kind: stop.place ? 'place' : 'event',
+            stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+          })),
+          allPlacesAndEvents: buildAllPlacesArray(allStopsForPersistence),
         });
 
         if (savedId) {
           tourIdRef.current = savedId;
           setTourId(savedId);
-          setSavedTourOrder(persistableTourStops.map((stop) => stop.id));
+          setSavedTourOrder(allStopsForPersistence.map((stop) => stop.id));
           pendingEditSaveRef.current = false;
           lastSavedRouteOrderKeyRef.current = routeOrderKey;
         }
@@ -1349,6 +1446,7 @@ const MyTourStart = () => {
     startedAt,
     tourOrigin,
     orderedNavigableStops,
+    visitedStopsInVisitOrder,
     route.params?.tourName,
   ]);
 
@@ -1393,7 +1491,6 @@ const MyTourStart = () => {
 
   useEffect(() => {
     if (!routeDetails || !user?.id) return;
-    if (!tourStarted && !isPausedTour) return;
     if (pendingSaveInProgressRef.current) return;
 
     const routeOrderKey = orderedNavigableStops.map((stop) => stop.id).join(',');
@@ -1420,6 +1517,13 @@ const MyTourStart = () => {
         : tourStops.map((s) => s.place!).filter(Boolean);
     if (placesToSave.length === 0) return;
 
+    const debugNavigableRoute = allStopsForPersistence.map((stop, i) => ({
+      order: i + 1,
+      kind: stop.place ? 'place' : 'event',
+      stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+    }));
+    console.log('[DEBUG] saveUserTour (tourStops update) navigableRoute:', debugNavigableRoute, 'persistableIds:', allStopsForPersistence.map(s=>s.id));
+
     saveUserTour({
       tourId,
       userId: user.id,
@@ -1442,7 +1546,12 @@ const MyTourStart = () => {
             : 'saved',
       startedAt: startedAt || new Date().toISOString(),
       completedAt: null,
-      allPlacesAndEvents: buildAllPlacesArray(persistableTourStops),
+      navigableRoute: allStopsForPersistence.map((stop, i) => ({
+        order: i + 1,
+        kind: stop.place ? 'place' : 'event',
+        stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+      })),
+      allPlacesAndEvents: buildAllPlacesArray(allStopsForPersistence),
     })
       .then((savedId) => { if (savedId !== tourId) setTourId(savedId); })
       .catch(() => { });
@@ -1465,6 +1574,13 @@ const MyTourStart = () => {
     const nextCurrentStopIndex = orderedPlacesForSave.findIndex(
       (place) => !placeProgress[place.id]?.visited
     );
+
+    const debugNavigableRoute = allStopsForPersistence.map((stop, i) => ({
+      order: i + 1,
+      kind: stop.place ? 'place' : 'event',
+      stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+    }));
+    console.log('[DEBUG] saveUserTour (optimizedOrder) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(p=>p.id));
 
     saveUserTour({
       tourId,
@@ -1489,9 +1605,15 @@ const MyTourStart = () => {
             : 'saved',
       startedAt: startedAt || new Date().toISOString(),
       completedAt: isCompletedTour ? new Date().toISOString() : null,
-      allPlacesAndEvents: buildAllPlacesArray(persistableTourStops),
+      navigableRoute: allStopsForPersistence.map((stop, i) => ({
+        order: i + 1,
+        kind: stop.place ? 'place' : 'event',
+        stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+      })),
+      allPlacesAndEvents: buildAllPlacesArray(allStopsForPersistence),
     }).catch(() => { });
   }, [
+    allStopsForPersistence,
     isCompletedTour,
     isEdited,
     isPausedTour,
@@ -2205,6 +2327,13 @@ useEffect(() => {
             (stop) => stop.id !== eventId
           );
 
+          const debugNavigableRoute = allStopsForPersistence.map((stop, i) => ({
+            order: i + 1,
+            kind: stop.place ? 'place' : 'event',
+            stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+          }));
+          console.log('[DEBUG] saveUserTour (remove event) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(s=>s.id));
+
           await saveUserTour({
             tourId: tourIdRef.current,
             userId: user.id,
@@ -2222,7 +2351,12 @@ useEffect(() => {
             status: isPausedTour ? 'paused' : tourStarted ? 'active' : 'saved',
             startedAt: startedAt || new Date().toISOString(),
             completedAt: null,
-            allPlacesAndEvents: buildAllPlacesArray(nextPersistableStops),
+            navigableRoute: allStopsForPersistence.map((stop, i) => ({
+              order: i + 1,
+              kind: stop.place ? 'place' : 'event',
+              stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+            })),
+            allPlacesAndEvents: buildAllPlacesArray(allStopsForPersistence),
           });
         } catch {
           showError('Remove Failed', 'Unable to remove this event from the tour right now.');
@@ -2367,6 +2501,13 @@ useEffect(() => {
       );
       const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
       const status = forcedStatus ?? computedStatus;
+      const debugNavigableRoute = allStopsForPersistence.map((stop, i) => ({
+        order: i + 1,
+        kind: stop.place ? 'place' : 'event',
+        stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+      }));
+      console.log('[DEBUG] saveUserTour (persistTourIfNeeded) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(s=>s.id));
+
       const savedId = await saveUserTour({
         tourId: tourIdRef.current,
         userId: user.id,
@@ -2384,22 +2525,34 @@ useEffect(() => {
         status,
         startedAt: nextStartedAt || new Date().toISOString(),
         completedAt: status === 'completed' ? new Date().toISOString() : null,
-        allPlacesAndEvents: buildAllPlacesArray(persistableTourStops),
+        navigableRoute: allStopsForPersistence.map((stop, i) => ({
+          order: i + 1,
+          kind: stop.place ? 'place' : 'event',
+          stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+        })),
+        allPlacesAndEvents: buildAllPlacesArray(allStopsForPersistence),
       });
       tourIdRef.current = savedId;
       setTourId(savedId);
       return savedId;
     },
     [
+      allStopsForPersistence,
+      buildAllPlacesArray,
+      eventProgress,
       isEdited,
       orderedPlacesForSave,
       route.params?.tourName,
       routeDetails,
+      routePlaceStops,
+      savedTourOrder,
+      tourStarted,
       tourStops,
       tourId,
       user?.email,
       user?.id,
       user?.name,
+      optimizedOrder,
     ]
   );
   const pauseTourState = useCallback(async () => {
@@ -2635,7 +2788,14 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           (place) => !placeProgress[place.id]?.visited
         );
         const remainingStops = placesToSave.filter((place) => !placeProgress[place.id]?.visited);
-        const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
+        
+        // Check if all places AND events are complete
+        const checkRemainingPlaces = activePlaceStops.filter((place) => !placeProgress[place.id]?.visited);
+        const checkRemainingEvents = (routeDetails?.events || []).filter((event) => {
+          const eventProg = nextEventProgress[event.id];
+          return !Boolean(eventProg?.attended || eventProg?.expired);
+        });
+        const computedStatus = (checkRemainingPlaces.length === 0 && checkRemainingEvents.length === 0) ? 'completed' : 'active';
 
         const savedId = await saveUserTour({
           tourId: tourIdRef.current,
@@ -2654,11 +2814,26 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           status: computedStatus,
           startedAt: startedAt || new Date().toISOString(),
           completedAt: computedStatus === 'completed' ? new Date().toISOString() : null,
-          allPlacesAndEvents: buildAllPlacesArray(persistableTourStops),
+          navigableRoute: allStopsForPersistence.map((stop, i) => ({
+            order: i + 1,
+            kind: stop.place ? 'place' : 'event',
+            stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
+          })),
+          allPlacesAndEvents: buildAllPlacesArray(allStopsForPersistence),
         });
         if (savedId) {
           tourIdRef.current = savedId;
           setTourId(savedId);
+        }
+        
+        // Show completion modal if tour is now complete
+        if (computedStatus === 'completed') {
+          setRoadSegments([]);
+          setAirSegments([]);
+          setTourStarted(false);
+          setTourActionVisible(false);
+          setIsCompletedTour(true);
+          setTourCompletedVisible(true);
         }
       } catch (err) {
         console.error('persist after event attendance failed', err);
@@ -2773,12 +2948,15 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           console.warn('[MyTourStart] failed to add visit points', err);
         }
       }
-      const allDone = allRouteStops.every((stop) => {
-        if (stop.kind === 'event') {
-          return isStopComplete(stop);
-        }
-        return Boolean(nextProgress[stop.id]?.visited);
+      // Check if all places and events are now complete with the updated progress
+      // A better approach: recalculate what remaining stops would be with the new progress
+      const checkRemainingStops = tourStops.filter((stop) => !nextProgress[stop.id]?.visited);
+      const checkRemainingEvents = (routeDetails?.events || []).filter((event) => {
+        const eventProg = eventProgress[event.id];
+        return !Boolean(eventProg?.attended || eventProg?.expired);
       });
+      const allDone = checkRemainingStops.length === 0 && checkRemainingEvents.length === 0;
+      
       if (allDone) {
         setRoadSegments([]);
         setAirSegments([]);
