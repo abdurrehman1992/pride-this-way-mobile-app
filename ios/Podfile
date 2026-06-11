@@ -5,21 +5,43 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
+# RN 0.85 ships a prebuilt React Core (the `React` xcframework) alongside the
+# source `React-Core` pod. That duplication gives `RCTBridgeModule` two owning
+# Clang modules, which breaks RNFBFirestore's Swift module build. Building React
+# Core from source leaves a single consistent module.
+ENV['RCT_USE_PREBUILT_RNCORE'] = '0'
+
 platform :ios, '16.0'
 prepare_react_native_project!
 
+# Applies `:modular_headers => true` to the transitive Objective-C dependencies
+# of every Swift pod. RNFBFirestore now ships Swift sources, so its umbrella
+# header must build as a Clang module; without this, React's RCTBridgeModule
+# gets absorbed into RNFBApp's module and the Swift compiler fails with
+# "Declaration of 'RCTBridgeModule' must be imported from module ... before it
+# is required" / "Could not build Objective-C module 'RNFBFirestore'".
+plugin 'cocoapods-swift-modular-headers'
+
 $RNFirebaseAsStaticFramework = true
-use_frameworks! :linkage => :static
-
 target 'PridethisWay' do
-  config = use_native_modules!
-
+config = use_native_modules!
+use_modular_headers!
+pod 'RNFBApp', path: '../node_modules/@react-native-firebase/app'
+pod 'FirebaseCore', :modular_headers => true
+pod 'FirebaseCoreExtension', :modular_headers => true
+pod 'FirebaseInstallations', :modular_headers => true
+pod 'GoogleDataTransport', :modular_headers => true
+pod 'GoogleUtilities', :modular_headers => true
+pod 'nanopb', :modular_headers => true
+use_frameworks! :linkage => :static
+$RNFirebaseAsStaticFramework = true
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
   pre_install do |installer|
+    apply_modular_headers_for_swift_dependencies(installer)
     $RNMapboxMaps.pre_install(installer)
   end
   post_install do |installer|

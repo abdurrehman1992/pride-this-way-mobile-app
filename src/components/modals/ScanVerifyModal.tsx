@@ -38,6 +38,7 @@ const ScanVerifyModal: React.FC<Props> = ({
   const [step, setStep] = useState<StepType>("scan");
   const [capturedImage, setCapturedImage] = useState<{ uri: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const cameraRef = useRef<any>(null);
@@ -89,9 +90,24 @@ const ScanVerifyModal: React.FC<Props> = ({
   };
   useEffect(() => {
     if (visible) {
-      requestPermission();
+      (async () => {
+        try {
+          setPermissionError(null);
+          await requestPermission();
+        } catch (err: any) {
+          console.warn('Camera permission request failed', err);
+          setPermissionError(
+            'Camera access is required to verify your visit. Please enable it in Settings.'
+          );
+        }
+      })();
     }
   }, [requestPermission, visible]);
+
+  useEffect(() => {
+    console.log('ScanVerifyModal state', { visible, hasPermission, deviceAvailable: !!device, step, permissionError });
+  }, [visible, hasPermission, device, step, permissionError]);
+
   useEffect(() => {
     if (device && hasPermission && visible && step === "scan") {
       const timer = setTimeout(() => {
@@ -224,7 +240,14 @@ const ScanVerifyModal: React.FC<Props> = ({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent={true}
+      onRequestClose={onClose}
+    >
       <View style={styles.overlay}>
         {step === "scan" && (
           <View style={styles.card}>
@@ -259,7 +282,9 @@ const ScanVerifyModal: React.FC<Props> = ({
                     />
                   ) : (
                     <View style={styles.cameraFallback}>
-                      <Text style={{ color: COLORS.WHITE, fontSize: FONT_SIZE.CARD_TEXT }}>Camera not available</Text>
+                      <Text style={{ color: COLORS.WHITE, fontSize: FONT_SIZE.CARD_TEXT, textAlign: 'center' }}>
+                        {permissionError || 'Camera not available on this device.'}
+                      </Text>
                     </View>
                   )}
                 </View>

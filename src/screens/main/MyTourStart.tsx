@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   Dimensions,
   ImageBackground,
+  Platform,
+  InteractionManager,
 } from 'react-native';
 import { CustomAlert } from '../../utils/CustomAlert';
 import Mapbox, {
@@ -463,6 +465,18 @@ const MyTourStart = () => {
   const [expanded, setExpanded] = useState(false);
 
   const [scanVisible, setScanVisible] = useState(false);
+  const [scanTargetEvent, setScanTargetEvent] = useState<FirebaseEvent | null>(null);
+  // iOS cannot present a new modal while another is still animating out, so we
+  // hide the event modal first and open the scan modal after a short delay.
+  const [eventDetailDismissing, setEventDetailDismissing] = useState(false);
+  const pendingEventScanRef = useRef(false);
+  const eventScanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (eventScanTimerRef.current) {
+      clearTimeout(eventScanTimerRef.current);
+      eventScanTimerRef.current = null;
+    }
+  }, []);
   const [tourStarted, setTourStarted] = useState(Boolean(route.params?.autoStart));
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -2721,7 +2735,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
 
 
   const handleEventVerification = async (imageUri: string) => {
-    const event = selectedEvent || selectedStop?.event;
+    const event = scanTargetEvent || selectedEvent || selectedStop?.event;
     if (!event) {
       return false;
     }
@@ -3437,32 +3451,22 @@ return (
           </View>
         )}
 
-        <ScanVerifyModal
-          visible={scanVisible}
-          title={
-            scanForEvent
-              ? selectedEvent?.title || 'this event'
-              : selectedStop?.title || 'this location'
-          }
-          successPoints={
-            scanForEvent ? 0 : Number(selectedStop?.place?.points || 10)
-          }
-          onClose={() => {
-            setScanVisible(false);
-            setScanForEvent(false);
-            if (scanForEvent) {
-              setSelectedEvent(null);
-            } else {
-            setSelectedStop(null);
-            }
-          }}
-          onScanSuccess={handleVisitVerification}
-        />
-
         <EventDetailModal
-          visible={Boolean(selectedEvent)}
+          visible={Boolean(selectedEvent) && !scanVisible && !eventDetailDismissing}
           event={selectedEvent}
           onClose={() => setSelectedEvent(null)}
+          onDismiss={() => {
+            // iOS fires this once the event modal has fully animated out — the
+            // safe moment to present the scan modal without a presentation race.
+            if (eventScanTimerRef.current) {
+              clearTimeout(eventScanTimerRef.current);
+              eventScanTimerRef.current = null;
+            }
+            if (pendingEventScanRef.current) {
+              pendingEventScanRef.current = false;
+              setScanVisible(true);
+            }
+          }}
           statusMessage={
             selectedEvent && (eventProgress[selectedEvent.id]?.expired || isEventTimeExpired(selectedEvent))
               ? 'This event was scheduled for today, but its time has passed. It is marked complete on your route.'
@@ -3504,7 +3508,31 @@ return (
                     return;
                   }
                   setScanForEvent(true);
-                  setScanVisible(true);
+                  setScanTargetEvent(selectedEvent);
+                  if (Platform.OS === 'ios') {
+                    // iOS can't present the scan modal while the event modal is
+                    // still on screen. Hide the event modal but keep it MOUNTED
+                    // (don't null selectedEvent) so its dismissal completes
+                    // cleanly — nulling it here unmounts the modal mid-dismiss
+                    // and leaves iOS unable to present the next modal. The scan
+                    // modal is then opened from whichever fires first: the native
+                    // onDismiss callback, or this fallback timer.
+                    pendingEventScanRef.current = true;
+                    setEventDetailDismissing(true);
+                    if (eventScanTimerRef.current) {
+                      clearTimeout(eventScanTimerRef.current);
+                    }
+                    eventScanTimerRef.current = setTimeout(() => {
+                      eventScanTimerRef.current = null;
+                      if (pendingEventScanRef.current) {
+                        pendingEventScanRef.current = false;
+                        setScanVisible(true);
+                      }
+                    }, 500);
+                  } else {
+                    setSelectedEvent(null);
+                    setScanVisible(true);
+                  }
                 }
               : undefined
           }
@@ -3528,6 +3556,36 @@ return (
               : undefined
           }
         />
+
+        <ScanVerifyModal
+          visible={scanVisible}
+          title={
+            scanForEvent
+              ? scanTargetEvent?.title || selectedEvent?.title || 'this event'
+              : selectedStop?.title || 'this location'
+          }
+          successPoints={
+            scanForEvent ? 0 : Number(selectedStop?.place?.points || 10)
+          }
+          onClose={() => {
+            setScanVisible(false);
+            setScanForEvent(false);
+            pendingEventScanRef.current = false;
+            setEventDetailDismissing(false);
+            if (eventScanTimerRef.current) {
+              clearTimeout(eventScanTimerRef.current);
+              eventScanTimerRef.current = null;
+            }
+            if (scanForEvent) {
+              setScanTargetEvent(null);
+              setSelectedEvent(null);
+            } else {
+              setSelectedStop(null);
+            }
+          }}
+          onScanSuccess={handleVisitVerification}
+        />
+
 
         {tourCompletedVisible ? (
           <View style={styles.completionOverlay}>

@@ -12,6 +12,7 @@
 		274B5ADE4A1046089D8E4923 /* PlusJakartaSans-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 77E1663C630D4089967BF8DB /* PlusJakartaSans-Regular.ttf */; };
 		4EC04E068E024C738A7DD5B0 /* InterTight-Light.ttf in Resources */ = {isa = PBXBuildFile; fileRef = F7A9F670466F4FE9AAF15605 /* InterTight-Light.ttf */; };
 		61EDC0ACB2EC4020986F795D /* InterTight-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA2E5784E04440B1BA63B41A /* InterTight-SemiBold.ttf */; };
+		65158C162FD97C4000B778CD /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 65158C152FD97C4000B778CD /* GoogleService-Info.plist */; };
 		71B2F47EF99B44FC86371E89 /* Poppins-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 36BF1FB499CC45AAA74FFC16 /* Poppins-Regular.ttf */; };
 		71DF3B2B8632468EB8960E06 /* InterTight-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 873C2C5C4EA746998D67914A /* InterTight-Bold.ttf */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
@@ -34,6 +35,7 @@
 		36BF1FB499CC45AAA74FFC16 /* Poppins-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "Poppins-Regular.ttf"; path = "../src/assets/fonts/Poppins-Regular.ttf"; sourceTree = "<group>"; };
 		4924B92A0FDD4EE2B9627BB8 /* Poppins-Medium.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "Poppins-Medium.ttf"; path = "../src/assets/fonts/Poppins-Medium.ttf"; sourceTree = "<group>"; };
 		5DCABF47C3AFCAF925A6778D /* Pods_PridethisWay.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_PridethisWay.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		65158C152FD97C4000B778CD /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = PridethisWay/AppDelegate.swift; sourceTree = "<group>"; };
 		77E1663C630D4089967BF8DB /* PlusJakartaSans-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "PlusJakartaSans-Regular.ttf"; path = "../src/assets/fonts/PlusJakartaSans-Regular.ttf"; sourceTree = "<group>"; };
 		7FB92BF7CA004346A86271BD /* InterTight-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "InterTight-Regular.ttf"; path = "../src/assets/fonts/InterTight-Regular.ttf"; sourceTree = "<group>"; };
@@ -62,6 +64,7 @@
 		13B07FAE1A68108700A75B9A /* PridethisWay */ = {
 			isa = PBXGroup;
 			children = (
+				65158C152FD97C4000B778CD /* GoogleService-Info.plist */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
@@ -150,7 +153,7 @@
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				D77C4E7798EA38A02A7F1C6A /* [CP] Embed Pods Frameworks */,
 				267E467C15D68C6EDB3AB34F /* [CP] Copy Pods Resources */,
-				A3B67DE5ED9CE09A696C072A /* [CP-User] [RNFB] Core Configuration */,
+				7386C97C39B29AA69FE05C17 /* [CP-User] [RNFB] Core Configuration */,
 			);
 			buildRules = (
 			);
@@ -210,6 +213,7 @@
 				71DF3B2B8632468EB8960E06 /* InterTight-Bold.ttf in Resources */,
 				ECAC42204AEA4AB5A3CD55DA /* Poppins-Medium.ttf in Resources */,
 				71B2F47EF99B44FC86371E89 /* Poppins-Regular.ttf in Resources */,
+				65158C162FD97C4000B778CD /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -218,7 +222,7 @@
 /* Begin PBXShellScriptBuildPhase section */
 		00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */ = {
 			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
+			buildActionMask = 12;
 			files = (
 			);
 			inputPaths = (
@@ -234,7 +238,7 @@
 		};
 		267E467C15D68C6EDB3AB34F /* [CP] Copy Pods Resources */ = {
 			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
+			buildActionMask = 12;
 			files = (
 			);
 			inputFileListPaths = (
@@ -249,7 +253,7 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-PridethisWay/Pods-PridethisWay-resources.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
-		A3B67DE5ED9CE09A696C072A /* [CP-User] [RNFB] Core Configuration */ = {
+		7386C97C39B29AA69FE05C17 /* [CP-User] [RNFB] Core Configuration */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -438,6 +442,18 @@
 					"${PODS_ROOT}/React-graphics/react/renderer/graphics/platform/ios",
 					"${PODS_ROOT}/React-featureflags",
 					"${PODS_ROOT}/React-renderercss",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon/ReactCommon.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon/ReactCommon.framework/Headers/react/nativemodule/core",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-runtimeexecutor/React_runtimeexecutor.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-runtimeexecutor/React_runtimeexecutor.framework/Headers/platform/ios",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon-Samples/ReactCommon_Samples.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon-Samples/ReactCommon_Samples.framework/Headers/platform/ios",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-Fabric/React_Fabric.framework/Headers/react/renderer/components/view/platform/cxx",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-NativeModulesApple/React_NativeModulesApple.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-graphics/React_graphics.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-graphics/React_graphics.framework/Headers/react/renderer/graphics/platform/ios",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-featureflags/React_featureflags.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-renderercss/React_renderercss.framework/Headers",
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -528,6 +544,18 @@
 					"${PODS_ROOT}/React-graphics/react/renderer/graphics/platform/ios",
 					"${PODS_ROOT}/React-featureflags",
 					"${PODS_ROOT}/React-renderercss",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon/ReactCommon.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon/ReactCommon.framework/Headers/react/nativemodule/core",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-runtimeexecutor/React_runtimeexecutor.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-runtimeexecutor/React_runtimeexecutor.framework/Headers/platform/ios",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon-Samples/ReactCommon_Samples.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/ReactCommon-Samples/ReactCommon_Samples.framework/Headers/platform/ios",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-Fabric/React_Fabric.framework/Headers/react/renderer/components/view/platform/cxx",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-NativeModulesApple/React_NativeModulesApple.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-graphics/React_graphics.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-graphics/React_graphics.framework/Headers/react/renderer/graphics/platform/ios",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-featureflags/React_featureflags.framework/Headers",
+					"${PODS_CONFIGURATION_BUILD_DIR}/React-renderercss/React_renderercss.framework/Headers",
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (

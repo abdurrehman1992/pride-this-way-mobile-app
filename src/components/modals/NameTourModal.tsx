@@ -7,6 +7,9 @@ import {
   TextInput,
   Image,
   StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from "react-native";
 import { CrossIcon } from "../../constants/icons";
 import { NameTourIcon } from "../../constants/images";
@@ -22,10 +25,23 @@ interface Props {
 }
 
 const NameTourModal: React.FC<Props> = ({ visible, tourName, setTourName, onClose, onConfirm }) => {
+  // const keyboardOffset = Platform.OS === "ios" ? 20 : 0;
+
   return (
-    <Modal visible={visible} transparent animationType="fade">
-      <View style={styles.centerOverlay}>
-        <View style={styles.nameModalPopup}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        // keyboardVerticalOffset={keyboardOffset}
+      >
+        <ScrollView contentContainerStyle={styles.centerOverlay} keyboardShouldPersistTaps="handled">
+          <View style={styles.nameModalPopup}>
           <View style={styles.floatingImageWrapper}>
             <Image source={NameTourIcon} style={styles.floatingImage} />
           </View>
@@ -57,8 +73,9 @@ const NameTourModal: React.FC<Props> = ({ visible, tourName, setTourName, onClos
               <Text style={styles.btnText}>Confirm</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

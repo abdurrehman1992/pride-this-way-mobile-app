@@ -29,6 +29,7 @@ type Props = {
     category?: string;
   } | null;
   onClose: () => void;
+  onDismiss?: () => void;
   variant?: 'default' | 'compact';
   statusMessage?: string;
   statusTone?: 'info' | 'warning' | 'success';
@@ -42,6 +43,7 @@ type Props = {
 
 const EventDetailModal: React.FC<Props> = ({
   visible,
+  onDismiss,
   event,
   onClose,
   variant = 'default',
@@ -63,7 +65,15 @@ const EventDetailModal: React.FC<Props> = ({
   const isCompact = variant === 'compact';
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent={true}
+      onRequestClose={onClose}
+      onDismiss={onDismiss}
+    >
       <View style={styles.overlay}>
         <View style={[styles.card, isCompact && styles.cardCompact]}>
           <View>
