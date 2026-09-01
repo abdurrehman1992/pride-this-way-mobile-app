@@ -7,8 +7,9 @@ import {
     StyleSheet,
     TouchableOpacity,
     ActivityIndicator,
+    InteractionManager,
 } from 'react-native';
-import { CommonActions, useNavigation, useRoute } from '@react-navigation/native';
+import { CommonActions, useNavigation, usePreventRemove, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSelector } from 'react-redux';
 import { CustomAlert } from '../../utils/CustomAlert';
@@ -24,9 +25,10 @@ import {
     IconUp,
     TourDateIcon,
     TourLocationIcon,
-    CloseIcon,
+    EditProfileIcon,
 } from '../../constants/icons';
-import { showError } from '../../components/common/AppToast';
+import NameTourModal from '../../components/modals/NameTourModal';
+import { showError, showSuccess } from '../../components/common/AppToast';
 import { MyTourStackParamList } from '../../types/types';
 import { RootState } from '../../Redux/store';
 import { fetchUpcomingEventSuggestions } from '../../services/myTourService';
@@ -63,7 +65,9 @@ const TourSuggestion: React.FC = () => {
     } | undefined;
 
     const recommendations = params?.recommendations || [];
-    const tourName = params?.tourName || recommendations[0]?.route?.name || 'Custom Tour';
+    const initialTourName = params?.tourName || recommendations[0]?.route?.name || 'Custom Tour';
+    const [tourNameState, setTourNameState] = useState<string>(initialTourName);
+    const [nameModalVisible, setNameModalVisible] = useState(false);
     const cityLabel = params?.cityLabel || '';
     const primary = recommendations[0];
     const initialPlaces: FirebasePlace[] = primary?.places || [];
@@ -280,12 +284,16 @@ const TourSuggestion: React.FC = () => {
         );
     }, [navigation]);
 
-    const showDiscardAlert = useCallback((onDiscard: () => void) => {
+    const showDiscardAlert = useCallback((onDiscard: () => void, onStay?: () => void) => {
         CustomAlert.alert(
             'Discard Tour?',
             "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
             [
-                { text: 'Stay', style: 'cancel' },
+                {
+                    text: 'Stay',
+                    style: 'cancel',
+                    onPress: onStay,
+                },
                 {
                     text: 'Discard',
                     style: 'destructive',
@@ -296,10 +304,14 @@ const TourSuggestion: React.FC = () => {
     }, []);
 
     const removePlace = async (placeId: string) => {
+        const removedPlace = places.find((place) => place.id === placeId);
+        if (!removedPlace) return;
+
         const nextPlaces = places.filter((place) => place.id !== placeId);
         setPlaces(nextPlaces);
 
         if (!userId || !primary || !existingTourId) {
+            showSuccess('Location removed', `${removedPlace.name} was removed from your tour.`);
             return;
         }
 
@@ -316,13 +328,34 @@ const TourSuggestion: React.FC = () => {
             setPlaces(nextPlaces);
 
             console.log('DEBUG TourSuggestion - removePlace - selectedEvents:', selectedEvents);
+            const allPlacesAndEvents = [
+                ...nextPlaces.map((p, idx) => ({
+                    place_id: p.id,
+                    visited: false,
+                    visitedAt: null,
+                    pointsEarned: 0,
+                    proofImageUri: null,
+                    addedByUser: false,
+                    order: idx + 1,
+                })),
+                ...selectedEvents.map((e, idx) => ({
+                    event_id: e.id,
+                    visited: false,
+                    visitedAt: null,
+                    pointsEarned: 0,
+                    proofImageUri: null,
+                    addedByUser: false,
+                    order: nextPlaces.length + idx + 1,
+                })),
+            ];
+
             await saveUserTour({
                 tourId: existingTourId,
                 userId,
                 userName: authUser?.name || '',
                 userEmail: authUser?.email || '',
                 route: primary.route,
-                title: tourName,
+                title: tourNameState,
                 places: nextPlaces,
                 events: selectedEvents,
                 placeProgress: {},
@@ -334,7 +367,9 @@ const TourSuggestion: React.FC = () => {
                     nextPlaces,
                     selectedEvents
                 ),
+                allPlacesAndEvents,
             });
+            showSuccess('Location removed', `${removedPlace.name} was removed from your tour.`);
         } catch {
             showError('Remove Failed', 'Unable to remove this location from your tour.');
         }
@@ -367,16 +402,36 @@ const TourSuggestion: React.FC = () => {
     }, [navigation, saved]);
 
     useEffect(() => {
-        const unsubscribe = navigation.addListener('beforeRemove', (event) => {
-            if (saved || bypassGuardRef.current) return;
-            event.preventDefault();
-            showDiscardAlert(() => {
-                bypassGuardRef.current = true;
-                navigation.dispatch(event.data.action);
-            });
+        navigation.setOptions({
+            gestureEnabled: saved,
+            headerBackButtonMenuEnabled: false,
         });
-        return unsubscribe;
+    }, [navigation, saved]);
+
+    const handlePreventRemove = useCallback((event: any) => {
+        if (saved || bypassGuardRef.current) return;
+
+        if (event && typeof event.preventDefault === 'function') {
+            event.preventDefault();
+        }
+
+        showDiscardAlert(
+            () => {
+                bypassGuardRef.current = true;
+                const action = event?.data?.action;
+                if (action) {
+                    navigation.dispatch(action);
+                } else {
+                    navigation.goBack();
+                }
+            },
+            () => {
+                bypassGuardRef.current = false;
+            }
+        );
     }, [navigation, saved, showDiscardAlert]);
+
+    usePreventRemove(!saved, handlePreventRemove);
 
     useEffect(() => {
         const ancestors = [
@@ -420,13 +475,34 @@ const TourSuggestion: React.FC = () => {
             console.log('DEBUG TourSuggestion - selectedEvents before save:', selectedEvents);
             console.log('DEBUG TourSuggestion - selectedEventIds:', selectedEventIds);
             console.log('DEBUG TourSuggestion - allAvailableEvents:', allAvailableEvents);
-            const savedId = await saveUserTour({
+            const allPlacesAndEvents = [
+                ...places.map((p, idx) => ({
+                    place_id: p.id,
+                    visited: false,
+                    visitedAt: null,
+                    pointsEarned: 0,
+                    proofImageUri: null,
+                    addedByUser: false,
+                    order: idx + 1,
+                })),
+                ...selectedEventsToSave.map((e, idx) => ({
+                    event_id: e.id,
+                    visited: false,
+                    visitedAt: null,
+                    pointsEarned: 0,
+                    proofImageUri: null,
+                    addedByUser: false,
+                    order: places.length + idx + 1,
+                })),
+            ];
+
+            await saveUserTour({
                 tourId: existingTourId,
                 userId,
                 userName: authUser?.name || '',
                 userEmail: authUser?.email || '',
                 route: primary.route,
-                title: tourName,
+                title: tourNameState,
                 places,
                 events: selectedEventsToSave,
                 placeProgress: {},
@@ -438,6 +514,7 @@ const TourSuggestion: React.FC = () => {
                     places,
                     selectedEventsToSave
                 ),
+                allPlacesAndEvents,
             });
 
             // events are now embedded in all_places; no need for separate write
@@ -450,7 +527,7 @@ const TourSuggestion: React.FC = () => {
                     status: 'saved',
                     scheduledDate: null,
                     createdAt: now,
-                    tourName,
+                    tourName: tourNameState,
                     recommendations: [{ ...primary, places, events: selectedEventsToSave }],
                 },
             });
@@ -482,7 +559,12 @@ const TourSuggestion: React.FC = () => {
                         <Image source={{ uri: previewImage }} style={styles.thumb} />
                         <View style={styles.cardInfo}>
                             <View style={styles.cardHeaderRow}>
-                                <Text style={styles.tourTitle}>{tourName}</Text>
+                                <View style={styles.leftTitleRow}>
+                                    <Text style={styles.tourTitle} numberOfLines={1}>{tourNameState}</Text>
+                                    <TouchableOpacity onPress={() => setNameModalVisible(true)} hitSlop={8} style={styles.editIconWrap}>
+                                        <EditProfileIcon width={18} height={18} />
+                                    </TouchableOpacity>
+                                </View>
                                 <View style={styles.topIcons}>
                                     <IconUp width={16} height={16} />
                                 </View>
@@ -519,6 +601,7 @@ const TourSuggestion: React.FC = () => {
                                         routeId: primary?.route?.id,
                                         cityLabel,
                                         fromScreen: 'TourSuggestion',
+                                        existingPlaceIds: places.map((place) => place.id),
                                     })
                                 }
                             >
@@ -625,7 +708,7 @@ const TourSuggestion: React.FC = () => {
                                             <View style={styles.locationRow}>
                                                 <View style={styles.locationLeft}>
                                                     <CreatedTourLocationIcon width={20} height={20} />
-                                                    <View style={{ flex: 1 }}>
+                                                    <View style={styles.selectedEventInfo}>
                                                         <Text style={styles.locationText} numberOfLines={1}>{event.title}</Text>
                                                         <Text style={styles.selectedEventMeta}>
                                                             {eventDate}
@@ -668,6 +751,19 @@ const TourSuggestion: React.FC = () => {
                     </View>
                 </View>
             </ScrollView>
+            <NameTourModal
+                visible={nameModalVisible}
+                tourName={tourNameState}
+                setTourName={setTourNameState}
+                onClose={() => setNameModalVisible(false)}
+                onConfirm={() => {
+                    setNameModalVisible(false);
+                    InteractionManager.runAfterInteractions(() => {
+                        handleSave();
+                    });
+                }}
+                onUpdateLater={() => setNameModalVisible(false)}
+            />
             <View style={styles.footer}>
                 <TouchableOpacity
                     activeOpacity={0.85}
@@ -757,6 +853,17 @@ const styles = StyleSheet.create({
         fontSize: FONT_SIZE.SMALL_TEXT,
         fontFamily: FONT_FAMILY.Poppins_SemiBold,
         color: COLORS.TEXT_PRIMARY,
+    },
+    leftTitleRow: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    editIconWrap: {
+        marginLeft: 8,
+        padding: 6,
+        borderRadius: 16,
+        backgroundColor: 'transparent',
     },
     topIcons: {
         height: 20,

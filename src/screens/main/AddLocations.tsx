@@ -18,9 +18,8 @@ import CustomSearchInput from '../../components/Home/CustomSearchInput';
 import PlacesArroundCard from '../../components/Home/PlacesArroundCard';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
-import { FilterIcon } from '../../constants/images';
 import { fetchPlacesForLocation, FirebasePlace } from '../../services/myTourService';
-import { showInfo } from '../../components/common/AppToast';
+import { showInfo, showSuccess } from '../../components/common/AppToast';
 
 type RouteParams = {
   routeId?: string;
@@ -29,6 +28,7 @@ type RouteParams = {
   routeName?: string;
   tourName?: string;
   extraPlaceIds?: string[];
+  existingPlaceIds?: string[];
   removedPlaceIds?: string[];
   tourId?: string;
   isEdited?: boolean;
@@ -44,6 +44,7 @@ const AddLocations = () => {
     routeName,
     tourName,
     extraPlaceIds = [],
+    existingPlaceIds = [],
     removedPlaceIds = [],
     tourId,
   } = (route.params || {}) as RouteParams;
@@ -52,6 +53,10 @@ const AddLocations = () => {
   const [places, setPlaces] = useState<FirebasePlace[]>([]);
   const [loading, setLoading] = useState(false);
   const [cityOnly, setCityOnly] = useState(false);
+  const selectedPlaceIds = useMemo(
+    () => new Set([...existingPlaceIds, ...extraPlaceIds]),
+    [existingPlaceIds, extraPlaceIds]
+  );
 
   useEffect(() => {
     setLoading(true);
@@ -85,22 +90,7 @@ const AddLocations = () => {
             <CustomSearchInput
               value={searchText}
               onChangeText={(text: string) => setSearchText(text)}
-              rightIcon={
-                <TouchableOpacity
-                  onPress={() => {
-                    const nextValue = !cityOnly;
-                    setCityOnly(nextValue);
-                    showInfo(
-                      nextValue
-                        ? 'Showing selected city places only'
-                        : 'Showing all places'
-                    );
-                  }}
-                  style={styles.filterBtn}
-                >
-                  <Image source={FilterIcon} style={styles.filterIcon} />
-                </TouchableOpacity>
-              }
+              onClear={() => setSearchText('')}
             />
 
             {cityLabel ? (
@@ -129,11 +119,27 @@ const AddLocations = () => {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.listContainer}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  activeOpacity={0.9}
-                  onPress={() => {
-                    navigation.goBack();
+              renderItem={({ item }) => {
+                const isAlreadyAdded = selectedPlaceIds.has(item.id);
+
+                return (
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    style={isAlreadyAdded && styles.selectedCard}
+                    onPress={() => {
+                      if (isAlreadyAdded) {
+                        showInfo(
+                          'Location already added',
+                          `${item.name} is already in your tour.`
+                        );
+                        return;
+                      }
+
+                      showSuccess(
+                        'Location added',
+                        `${item.name} has been added to your tour.`
+                      );
+                      navigation.goBack();
 
                     setTimeout(() => {
                       if (fromScreen === 'TourSuggestion') {
@@ -169,19 +175,25 @@ const AddLocations = () => {
                         timestamp: Date.now(),
                       });
                     }, 100);
-                  }}
-                >
-                  <PlacesArroundCard
-                    id={item.id}
-                    title={item.name}
-                    description={item.description || item.address || 'Location'}
-                    rating={String(item.rating || 0)}
-                    image={item.imageUrl || 'https://picsum.photos/200'}
-                    location={[item.city_name, item.country].filter(Boolean).join(', ')}
-                    category="Place"
-                  />
-                </TouchableOpacity>
-              )}
+                    }}
+                  >
+                    <PlacesArroundCard
+                      id={item.id}
+                      title={item.name}
+                      description={item.description || item.address || 'Location'}
+                      rating={String(item.rating || 0)}
+                      image={item.imageUrl || 'https://picsum.photos/200'}
+                      location={[item.city_name, item.country].filter(Boolean).join(', ')}
+                      category="Place"
+                    />
+                    {isAlreadyAdded ? (
+                      <View style={styles.selectedBadge} pointerEvents="none">
+                        <Text style={styles.selectedBadgeText}>Already added</Text>
+                      </View>
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              }}
               ListEmptyComponent={
                 <View style={styles.emptyState}>
                   <Text style={styles.emptyText}>No places found for this search.</Text>
@@ -247,6 +259,25 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 10,
     gap: 14,
+  },
+  selectedCard: {
+    borderWidth: 1.5,
+    borderColor: COLORS.BUTTON_COLOR,
+    borderRadius: 14,
+  },
+  selectedBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 46,
+    backgroundColor: COLORS.BUTTON_COLOR,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  selectedBadgeText: {
+    color: COLORS.WHITE,
+    fontSize: FONT_SIZE.PILL_TEXT,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
   },
   loaderWrap: {
     flex: 1,

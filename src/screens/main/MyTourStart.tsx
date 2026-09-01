@@ -20,7 +20,7 @@ import Geolocation from '@react-native-community/geolocation';
 import Config from 'react-native-config';
 import axios from 'axios';
 import type { FeatureCollection, LineString, Point } from 'geojson';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useRoute, useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useFavorites } from '../../context/FavoritesContext';
 import { showError, showSuccess, showInfo } from '../../components/common/AppToast';
 import {
@@ -835,7 +835,7 @@ const MyTourStart = () => {
         }
 
         setPlaceProgress(nextProgress);
-        
+
         // Restore persisted per-event progress (attended/dismissed) if present
         // Extract from all_places entries that have event_progress field or from saved doc
         let nextEventProgress: Record<string, {
@@ -844,7 +844,7 @@ const MyTourStart = () => {
           visitedAt?: string | null;
           proofImageUri?: string | null;
         }> = {};
-        
+
         // Build event progress from all_places order field entries
         (savedTour?.all_places || [])
           .filter((item: any) => item.event_id)
@@ -855,7 +855,7 @@ const MyTourStart = () => {
               proofImageUri: item.proofImageUri || null,
             };
           });
-        
+
         setEventProgress(nextEventProgress);
         setRouteDetails(nextDetails);
 
@@ -870,7 +870,7 @@ const MyTourStart = () => {
               savedRouteOrder.push(item.event_id);
             }
           });
-        
+
         if (savedRouteOrder.length > 0) {
           setSavedTourOrder(savedRouteOrder);
         }
@@ -922,10 +922,10 @@ const MyTourStart = () => {
 
       if (!addedPlace || (!lng && !lat)) {
         showError('Invalid Location', 'This location does not have valid map coordinates.');
+        navigation.setParams({ addedPlaceId: undefined, timestamp: undefined } as any);
         return;
       }
 
-      // Pure updater — no side effects inside
       setTourStops((prev) => {
         if (prev.some((s) => s.id === addedPlace.id)) return prev;
         return [
@@ -934,7 +934,6 @@ const MyTourStart = () => {
         ];
       });
 
-      // All side-effect setters outside the updater (React 18 safe)
       setRouteDetails((prev) =>
         prev
           ? { ...prev, places: prev.places.some((p) => p.id === addedPlace.id) ? prev.places : [...prev.places, addedPlace] }
@@ -948,8 +947,9 @@ const MyTourStart = () => {
       setIsEdited(true);
       setOptimizedOrder(null);
       pendingEditSaveRef.current = true;
+      navigation.setParams({ addedPlaceId: undefined, timestamp: undefined } as any);
     });
-  }, [route.params?.addedPlaceId]);
+  }, [navigation, route.params?.addedPlaceId]);
 
   const placeStops = useMemo(() => tourStops, [tourStops]);
 
@@ -985,13 +985,13 @@ const MyTourStart = () => {
       )
       .forEach((event) => {
         const progress = eventProgress[event.id];
-        
+
         // Attended events go into completed array (still visible but styled differently)
         if (progress?.attended) {
           completed.push(eventToTourStop(event, 'completed'));
           return;
         }
-        
+
         if (progress?.dismissed && progress.visitedAt) {
           if (isSameCalendarDay(new Date(progress.visitedAt), today)) {
             return;
@@ -1077,7 +1077,7 @@ const MyTourStart = () => {
   const visitedStopsInVisitOrder = useMemo(() => {
     const eventStops = [...activeTodayEventStops, ...expiredTodayEventStops, ...completedTodayEventStops];
     const visitedPlaces = tourStops
-        .filter((stop) => Boolean(placeProgress[stop.id]?.visited))
+      .filter((stop) => Boolean(placeProgress[stop.id]?.visited))
       .map((stop) => ({
         stop,
         visitedAt: placeProgress[stop.id]?.visitedAt || '',
@@ -1312,7 +1312,7 @@ const MyTourStart = () => {
   const allStopsForPersistence = useMemo(() => {
     const visitedStops = visitedStopsInVisitOrder;
     const remainingStops = orderedNavigableStops;
-    
+
     // Combine: visited stops (in order), then remaining stops (optimized order), then any missing places from tourStops
     const byId = new Map<string, TourStop>();
     const result: TourStop[] = [];
@@ -1406,7 +1406,7 @@ const MyTourStart = () => {
           kind: stop.place ? 'place' : 'event',
           stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
         }));
-        console.log('[DEBUG] saveUserTour payload routeOrderKey:', routeOrderKey, 'navigableRoute:', debugNavigableRoute, 'persistableIds:', allStopsForPersistence.map(s=>s.id));
+        console.log('[DEBUG] saveUserTour payload routeOrderKey:', routeOrderKey, 'navigableRoute:', debugNavigableRoute, 'persistableIds:', allStopsForPersistence.map(s => s.id));
 
         const savedId = await saveUserTour({
           tourId: tourIdRef.current,
@@ -1536,7 +1536,7 @@ const MyTourStart = () => {
       kind: stop.place ? 'place' : 'event',
       stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
     }));
-    console.log('[DEBUG] saveUserTour (tourStops update) navigableRoute:', debugNavigableRoute, 'persistableIds:', allStopsForPersistence.map(s=>s.id));
+    console.log('[DEBUG] saveUserTour (tourStops update) navigableRoute:', debugNavigableRoute, 'persistableIds:', allStopsForPersistence.map(s => s.id));
 
     saveUserTour({
       tourId,
@@ -1594,7 +1594,7 @@ const MyTourStart = () => {
       kind: stop.place ? 'place' : 'event',
       stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
     }));
-    console.log('[DEBUG] saveUserTour (optimizedOrder) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(p=>p.id));
+    console.log('[DEBUG] saveUserTour (optimizedOrder) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(p => p.id));
 
     saveUserTour({
       tourId,
@@ -1808,43 +1808,43 @@ const MyTourStart = () => {
     return () => clearTimeout(timer);
   }, [nearestPendingStop, currentLocation]);
 
-useEffect(() => {
-  // Guard: Don't run if map isn't ready or we don't have location yet
-  if (!mapReady || !currentLocation || !nearestPendingStop || introPlayedRef.current) {
-    return;
-  }
+  useEffect(() => {
+    // Guard: Don't run if map isn't ready or we don't have location yet
+    if (!mapReady || !currentLocation || !nearestPendingStop || introPlayedRef.current) {
+      return;
+    }
 
-  // Two-phase intro:
-  // Phase 1 — frame the whole route (user + all remaining stops) so the
-  // user sees where they're going. Held for ~2.5s.
-  // Phase 2 — zoom in on the user's current location and hand off to
-  // follow mode for live navigation.
-  const startTimer = setTimeout(() => {
-    introPlayedRef.current = true;
+    // Two-phase intro:
+    // Phase 1 — frame the whole route (user + all remaining stops) so the
+    // user sees where they're going. Held for ~2.5s.
+    // Phase 2 — zoom in on the user's current location and hand off to
+    // follow mode for live navigation.
+    const startTimer = setTimeout(() => {
+      introPlayedRef.current = true;
 
-    const stopCoords = orderedRemainingStops.map((s) => s.coordinate);
-    const allCoords: [number, number][] = [currentLocation, ...stopCoords];
-    const lngs = allCoords.map((c) => c[0]);
-    const lats = allCoords.map((c) => c[1]);
-    const ne: [number, number] = [Math.max(...lngs), Math.max(...lats)];
-    const sw: [number, number] = [Math.min(...lngs), Math.min(...lats)];
+      const stopCoords = orderedRemainingStops.map((s) => s.coordinate);
+      const allCoords: [number, number][] = [currentLocation, ...stopCoords];
+      const lngs = allCoords.map((c) => c[0]);
+      const lats = allCoords.map((c) => c[1]);
+      const ne: [number, number] = [Math.max(...lngs), Math.max(...lats)];
+      const sw: [number, number] = [Math.min(...lngs), Math.min(...lats)];
 
-    cameraRef.current?.fitBounds(ne, sw, [180, 60, 220, 60], 1400);
+      cameraRef.current?.fitBounds(ne, sw, [180, 60, 220, 60], 1400);
 
-    // Phase 2 — after the user has seen the full route, zoom in on them.
-    setTimeout(() => {
-      cameraRef.current?.setCamera({
-        centerCoordinate: currentLocation,
-        zoomLevel: 16,
-        heading: 0,
-        animationDuration: 1400,
-        animationMode: 'flyTo',
-      });
-    }, 2500);
-  }, 500);
+      // Phase 2 — after the user has seen the full route, zoom in on them.
+      setTimeout(() => {
+        cameraRef.current?.setCamera({
+          centerCoordinate: currentLocation,
+          zoomLevel: 16,
+          heading: 0,
+          animationDuration: 1400,
+          animationMode: 'flyTo',
+        });
+      }, 2500);
+    }, 500);
 
-  return () => clearTimeout(startTimer);
-}, [currentLocation, mapReady, nearestPendingStop, orderedRemainingStops]);
+    return () => clearTimeout(startTimer);
+  }, [currentLocation, mapReady, nearestPendingStop, orderedRemainingStops]);
   useEffect(() => {
     if (!cameraRef.current || !mapReady) {
       return;
@@ -2194,7 +2194,7 @@ useEffect(() => {
   const totalEarnedPoints = useMemo(
     () =>
       Object.values(placeProgress).reduce(
-        (sum, item) => sum + Number(item.pointsEarned || 0),
+        (sum, item) => sum + (item.visited ? Number(item.pointsEarned || 0) : 0),
         0
       ),
     [placeProgress]
@@ -2268,12 +2268,12 @@ useEffect(() => {
 
   const handleEventMarkerPress = useCallback(
     (event: FirebaseEvent) => {
-    if (
-      event.coordinates?.longitude === undefined ||
-      event.coordinates?.latitude === undefined
-    ) {
-      return;
-    }
+      if (
+        event.coordinates?.longitude === undefined ||
+        event.coordinates?.latitude === undefined
+      ) {
+        return;
+      }
 
       const stop =
         activeTodayEventStops.find((item) => item.id === event.id) ||
@@ -2318,9 +2318,9 @@ useEffect(() => {
       setRouteDetails((prev) =>
         prev
           ? {
-              ...prev,
-              events: nextEvents,
-            }
+            ...prev,
+            events: nextEvents,
+          }
           : prev
       );
       setEventProgress(nextEventProgress);
@@ -2346,7 +2346,7 @@ useEffect(() => {
             kind: stop.place ? 'place' : 'event',
             stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
           }));
-          console.log('[DEBUG] saveUserTour (remove event) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(s=>s.id));
+          console.log('[DEBUG] saveUserTour (remove event) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(s => s.id));
 
           await saveUserTour({
             tourId: tourIdRef.current,
@@ -2414,9 +2414,9 @@ useEffect(() => {
       setRouteDetails((prev) =>
         prev
           ? {
-              ...prev,
-              places: nextPlaces,
-            }
+            ...prev,
+            places: nextPlaces,
+          }
           : prev
       );
       setPlaceProgress(nextProgress);
@@ -2520,7 +2520,7 @@ useEffect(() => {
         kind: stop.place ? 'place' : 'event',
         stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
       }));
-      console.log('[DEBUG] saveUserTour (persistTourIfNeeded) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(s=>s.id));
+      console.log('[DEBUG] saveUserTour (persistTourIfNeeded) navigableRoute:', debugNavigableRoute, 'allStopsForPersistenceIds:', allStopsForPersistence.map(s => s.id));
 
       const savedId = await saveUserTour({
         tourId: tourIdRef.current,
@@ -2592,32 +2592,26 @@ useEffect(() => {
   }, [navigation, tourStarted]);
 
   // Intercept back navigation when tour is active — offer pause or stay
-  useEffect(() => {
+  const handlePreventRemove = useCallback((e: any) => {
     if (!tourStarted) return;
-
-    const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
-      if (leavingRef.current) {
-        return;
-      }
-      e.preventDefault();
-      CustomAlert.alert(
-        'Leave Tour?',
-        'Your tour will be paused. You can resume from where you left off.',
-        [
-          { text: 'Stay on Tour', style: 'cancel' },
-          {
-            text: 'Pause & Leave',
-            onPress: async () => {
-              await pauseTourState();
-              navigation.dispatch(e.data.action);
-            },
+    if (leavingRef.current) return;
+    CustomAlert.alert(
+      'Leave Tour?',
+      'Your tour will be paused. You can resume from where you left off.',
+      [
+        { text: 'Stay on Tour', style: 'cancel' },
+        {
+          text: 'Pause & Leave',
+          onPress: async () => {
+            await pauseTourState();
+            navigation.dispatch(e.data.action);
           },
-        ]
-      );
-    });
+        },
+      ]
+    );
+  }, [tourStarted, pauseTourState, navigation]);
 
-    return unsubscribe;
-  }, [navigation, pauseTourState, tourStarted]);
+  usePreventRemove(tourStarted, handlePreventRemove);
 
   // Tab-press interception happens in TabNavigator (more reliable than
   // chasing parent listeners). When the user chooses "Pause & Leave" in
@@ -2665,54 +2659,54 @@ useEffect(() => {
     });
     const activeTourId = tourIdRef.current || tourId;
     if (activeTourId) {
-      await recordTourFavoritedPlace(activeTourId, place.id).catch(() => {});
+      await recordTourFavoritedPlace(activeTourId, place.id).catch(() => { });
     }
     showSuccess('Added to Favorites', 'You have Added to favorites successfully');
   };
 
-const handleCurrentLocation = useCallback(async (zoom = true) => {
-  const currentLoc = currentLocationRef.current;
-  if (currentLoc && zoom) {
-    cameraRef.current?.setCamera({
-      centerCoordinate: currentLoc,
-      zoomLevel: 15,
-      animationDuration: 500,
-      animationMode: 'easeTo',
-    });
-    setFollowMode('follow');
-  }
-
-  const getPos = (): Promise<[number, number]> =>
-    new Promise((resolve, reject) => {
-      Geolocation.getCurrentPosition(
-        (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
-        () => {
-          Geolocation.getCurrentPosition(
-            (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
-            reject,
-            { enableHighAccuracy: false, timeout: 2000 }
-          );
-        },
-        { enableHighAccuracy: true, timeout: 3000 }
-      );
-    });
-
-  try {
-    const pos = await getPos();
-    setCurrentLocation(pos);
-    if (zoom) {
+  const handleCurrentLocation = useCallback(async (zoom = true) => {
+    const currentLoc = currentLocationRef.current;
+    if (currentLoc && zoom) {
       cameraRef.current?.setCamera({
-        centerCoordinate: pos,
+        centerCoordinate: currentLoc,
         zoomLevel: 15,
         animationDuration: 500,
         animationMode: 'easeTo',
       });
       setFollowMode('follow');
     }
-  } catch {
-    // Fail silently or show toast
-  }
-}, []);
+
+    const getPos = (): Promise<[number, number]> =>
+      new Promise((resolve, reject) => {
+        Geolocation.getCurrentPosition(
+          (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
+          () => {
+            Geolocation.getCurrentPosition(
+              (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
+              reject,
+              { enableHighAccuracy: false, timeout: 2000 }
+            );
+          },
+          { enableHighAccuracy: true, timeout: 3000 }
+        );
+      });
+
+    try {
+      const pos = await getPos();
+      setCurrentLocation(pos);
+      if (zoom) {
+        cameraRef.current?.setCamera({
+          centerCoordinate: pos,
+          zoomLevel: 15,
+          animationDuration: 500,
+          animationMode: 'easeTo',
+        });
+        setFollowMode('follow');
+      }
+    } catch {
+      // Fail silently or show toast
+    }
+  }, []);
 
   useEffect(() => {
     handleCurrentLocation(false);
@@ -2802,7 +2796,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           (place) => !placeProgress[place.id]?.visited
         );
         const remainingStops = placesToSave.filter((place) => !placeProgress[place.id]?.visited);
-        
+
         // Check if all places AND events are complete
         const checkRemainingPlaces = activePlaceStops.filter((place) => !placeProgress[place.id]?.visited);
         const checkRemainingEvents = (routeDetails?.events || []).filter((event) => {
@@ -2839,7 +2833,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           tourIdRef.current = savedId;
           setTourId(savedId);
         }
-        
+
         // Show completion modal if tour is now complete
         if (computedStatus === 'completed') {
           setRoadSegments([]);
@@ -2970,7 +2964,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
         return !Boolean(eventProg?.attended || eventProg?.expired);
       });
       const allDone = checkRemainingStops.length === 0 && checkRemainingEvents.length === 0;
-      
+
       if (allDone) {
         setRoadSegments([]);
         setAirSegments([]);
@@ -2986,8 +2980,8 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
           orderedRemainingStops.find((stop) => stop.id !== selectedStop.id) ||
           orderStopsByNearest(
             allRouteStops.filter((stop) => !isStopComplete(stop)),
-          selectedStop.coordinate
-        )[0];
+            selectedStop.coordinate
+          )[0];
         if (nextUnvisited) {
           setTimeout(() => {
             cameraRef.current?.setCamera({
@@ -3021,7 +3015,7 @@ const handleCurrentLocation = useCallback(async (zoom = true) => {
       </View>
     );
   }
-return (
+  return (
     <View style={styles.container}>
       <TopHeader title="My Tour" />
       <View style={styles.background}>
@@ -3134,94 +3128,94 @@ return (
 
               {tourStarted
                 ? activeTodayEventStops.map((stop) => {
-                    const isNextPending =
-                      !isStopComplete(stop) && nearestPendingStop?.id === stop.id;
-                    return (
-                <Mapbox.MarkerView
-                  key={`event-${stop.id}`}
-                  id={`event-${stop.id}`}
-                  coordinate={[...stop.coordinate]}
-                  anchor={{ x: 0.5, y: 1 }}
-                >
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Show event ${stop.title}`}
-                          onPress={() => handleMarkerPress(stop)}
-                    style={styles.markerTapArea}
-                  >
-                          {isNextPending ? (
-                            <View style={styles.eventMarkerPulseWrap}>
-                              <PulsingPin />
-                              <View
-                                style={[
-                                  styles.eventMarkerOnPulse,
-                                  eventMarkerColors(stop.event!),
-                                ]}
-                              >
-                                <EventMarkerIcon event={stop.event!} size={26} />
-                    </View>
-                            </View>
-                          ) : (
+                  const isNextPending =
+                    !isStopComplete(stop) && nearestPendingStop?.id === stop.id;
+                  return (
+                    <Mapbox.MarkerView
+                      key={`event-${stop.id}`}
+                      id={`event-${stop.id}`}
+                      coordinate={[...stop.coordinate]}
+                      anchor={{ x: 0.5, y: 1 }}
+                    >
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Show event ${stop.title}`}
+                        onPress={() => handleMarkerPress(stop)}
+                        style={styles.markerTapArea}
+                      >
+                        {isNextPending ? (
+                          <View style={styles.eventMarkerPulseWrap}>
+                            <PulsingPin />
                             <View
                               style={[
-                                styles.eventMarker,
+                                styles.eventMarkerOnPulse,
                                 eventMarkerColors(stop.event!),
                               ]}
                             >
-                              <EventMarkerIcon event={stop.event!} size={28} />
+                              <EventMarkerIcon event={stop.event!} size={26} />
                             </View>
-                          )}
-                  </TouchableOpacity>
-                </Mapbox.MarkerView>
-                    );
-                  })
+                          </View>
+                        ) : (
+                          <View
+                            style={[
+                              styles.eventMarker,
+                              eventMarkerColors(stop.event!),
+                            ]}
+                          >
+                            <EventMarkerIcon event={stop.event!} size={28} />
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    </Mapbox.MarkerView>
+                  );
+                })
                 : null}
 
               {tourStarted
                 ? expiredTodayEventStops.map((stop) => (
-                    <Mapbox.MarkerView
-                      key={`event-expired-${stop.id}`}
-                      id={`event-expired-${stop.id}`}
-                      coordinate={[...stop.coordinate]}
-                      anchor={{ x: 0.5, y: 1 }}
+                  <Mapbox.MarkerView
+                    key={`event-expired-${stop.id}`}
+                    id={`event-expired-${stop.id}`}
+                    coordinate={[...stop.coordinate]}
+                    anchor={{ x: 0.5, y: 1 }}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Show passed event ${stop.title}`}
+                      onPress={() => handleMarkerPress(stop)}
+                      style={styles.markerTapArea}
                     >
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Show passed event ${stop.title}`}
-                        onPress={() => handleMarkerPress(stop)}
-                        style={styles.markerTapArea}
-                      >
-                        <View style={styles.eventMarkerExpired}>
-                          <EventMarkerIcon event={stop.event!} size={26} />
-                        </View>
-                      </TouchableOpacity>
-                    </Mapbox.MarkerView>
-                  ))
+                      <View style={styles.eventMarkerExpired}>
+                        <EventMarkerIcon event={stop.event!} size={26} />
+                      </View>
+                    </TouchableOpacity>
+                  </Mapbox.MarkerView>
+                ))
                 : null}
 
               {tourStarted
                 ? completedTodayEventStops.map((stop) => (
-                    <Mapbox.MarkerView
-                      key={`event-completed-${stop.id}`}
-                      id={`event-completed-${stop.id}`}
-                      coordinate={[...stop.coordinate]}
-                      anchor={{ x: 0.5, y: 1 }}
+                  <Mapbox.MarkerView
+                    key={`event-completed-${stop.id}`}
+                    id={`event-completed-${stop.id}`}
+                    coordinate={[...stop.coordinate]}
+                    anchor={{ x: 0.5, y: 1 }}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Show completed event ${stop.title}`}
+                      onPress={() => handleMarkerPress(stop)}
+                      style={styles.markerTapArea}
                     >
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Show completed event ${stop.title}`}
-                        onPress={() => handleMarkerPress(stop)}
-                        style={styles.markerTapArea}
-                      >
-                        <View style={styles.eventMarkerCompleted}>
-                          <EventMarkerIcon event={stop.event!} size={26} />
-                        </View>
-                      </TouchableOpacity>
-                    </Mapbox.MarkerView>
-                  ))
+                      <View style={styles.eventMarkerCompleted}>
+                        <EventMarkerIcon event={stop.event!} size={26} />
+                      </View>
+                    </TouchableOpacity>
+                  </Mapbox.MarkerView>
+                ))
                 : null}
 
               {currentLocation && currentMarkerNeedsStandalonePin ? (
@@ -3487,61 +3481,61 @@ return (
             selectedEvent && eventProgress[selectedEvent.id]?.attended
               ? 'Attended'
               : selectedEvent &&
-                  (eventProgress[selectedEvent.id]?.expired || isEventTimeExpired(selectedEvent))
+                (eventProgress[selectedEvent.id]?.expired || isEventTimeExpired(selectedEvent))
                 ? undefined
                 : 'Confirm Attendance'
           }
           onPrimaryAction={
             selectedEvent &&
-            !eventProgress[selectedEvent.id]?.attended &&
-            !eventProgress[selectedEvent.id]?.expired &&
-            !isEventTimeExpired(selectedEvent)
+              !eventProgress[selectedEvent.id]?.attended &&
+              !eventProgress[selectedEvent.id]?.expired &&
+              !isEventTimeExpired(selectedEvent)
               ? () => {
-                  if (
-                    nearestPendingStop &&
-                    nearestPendingStop.id !== selectedEvent.id
-                  ) {
-                    showInfo(
-                      'Next Stop First',
-                      `Please complete ${nearestPendingStop.title} first.`
-                    );
-                    return;
-                  }
-                  setScanForEvent(true);
-                  setScanTargetEvent(selectedEvent);
-                  if (Platform.OS === 'ios') {
-                    // iOS can't present the scan modal while the event modal is
-                    // still on screen. Hide the event modal but keep it MOUNTED
-                    // (don't null selectedEvent) so its dismissal completes
-                    // cleanly — nulling it here unmounts the modal mid-dismiss
-                    // and leaves iOS unable to present the next modal. The scan
-                    // modal is then opened from whichever fires first: the native
-                    // onDismiss callback, or this fallback timer.
-                    pendingEventScanRef.current = true;
-                    setEventDetailDismissing(true);
-                    if (eventScanTimerRef.current) {
-                      clearTimeout(eventScanTimerRef.current);
-                    }
-                    eventScanTimerRef.current = setTimeout(() => {
-                      eventScanTimerRef.current = null;
-                      if (pendingEventScanRef.current) {
-                        pendingEventScanRef.current = false;
-                        setScanVisible(true);
-                      }
-                    }, 500);
-                  } else {
-                    setSelectedEvent(null);
-                    setScanVisible(true);
-                  }
+                if (
+                  nearestPendingStop &&
+                  nearestPendingStop.id !== selectedEvent.id
+                ) {
+                  showInfo(
+                    'Next Stop First',
+                    `Please complete ${nearestPendingStop.title} first.`
+                  );
+                  return;
                 }
+                setScanForEvent(true);
+                setScanTargetEvent(selectedEvent);
+                if (Platform.OS === 'ios') {
+                  // iOS can't present the scan modal while the event modal is
+                  // still on screen. Hide the event modal but keep it MOUNTED
+                  // (don't null selectedEvent) so its dismissal completes
+                  // cleanly — nulling it here unmounts the modal mid-dismiss
+                  // and leaves iOS unable to present the next modal. The scan
+                  // modal is then opened from whichever fires first: the native
+                  // onDismiss callback, or this fallback timer.
+                  pendingEventScanRef.current = true;
+                  setEventDetailDismissing(true);
+                  if (eventScanTimerRef.current) {
+                    clearTimeout(eventScanTimerRef.current);
+                  }
+                  eventScanTimerRef.current = setTimeout(() => {
+                    eventScanTimerRef.current = null;
+                    if (pendingEventScanRef.current) {
+                      pendingEventScanRef.current = false;
+                      setScanVisible(true);
+                    }
+                  }, 500);
+                } else {
+                  setSelectedEvent(null);
+                  setScanVisible(true);
+                }
+              }
               : undefined
           }
           primaryDisabled={Boolean(selectedEvent && eventProgress[selectedEvent.id]?.attended)}
           secondaryActionLabel={
             selectedEvent &&
-            !eventProgress[selectedEvent.id]?.attended &&
-            !eventProgress[selectedEvent.id]?.expired &&
-            !isEventTimeExpired(selectedEvent)
+              !eventProgress[selectedEvent.id]?.attended &&
+              !eventProgress[selectedEvent.id]?.expired &&
+              !isEventTimeExpired(selectedEvent)
               ? 'Skip for today'
               : undefined
           }

@@ -105,7 +105,6 @@ export const validateEmail = (email: string) => {
     if (forbiddenDomains.includes(domain)) {
         return "Please use a permanent email address";
     }
-
     const validTlds = [
         "com", "org", "net", "edu", "gov", "io", "co", "pk", "uk", 
         "us", "ca", "au", "de", "fr", "jp", "in"
@@ -113,7 +112,6 @@ export const validateEmail = (email: string) => {
     if (!validTlds.includes(tld)) {
         return "Enter a valid email domain";
     }
-
     return "";
 };
 

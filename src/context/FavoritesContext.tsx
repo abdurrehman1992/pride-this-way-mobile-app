@@ -152,6 +152,19 @@ export const FavoritesProvider = ({ children }: any) => {
       }
       const bucket = bucketForCategory(item.category);
       const field = firestoreFieldForBucket(bucket);
+      const addId = (ids: string[]) =>
+        ids.includes(item.id) ? ids : [...ids, item.id];
+
+      // Do not wait for Firestore's snapshot before updating the UI. This
+      // keeps every heart responsive, even when several tours are rendered.
+      if (bucket === "favorites") {
+        setFavorites(addId);
+      } else if (bucket === "favoriteTours") {
+        setFavoriteTours(addId);
+      } else {
+        setFavoriteEvents(addId);
+      }
+
       const payload: Record<string, unknown> = {
         [field]: firestore.FieldValue.arrayUnion(item.id),
       };
@@ -162,10 +175,22 @@ export const FavoritesProvider = ({ children }: any) => {
         payload.favoriteEvents = firestore.FieldValue.arrayRemove(item.id);
       }
 
-      await firestore()
-        .collection(USERS_COLLECTION)
-        .doc(userId)
-        .set(payload, { merge: true });
+      try {
+        await firestore()
+          .collection(USERS_COLLECTION)
+          .doc(userId)
+          .set(payload, { merge: true });
+      } catch (error) {
+        // Restore the visible state if the save did not reach Firestore.
+        if (bucket === "favorites") {
+          setFavorites((ids) => ids.filter((id) => id !== item.id));
+        } else if (bucket === "favoriteTours") {
+          setFavoriteTours((ids) => ids.filter((id) => id !== item.id));
+        } else {
+          setFavoriteEvents((ids) => ids.filter((id) => id !== item.id));
+        }
+        throw error;
+      }
     },
     [userId]
   );
@@ -179,13 +204,34 @@ export const FavoritesProvider = ({ children }: any) => {
       if (category) {
         const bucket = bucketForCategory(category);
         const field = firestoreFieldForBucket(bucket);
+        const removeId = (ids: string[]) => ids.filter((itemId) => itemId !== id);
+
+        if (bucket === "favorites") {
+          setFavorites(removeId);
+        } else if (bucket === "favoriteTours") {
+          setFavoriteTours(removeId);
+        } else {
+          setFavoriteEvents(removeId);
+        }
+
         const payload: Record<string, unknown> = {
           [field]: firestore.FieldValue.arrayRemove(id),
         };
         if (bucket === "favorites") {
           payload[LEGACY_FAVORITES_FIELD] = firestore.FieldValue.arrayRemove(id);
         }
-        await userRef.set(payload, { merge: true });
+        try {
+          await userRef.set(payload, { merge: true });
+        } catch (error) {
+          if (bucket === "favorites") {
+            setFavorites((ids) => [...ids, id]);
+          } else if (bucket === "favoriteTours") {
+            setFavoriteTours((ids) => [...ids, id]);
+          } else {
+            setFavoriteEvents((ids) => [...ids, id]);
+          }
+          throw error;
+        }
         return;
       }
 

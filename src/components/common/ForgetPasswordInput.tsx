@@ -1,10 +1,9 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   View,
   TextInput,
   StyleSheet,
   Text,
-  TouchableOpacity,
 } from "react-native";
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
@@ -28,22 +27,35 @@ const ForgetPasswordInput: React.FC<Props> = ({
   keyboardType,
   error,
 }) => {
-  const [isHidden, setIsHidden] = useState(secureTextEntry);
+  const isHidden = secureTextEntry;
 
   return (
     <View style={styles.container}>
       {label && <Text style={styles.label}>{label}</Text>}
 
       <View style={styles.inputWrapper}>
+        {!value && placeholder ? (
+          <View pointerEvents="none" style={styles.placeholderOverlay}>
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              style={styles.placeholder}
+            >
+              {placeholder}
+            </Text>
+          </View>
+        ) : null}
         <TextInput
-          placeholder={placeholder}
-          placeholderTextColor={COLORS.FORGOT_PLACEHOLDER}
+          placeholder=""
           value={value}
           onChangeText={onChangeText}
           secureTextEntry={isHidden}
           style={styles.input}
           autoCapitalize="none"
           keyboardType={keyboardType}
+          multiline={false}
+          numberOfLines={1}
+          textAlignVertical="center"
         />
       </View>
 
@@ -74,6 +86,7 @@ const styles = StyleSheet.create({
   },
 
   inputWrapper: {
+    position: "relative",
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "none",
@@ -85,10 +98,31 @@ const styles = StyleSheet.create({
 
   input: {
     flex: 1,
-    height: 48,
+    height: 56,
+    // Android adds a small default horizontal inset to TextInput. Explicitly
+    // reset it so the caret aligns with the custom placeholder's left edge.
+    paddingHorizontal: 0,
+    paddingVertical: 0,
     color: COLORS.TEXT_PRIMARY,
     fontSize: FONT_SIZE.SMALL_TEXT,
+    lineHeight: 20,
     fontFamily: FONT_FAMILY.PlusJakartaSans_Regular,
+    includeFontPadding: false,
+  },
+  placeholderOverlay: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
+  },
+  placeholder: {
+    color: COLORS.FORGOT_PLACEHOLDER,
+    fontSize: FONT_SIZE.SMALL_TEXT,
+    lineHeight: 20,
+    fontFamily: FONT_FAMILY.PlusJakartaSans_Regular,
+    includeFontPadding: false,
   },
   errorText: {
     color: COLORS.LOGOUT_TEXT,

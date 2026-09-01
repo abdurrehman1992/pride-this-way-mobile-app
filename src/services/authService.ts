@@ -194,7 +194,7 @@ export const loginUser = async (data: LoginPayload): Promise<AuthSession> => {
 
     const profile = await getUserDocument(credential.user.uid);
     if (!profile) {
-      await auth().signOut().catch(() => {});
+      await auth().signOut().catch(() => { });
       throw new Error('This account is no longer available.');
     }
 
@@ -304,7 +304,7 @@ export const subscribeToAuthState = (
     unsubscribeProfile = getUserDocumentRef(firebaseUser.uid).onSnapshot(
       async (snapshot) => {
         if (!snapshot.exists) {
-          await auth().signOut().catch(() => {});
+          await auth().signOut().catch(() => { });
           callback(null);
           return;
         }
@@ -315,7 +315,7 @@ export const subscribeToAuthState = (
         try {
           const profile = await getUserDocument(firebaseUser.uid);
           if (!profile) {
-            await auth().signOut().catch(() => {});
+            await auth().signOut().catch(() => { });
             callback(null);
             return;
           }

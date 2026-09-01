@@ -22,9 +22,17 @@ interface Props {
   setTourName: (val: string) => void;
   onClose: () => void;
   onConfirm: () => void;
+  onUpdateLater?: () => void;
 }
 
-const NameTourModal: React.FC<Props> = ({ visible, tourName, setTourName, onClose, onConfirm }) => {
+const NameTourModal: React.FC<Props> = ({
+  visible,
+  tourName,
+  setTourName,
+  onClose,
+  onConfirm,
+  onUpdateLater,
+}) => {
   // const keyboardOffset = Platform.OS === "ios" ? 20 : 0;
 
   return (
@@ -66,7 +74,7 @@ const NameTourModal: React.FC<Props> = ({ visible, tourName, setTourName, onClos
           />
 
           <View style={styles.nameModalButtonRow}>
-            <TouchableOpacity style={styles.updateLaterBtn} onPress={onClose}>
+            <TouchableOpacity style={styles.updateLaterBtn} onPress={onUpdateLater || onClose}>
               <Text style={styles.updateLaterText}>Update this Later</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.confirmTourBtn} onPress={onConfirm}>

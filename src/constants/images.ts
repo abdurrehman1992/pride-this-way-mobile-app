@@ -1,4 +1,5 @@
 export { default as BackGroundImage } from "../assets/images/Signup.png";
+export { default as AuthBackGroundImage } from "../assets/images/authBg.png";
 export { default as BgFrame } from "../assets/images/BgFrame.png";
 export { default as NameTourIcon } from "../assets/images/nameTourIcon.png";
 export { default as DetailBackground } from "../assets/images/detailBackground.png";

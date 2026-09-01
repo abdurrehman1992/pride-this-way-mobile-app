@@ -67,11 +67,11 @@ type RouteCardState = RecommendedRoute & {
     isOpen: boolean;
     displayName: string;
     cityLabel: string;
-    extraPlaces: FirebasePlace[];
-    removedPlaceIds: string[];
-    tourId?: string;
-    status?: string;
-    scheduledDate?: string | null;
+        extraPlaces: FirebasePlace[];
+        removedPlaceIds: string[];
+        tourId?: string;
+        status?: string;
+        scheduledDate?: string | null;
     isSavedTour?: boolean;
     updatedAt?: string;
     createdAt?: string;
@@ -188,6 +188,8 @@ const MyTour = () => {
     const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
     const [loadingSuggestions, setLoadingSuggestions] = useState(false);
     const [pendingRecommendations, setPendingRecommendations] = useState<RecommendedRoute[]>([]);
+    const pendingRecommendationsRef = useRef<RecommendedRoute[]>([]);
+    const tourSuggestionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const tagNames = useMemo(() => tags.map((tag) => tag.name), [tags]);
     const selectedTagIds = useMemo(
@@ -206,13 +208,13 @@ const MyTour = () => {
         );
     }, []);
 
-    const clearFlow = () => {
-        setSelectedPrefs([]);
-        setTourName('');
-        setLocationSearch('');
-        setSelectedLocation('');
-        setLocationSuggestions([]);
-    };
+    useEffect(() => {
+        return () => {
+            if (tourSuggestionTimerRef.current) {
+                clearTimeout(tourSuggestionTimerRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
         fetchTourTags()
@@ -245,11 +247,13 @@ const MyTour = () => {
             });
             if (recommendations.length === 0) {
                 setPendingRecommendations([]);
+                pendingRecommendationsRef.current = [];
                 closeModal('preference');
                 showError('No Suggestions', 'We couldn\'t find a tour matching that location.');
                 return;
             }
             setPendingRecommendations(recommendations);
+            pendingRecommendationsRef.current = recommendations;
             const suggestedName = recommendations[0]?.route?.name?.trim();
             setTourName(suggestedName || '');
             closeModal('preference');
@@ -261,9 +265,16 @@ const MyTour = () => {
         }
     };
 
-    const handleNameConfirm = () => {
-        const recommendationsSnapshot = pendingRecommendations;
-        const tourNameSnapshot = tourName.trim() || recommendationsSnapshot[0]?.route?.name || '';
+    const createTourFromRecommendations = (nameOverride?: string) => {
+        const recommendationsSnapshot = pendingRecommendationsRef.current.length > 0
+            ? pendingRecommendationsRef.current
+            : pendingRecommendations;
+        if (recommendationsSnapshot.length === 0) {
+            closeModal('name');
+            showError('No Suggestions', 'Please select your location and preferences again.');
+            return;
+        }
+        const tourNameSnapshot = nameOverride?.trim() || recommendationsSnapshot[0]?.route?.name || '';
         const cityLabel =
             [recommendationsSnapshot[0]?.route?.city_name, recommendationsSnapshot[0]?.route?.country]
                 .filter(Boolean)
@@ -273,13 +284,32 @@ const MyTour = () => {
 
         closeModal('name');
         setPendingRecommendations([]);
-        clearFlow();
+        setSelectedPrefs([]);
+        setTourName('');
+        setLocationSearch('');
+        setSelectedLocation('');
+        setLocationSuggestions([]);
+        pendingRecommendationsRef.current = [];
 
-        navigation.navigate('TourSuggestion', {
-            tourName: tourNameSnapshot,
-            cityLabel,
-            recommendations: recommendationsSnapshot,
-        });
+        if (tourSuggestionTimerRef.current) {
+            clearTimeout(tourSuggestionTimerRef.current);
+        }
+        tourSuggestionTimerRef.current = setTimeout(() => {
+            tourSuggestionTimerRef.current = null;
+            navigation.push('TourSuggestion', {
+                tourName: tourNameSnapshot,
+                cityLabel,
+                recommendations: recommendationsSnapshot,
+            });
+        }, 250);
+    };
+
+    const handleNameConfirm = () => {
+        createTourFromRecommendations(tourName);
+    };
+
+    const handleUpdateLater = () => {
+        createTourFromRecommendations();
     };
 
     const addedRouteId = route.params?.routeId;
@@ -535,7 +565,10 @@ const MyTour = () => {
 
         fetchPlacesByIds([addedPlaceId]).then((places) => {
             const addedPlace = places[0];
-            if (!addedPlace) return;
+            if (!addedPlace) {
+                navigation.setParams({ addedPlaceId: undefined, timestamp: undefined } as any);
+                return;
+            }
 
             setSavedTourCards((prev) =>
                 normalizeTourCards(prev.map((item) => {
@@ -554,10 +587,24 @@ const MyTour = () => {
                     };
                 }))
             );
+            navigation.setParams({ addedPlaceId: undefined, timestamp: undefined } as any);
         });
-    }, [addedPlaceId, addedRouteId, route.params?.timestamp]);
+    }, [addedPlaceId, addedRouteId, navigation, route.params?.timestamp]);
 
     const allRoutePlaces = (tour: RouteCardState) => {
+        // A saved tour's `places` comes from its persisted `all_places` list.
+        // Do not merge the route's current favourite/fallback places here: those
+        // are recommendation-time suggestions and can reintroduce locations the
+        // user removed before saving (or locations never added to this tour).
+        if (tour.isSavedTour) {
+            const seen = new Set<string>();
+            return tour.places.filter((place) => {
+                if (seen.has(place.id)) return false;
+                seen.add(place.id);
+                return true;
+            });
+        }
+
         const favoritePlaces =
             tour.favoritePlaces.length > 0
                 ? tour.favoritePlaces
@@ -804,6 +851,27 @@ const MyTour = () => {
                                     }
                                 }
 
+                                const allPlacesAndEvents = [
+                                    ...(orderedPlaces.length > 0 ? orderedPlaces : allRoutePlaces(tour)).map((p, idx) => ({
+                                        place_id: p.id,
+                                        visited: Boolean(placeProgress?.[p.id]?.visited),
+                                        visitedAt: placeProgress?.[p.id]?.visitedAt || null,
+                                        pointsEarned: Number(placeProgress?.[p.id]?.pointsEarned || 0),
+                                        proofImageUri: placeProgress?.[p.id]?.proofImageUri || null,
+                                        addedByUser: Boolean(placeProgress?.[p.id]?.addedByUser),
+                                        order: idx + 1,
+                                    })),
+                                    ...(eventsToPersist || []).map((e, idx) => ({
+                                        event_id: e.id,
+                                        visited: false,
+                                        visitedAt: null,
+                                        pointsEarned: 0,
+                                        proofImageUri: null,
+                                        addedByUser: false,
+                                        order: (orderedPlaces.length > 0 ? orderedPlaces.length : allRoutePlaces(tour).length) + idx + 1,
+                                    })),
+                                ];
+
                                 await saveUserTour({
                                     tourId: tour.tourId,
                                     userId,
@@ -819,6 +887,7 @@ const MyTour = () => {
                                     status: 'completed',
                                     startedAt: existingSavedTour.startedAt,
                                     completedAt: now,
+                                    allPlacesAndEvents,
                                     scheduledDate: null,
                                 });
                             } catch (error) {
@@ -838,39 +907,53 @@ const MyTour = () => {
     const handleToggleFavorite = async (tour: RouteCardState) => {
         const favoriteId = tour.tourId || tour.route.id;
         if (isFavorite(favoriteId)) {
-            await removeFromFavorites(favoriteId, 'Route');
-            showInfo('Removed from Favorites', `${tour.displayName} removed successfully`);
+            try {
+                const removeRequest = removeFromFavorites(favoriteId, 'Route');
+                requestAnimationFrame(() => {
+                    showInfo('Removed from Favorites', `${tour.displayName} removed successfully`);
+                });
+                await removeRequest;
+            } catch {
+                showError('Favorites Update Failed', 'Unable to remove this tour right now.');
+            }
             return;
         }
 
-        await addToFavorites({
-            id: favoriteId,
-            title: tour.displayName,
-            description: tour.cityLabel || 'Tour',
-            image:
-                tour.places[0]?.imageUrl ||
-                tour.favoritePlace?.imageUrl ||
-                tour.events[0]?.coverImage ||
-                '',
-            category: 'Route',
-            routeName: 'MyTourStart',
-            routeParams: {
-                routeId: tour.route.id,
-                routeName: tour.displayName,
-                tourName: tour.displayName,
-                cityLabel: tour.cityLabel,
-                extraPlaceIds: tour.extraPlaces.map((place) => place.id),
-                removedPlaceIds: tour.removedPlaceIds,
-                tourId: tour.tourId,
-                isEdited:
-                    Boolean(tour.isSavedTour) ||
-                    tour.extraPlaces.length > 0 ||
-                    tour.removedPlaceIds.length > 0,
-            },
-            city_name: tour.route.city_name,
-            country: tour.route.country,
-        });
-        showSuccess('Added to Favorites', `${tour.displayName} added successfully`);
+        try {
+            const addRequest = addToFavorites({
+                id: favoriteId,
+                title: tour.displayName,
+                description: tour.cityLabel || 'Tour',
+                image:
+                    tour.places[0]?.imageUrl ||
+                    tour.favoritePlace?.imageUrl ||
+                    tour.events[0]?.coverImage ||
+                    '',
+                category: 'Route',
+                routeName: 'MyTourStart',
+                routeParams: {
+                    routeId: tour.route.id,
+                    routeName: tour.displayName,
+                    tourName: tour.displayName,
+                    cityLabel: tour.cityLabel,
+                    extraPlaceIds: tour.extraPlaces.map((place) => place.id),
+                    removedPlaceIds: tour.removedPlaceIds,
+                    tourId: tour.tourId,
+                    isEdited:
+                        Boolean(tour.isSavedTour) ||
+                        tour.extraPlaces.length > 0 ||
+                        tour.removedPlaceIds.length > 0,
+                },
+                city_name: tour.route.city_name,
+                country: tour.route.country,
+            });
+            requestAnimationFrame(() => {
+                showSuccess('Added to Favorites', `${tour.displayName} added successfully`);
+            });
+            await addRequest;
+        } catch {
+            showError('Favorites Update Failed', 'Unable to add this tour right now.');
+        }
     };
 
     const allCards = useMemo(() => {
@@ -1068,6 +1151,7 @@ const MyTour = () => {
                                             routeId: tour.route.id,
                                             cityLabel: tour.cityLabel,
                                             fromScreen: 'MyTour',
+                                            existingPlaceIds: locations.map((location) => location.id),
                                         })
                                     }
                                 >
@@ -1342,6 +1426,7 @@ const MyTour = () => {
                 setTourName={setTourName}
                 onClose={() => closeModal('name')}
                 onConfirm={handleNameConfirm}
+                onUpdateLater={handleUpdateLater}
             />
 
         </View>

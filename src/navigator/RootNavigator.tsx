@@ -36,7 +36,6 @@ const RootNavigator: React.FC = () => {
         dispatch(loginSuccess(session));
         return;
       }
-
       dispatch(logout());
     });
 

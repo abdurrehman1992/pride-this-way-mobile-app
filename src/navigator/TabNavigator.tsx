@@ -1,6 +1,6 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { CommonActions } from "@react-navigation/native";
 import { CustomAlert } from "../utils/CustomAlert";
 import { TabParamList } from "../types/types";
@@ -24,6 +24,9 @@ import {
 
 const Tab = createBottomTabNavigator<TabParamList>();
 const VALID_TABS = new Set(["MyTours", "Map", "ForYou", "Favorites"]);
+const NoFeedbackTabButton = (props: any) => (
+  <TouchableOpacity {...props} activeOpacity={1} />
+);
 
 const getDeepestActiveRoute = (state: any): any => {
   if (!state?.routes?.length) {
@@ -166,6 +169,9 @@ const TabNavigator: React.FC = () => {
           tabBarActiveTintColor: COLORS.BUTTON_COLOR,
           tabBarInactiveTintColor: COLORS.INACTIVE_COLOR,
           tabBarRippleColor: "transparent",
+          tabBarActiveBackgroundColor: "transparent",
+          tabBarInactiveBackgroundColor: "transparent",
+          tabBarButton: NoFeedbackTabButton,
 
           tabBarLabel: ({ focused, color }) => (
             <Text

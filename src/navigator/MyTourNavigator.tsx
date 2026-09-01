@@ -10,7 +10,7 @@ import TourSuggestion from "../screens/main/TourSuggestion";
 const Stack = createNativeStackNavigator<MyTourStackParamList>();
 const AuthNavigator: React.FC = () => {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={{ headerShown: false, headerBackButtonMenuEnabled: false }}>
       <Stack.Screen name="MyTour" component={MyTour} />
       <Stack.Screen name="CreateTour" component={CreateTour} />
       <Stack.Screen name="TourSuggestion" component={TourSuggestion} />

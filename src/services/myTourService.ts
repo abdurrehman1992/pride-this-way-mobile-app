@@ -1,6 +1,7 @@
 import firestore, {
   FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
+import { sumVisitedPointsFromItems } from '../utils/rewardPoints';
 import { searchPlaceSuggestions } from './mapboxSearch';
 
 type Coordinates = {
@@ -528,6 +529,46 @@ const extractRouteTagIds = (
   return Array.from(collected);
 };
 
+const extractRoutePreferenceTagIds = (route: FirebaseRoute) =>
+  Array.from(
+    new Set(
+      (route.tag_ids || [])
+        .map((tagId) => normalizeTagId(tagId))
+        .filter(Boolean)
+    )
+  );
+
+const getTimeValue = (value: unknown) => {
+  if (!value) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time;
+  }
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    const time = new Date(value).getTime();
+    return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time;
+  }
+
+  if (typeof value === 'object' && 'toDate' in value) {
+    const date = (value as { toDate?: () => Date }).toDate?.();
+    const time = date?.getTime();
+    return typeof time === 'number' && !Number.isNaN(time)
+      ? time
+      : Number.POSITIVE_INFINITY;
+  }
+
+  return Number.POSITIVE_INFINITY;
+};
+
+const getRouteDashboardOrderTime = (route: FirebaseRoute) => {
+  const createdTime = getTimeValue(route.createdAt);
+  return Number.isFinite(createdTime) ? createdTime : getTimeValue(route.updatedAt);
+};
+
 const fetchAllPlacesMap = async (): Promise<Map<string, FirebasePlace>> => {
   const snapshot = await firestore()
     .collection(PLACES_COLLECTION)
@@ -537,17 +578,6 @@ const fetchAllPlacesMap = async (): Promise<Map<string, FirebasePlace>> => {
     placesMap.set(doc.id, parsePlace(doc.id, doc.data()));
   });
   return placesMap;
-};
-
-const fetchAllEventsMap = async (): Promise<Map<string, FirebaseEvent>> => {
-  const snapshot = await firestore()
-    .collection(EVENTS_COLLECTION)
-    .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
-  const eventsMap = new Map<string, FirebaseEvent>();
-  snapshot.docs.forEach((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
-    eventsMap.set(doc.id, parseEvent(doc.id, doc.data()));
-  });
-  return eventsMap;
 };
 
 export const fetchTourTags = async (): Promise<FirebaseTag[]> => {
@@ -783,13 +813,12 @@ export const fetchRecommendedRoutes = async ({
   selectedTagIds: string[];
   userId?: string;
 }): Promise<RecommendedRoute[]> => {
-  const [routesSnapshot, placesMap, eventsMap, favoritePlaceIds] =
+  const [routesSnapshot, placesMap, favoritePlaceIds] =
     await Promise.all([
       firestore()
         .collection(ROUTES_COLLECTION)
         .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>,
       fetchAllPlacesMap(),
-      fetchAllEventsMap(),
       fetchUserFavoritePlaceIds(userId),
     ]);
 
@@ -816,7 +845,7 @@ export const fetchRecommendedRoutes = async ({
       //   .map((eventId) => eventsMap.get(eventId))
       //   .filter((event): event is FirebaseEvent => Boolean(event && event.isActive !== false));
       const events: FirebaseEvent[] = [];
-      const routeTagIds = extractRouteTagIds(route, places, events);
+      const routeTagIds = extractRoutePreferenceTagIds(route);
       const selectedIds = new Set(places.map((place) => place.id));
       const favoritePlaces = allPlaces
         .filter((place) => favoritePlaceIdSet.has(place.id))
@@ -872,25 +901,28 @@ export const fetchRecommendedRoutes = async ({
     return [];
   }
 
-  const maxMatchedTags = cityPool.reduce(
-    (max, item) => Math.max(max, item.matchedTagCount),
-    0
-  );
-
-  const bestTagMatchedRoutes = cityPool.filter(
-    (item) => item.matchedTagCount === maxMatchedTags
-  );
-
-  const sorted = bestTagMatchedRoutes
+  const sorted = cityPool
+    .map((item, originalIndex) => ({ ...item, originalIndex }))
     .sort((a, b) => {
-      const stopDiff = (b.route.totalStops || b.places.length || 0) - (a.route.totalStops || a.places.length || 0);
-      if (stopDiff !== 0) {
-        return stopDiff;
+      const tagMatchDiff = b.matchedTagCount - a.matchedTagCount;
+      if (tagMatchDiff !== 0) {
+        return tagMatchDiff;
       }
 
-      return b.places.length - a.places.length;
+      const locationCountDiff = b.places.length - a.places.length;
+      if (locationCountDiff !== 0) {
+        return locationCountDiff;
+      }
+
+      const dashboardOrderDiff =
+        getRouteDashboardOrderTime(b.route) - getRouteDashboardOrderTime(a.route);
+      if (dashboardOrderDiff !== 0 && Number.isFinite(dashboardOrderDiff)) {
+        return dashboardOrderDiff;
+      }
+
+      return a.originalIndex - b.originalIndex;
     })
-    .map(({ locationMatched: _locationMatched, ...item }) => item);
+    .map(({ locationMatched: _locationMatched, originalIndex: _originalIndex, ...item }) => item);
 
   return sorted.slice(0, 1);
 };
@@ -906,10 +938,9 @@ export const fetchRouteDetails = async ({
   extraPlaceIds?: string[];
   removedPlaceIds?: string[];
 }) => {
-  const [routeDoc, placesMap, eventsMap, favoritePlaceIds] = await Promise.all([
+  const [routeDoc, placesMap, favoritePlaceIds] = await Promise.all([
     firestore().collection(ROUTES_COLLECTION).doc(routeId).get(),
     fetchAllPlacesMap(),
-    fetchAllEventsMap(),
     fetchUserFavoritePlaceIds(userId),
   ]);
 
@@ -1075,36 +1106,6 @@ export const fetchEventsByIds = async (
     })
     .filter((event): event is FirebaseEvent => Boolean(event));
 };
-
-const startOfCalendarDay = (date: Date) => {
-  const copy = new Date(date);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
-};
-
-const endOfCalendarDay = (date: Date) => {
-  const copy = new Date(date);
-  copy.setHours(23, 59, 59, 999);
-  return copy;
-};
-
-const isEventScheduledOnDay = (event: FirebaseEvent, day: Date) => {
-  if (!event.startDate) {
-    return false;
-  }
-
-  const dayStart = startOfCalendarDay(day).getTime();
-  const dayEnd = endOfCalendarDay(day).getTime();
-  const eventStart = startOfCalendarDay(new Date(event.startDate)).getTime();
-  const eventEnd = event.endDate
-    ? endOfCalendarDay(new Date(event.endDate)).getTime()
-    : endOfCalendarDay(new Date(event.startDate)).getTime();
-
-  return eventStart <= dayEnd && eventEnd >= dayStart;
-};
-
-const isTodayEvent = (event: FirebaseEvent, now = new Date()) =>
-  isEventScheduledOnDay(event, now);
 
 export const saveUserTour = async ({
   tourId,
@@ -1319,9 +1320,8 @@ export const saveUserTour = async ({
 
 
 
-  const totalPoints = allPlaces.reduce(
-    (sum, item) => sum + Number((item as any).pointsEarned || 0),
-    0
+  const totalPoints = sumVisitedPointsFromItems(
+    allPlacesAndEventsFinal as Array<{ visited?: boolean; pointsEarned?: number | string | null }>
   );
 
   const payload = {
@@ -1691,7 +1691,7 @@ export const deleteUserTour = async (
         })
       )
     );
-  } catch (err) {
+  } catch {
     // Don't fail the overall deletion if cleanup errors occur; log if possible.
   }
 };
@@ -1720,21 +1720,28 @@ export const fetchRewardsSummary = async (
     );
   const rewardTours = tours
     .map((tour: SavedTour) => {
-      const places = tour.all_places.map((item: SavedTourPlace) => {
-        const place = placesMap.get(item.place_id);
-        return {
-          id: item.place_id,
-          name: place?.name || 'Location',
-          points: item.pointsEarned || 0,
-          visited: item.visited,
-        };
-      });
+      const places = (tour.all_places || [])
+        .filter((item: any) => item?.place_id)
+        .map((item: any) => {
+          const place = placesMap.get(item.place_id);
+          const visited = Boolean(item.visited);
+          return {
+            id: item.place_id,
+            name: place?.name || 'Location',
+            points: visited ? Number(item.pointsEarned || 0) : 0,
+            visited,
+          };
+        });
+
+      const points = sumVisitedPointsFromItems(
+        (tour.all_places || []) as Array<{ visited?: boolean; pointsEarned?: number | string | null }>
+      );
 
       return {
         id: tour.id,
         title: tour.title,
         date: tour.updatedAt || tour.startedAt || '',
-        points: tour.totalPoints,
+        points,
         totalLocations: tour.all_places.length,
         places,
       };

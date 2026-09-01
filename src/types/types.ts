@@ -20,6 +20,7 @@ export type MyTourStackParamList = {
     routeId?: string;
     cityLabel?: string;
     fromScreen?: 'MyTour' | 'MyTourStart' | 'TourSuggestion';
+    existingPlaceIds?: string[];
   };
   MyTour: {
     addedPlaceId?: string;

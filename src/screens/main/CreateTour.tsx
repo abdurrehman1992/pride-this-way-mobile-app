@@ -60,6 +60,14 @@ const CreateTour: React.FC = () => {
         );
     }, []);
 
+    const clearFlow = () => {
+        setSelectedPrefs([]);
+        setTourName('');
+        setLocationSearch('');
+        setSelectedLocation('');
+        setLocationSuggestions([]);
+    };
+
     useEffect(() => {
         fetchTourTags()
             .then(setTags)
@@ -110,9 +118,9 @@ const CreateTour: React.FC = () => {
         }
     };
 
-    const handleNameConfirm = () => {
+    const createTourFromRecommendations = (nameOverride?: string) => {
         const recommendationsSnapshot = pendingRecommendations;
-        const tourNameSnapshot = tourName.trim() || recommendationsSnapshot[0]?.route?.name || '';
+        const tourNameSnapshot = nameOverride?.trim() || recommendationsSnapshot[0]?.route?.name || '';
         const cityLabel =
             [recommendationsSnapshot[0]?.route?.city_name, recommendationsSnapshot[0]?.route?.country]
                 .filter(Boolean)
@@ -122,12 +130,24 @@ const CreateTour: React.FC = () => {
 
         closeModal('name');
         setPendingRecommendations([]);
+        clearFlow();
 
-        navigation.replace('TourSuggestion', {
-            tourName: tourNameSnapshot,
-            cityLabel,
-            recommendations: recommendationsSnapshot,
+        // Defer navigation until after the modal has had a chance to dismiss
+        requestAnimationFrame(() => {
+            navigation.replace('TourSuggestion', {
+                tourName: tourNameSnapshot,
+                cityLabel,
+                recommendations: recommendationsSnapshot,
+            });
         });
+    };
+
+    const handleNameConfirm = () => {
+        createTourFromRecommendations(tourName);
+    };
+
+    const handleUpdateLater = () => {
+        createTourFromRecommendations();
     };
 
     return (
@@ -198,6 +218,7 @@ const CreateTour: React.FC = () => {
                 setTourName={setTourName}
                 onClose={() => closeModal('name')}
                 onConfirm={handleNameConfirm}
+                onUpdateLater={handleUpdateLater}
             />
         </View>
     );
