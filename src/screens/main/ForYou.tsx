@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { MapIconMain } from '../../constants/icons';
@@ -40,15 +39,6 @@ const ForYou = () => {
       });
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      setIsPreferencesSet(false);
-      setSelectedLocation('');
-      setSelectedPrefs([]);
-      setModals({ location: false, preference: false });
-    }, []),
-  );
-
   useEffect(() => {
     const keyboardShowListener = Keyboard.addListener('keyboardDidShow', () => {
       setFlexToggle(false);
@@ -76,9 +66,10 @@ const ForYou = () => {
 
   const handleCancel = () => {
     closeAllModals();
-    setSelectedPrefs([]);
-    setSelectedLocation('');
-    setIsPreferencesSet(false);
+  };
+
+  const replacePreferences = (nextPrefs: string[]) => {
+    setSelectedPrefs(nextPrefs);
   };
 
   const handleLocationNext = (location: string) => {
@@ -95,6 +86,13 @@ const ForYou = () => {
   };
 
   const handleApply = () => {
+    if (!selectedLocation.trim()) {
+      return;
+    }
+    if (!selectedPrefs.length) {
+      return;
+    }
+
     closeAllModals();
     setIsPreferencesSet(true);
   };
@@ -116,7 +114,13 @@ const ForYou = () => {
         <ForYouContent
           location={selectedLocation}
           prefs={selectedPrefs}
-          onReset={handleCancel}
+          onReset={() => {
+            // Reset parent state and return to initial empty screen
+            setSelectedLocation('');
+            setSelectedPrefs([]);
+            setIsPreferencesSet(false);
+            closeAllModals();
+          }}
         />
       ) : (
         <View style={styles.centerContainer}>
@@ -152,7 +156,7 @@ const ForYou = () => {
         visible={modals.preference}
         selectedPrefs={selectedPrefs}
         togglePreference={togglePreference}
-        clearAll={() => setSelectedPrefs([])}
+        clearAll={() => replacePreferences([])}
         onClose={handleCancel}
         onPrimary={handleApply}
         onSecondary={handleCancel}

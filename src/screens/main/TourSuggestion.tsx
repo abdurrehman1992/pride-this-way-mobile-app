@@ -7,7 +7,6 @@ import {
     StyleSheet,
     TouchableOpacity,
     ActivityIndicator,
-    InteractionManager,
 } from 'react-native';
 import { CommonActions, useNavigation, usePreventRemove, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -756,11 +755,9 @@ const TourSuggestion: React.FC = () => {
                 tourName={tourNameState}
                 setTourName={setTourNameState}
                 onClose={() => setNameModalVisible(false)}
-                onConfirm={() => {
+                onConfirm={(nextName) => {
+                    setTourNameState(nextName);
                     setNameModalVisible(false);
-                    InteractionManager.runAfterInteractions(() => {
-                        handleSave();
-                    });
                 }}
                 onUpdateLater={() => setNameModalVisible(false)}
             />

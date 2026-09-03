@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -6,10 +6,12 @@ import {
   ImageBackground,
   TouchableOpacity,
 } from "react-native";
-import { RECOMMENDED_IMAGE } from "../../constants/images";
 import { COLORS } from "../../constants/colors";
 import {
   ForkIcon,
+  EventIcon,
+  LocationIcon,
+  MusicTabIcon,
   StarIcon,
   WhiteHeart,
   RedHeartIcon,
@@ -24,6 +26,9 @@ type RecommendedProps = {
   description: string;
   rating?: string;
   image?: any;
+  fallbackImage?: any;
+  category?: string;
+  originalPlace?: any;
   onPress?: () => void;
 };
 
@@ -32,20 +37,48 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
   title,
   description,
   rating = "4.7",
-  image = RECOMMENDED_IMAGE,
+  image,
+  fallbackImage,
+  category = "Restaurant",
   onPress,
 }) => {
-  const [imageFailed, setImageFailed] = useState(false);
+  const imageCandidates = useMemo(
+    () => [image, fallbackImage].filter(Boolean),
+    [image, fallbackImage],
+  );
+  const [imageIndex, setImageIndex] = useState(0);
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
 
-  const resolvedImage =
-    imageFailed || !image
-      ? RECOMMENDED_IMAGE
-      : typeof image === "string"
-      ? { uri: image }
-      : image;
+  useEffect(() => setImageIndex(0), [image, fallbackImage]);
+  const currentImage = imageCandidates[Math.min(imageIndex, imageCandidates.length - 1)];
+  const resolvedImage = typeof currentImage === "string" ? { uri: currentImage } : currentImage;
 
   const favorite = isFavorite(id);
+  const badgeCategory = (category || "Restaurant").toString();
+  const normalizedCategory =
+    badgeCategory === "Food" || badgeCategory === "Restaurant"
+      ? "Restaurant"
+      : badgeCategory === "Music"
+        ? "Music"
+        : badgeCategory === "Event"
+          ? "Event"
+          : badgeCategory === "Route"
+            ? "Route"
+            : "Place";
+
+  const renderBadgeIcon = () => {
+    if (normalizedCategory === "Restaurant") {
+      return <ForkIcon width={9.92} height={12.05} />;
+    }
+    if (normalizedCategory === "Music") {
+      return <MusicTabIcon width={9.92} height={12.05} />;
+    }
+    if (normalizedCategory === "Place") {
+      return <LocationIcon width={9.92} height={12.05} />;
+    }
+    return <EventIcon width={9.92} height={12.05} />;
+  };
+
   const handleFavorite = () => {
     if (favorite) {
       removeFromFavorites(id);
@@ -57,7 +90,7 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
         description,
         rating,
         image,
-        category: "Restaurant",
+        category: normalizedCategory,
         routeName: "RecommendationDetials",
         routeParams: { itemId: id }
       });
@@ -70,15 +103,26 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
       <View style={styles.container}>
         <ImageBackground
           source={resolvedImage}
-          onError={() => setImageFailed(true)}
+          // source={{
+          //   // uri:"https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/Entrance_lahore_zoo.jpeg/500px-Entrance_lahore_zoo.jpeg?utm_source=en.wikipedia.org&utm_campaign=parser&utm_content=thumbnail",
+          //   // uri:"https://lh3.googleusercontent.com/gps-cs-s/AHRPTWmMKRE25A-yCcxlbogwTZ5gLqC5qiz2tuzNb6N7v3GF2URIctYQuVnsqeetnLm8n0nilDaWosnqJbhkY0UYHIQ4cPCJK06-Fa8IfIyjnwj8DshyxNBO8Ri2ubZ5AVH2IEQ8iMpIPYfl4Pk=s1360-w1360-h1020-rw"
+          //   uri:"https://nishatemporium.com/wp-content/uploads/2019/07/Emporium-Night.jpg"
+          // }}
+          onError={(event) => {
+            // console.warn('[RecommendedForYou] image failed:', title, event.nativeEvent?.error);
+            setImageIndex(current => Math.min(current + 1, imageCandidates.length - 1));
+          }}
+          // onLoad={() => {
+          //   console.log("✅ IMAGE LOADED:", title);
+          // }}
           style={styles.image}
           imageStyle={styles.imageRadius}
         >
           <View style={styles.overlay} />
           <View style={styles.topRow}>
             <View style={styles.pill}>
-              <ForkIcon width={9.92} height={12.05} />
-              <Text style={styles.pillText}>Restaurant</Text>
+              {renderBadgeIcon()}
+              <Text style={styles.pillText}>{normalizedCategory}</Text>
             </View>
 
             <TouchableOpacity onPress={handleFavorite}>
@@ -91,15 +135,15 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
           </View>
 
           <View style={styles.bottomContent}>
-            <View>
+            <View style={styles.titleWrap}>
               <Text style={styles.title}>{title}</Text>
-              <Text style={styles.desc}>{description}</Text>
+              <View style={styles.ratingContainer}>
+                <StarIcon width={15} height={14.32} />
+                <Text style={styles.ratingText}>{rating}</Text>
+              </View>
             </View>
 
-            <View style={styles.ratingContainer}>
-              <StarIcon width={15} height={14.32} />
-              <Text style={styles.ratingText}>{rating}</Text>
-            </View>
+            <Text style={styles.desc}>{description}</Text>
           </View>
         </ImageBackground>
       </View>
@@ -113,15 +157,19 @@ const styles = StyleSheet.create({
   container: {
     height: 205,
     marginHorizontal: 21,
-    marginBottom: 9
+    marginBottom: 9,
+    borderRadius: 20,
+    overflow: "hidden",
   },
   image: {
     flex: 1,
+    backgroundColor: COLORS.TEXT_SECONDARY,
     justifyContent: "space-between",
     paddingHorizontal: 21,
     paddingBottom: 18,
     paddingTop: 15,
     overflow: "hidden",
+    borderRadius: 20,
   },
   imageRadius: {
     borderRadius: 20,
@@ -159,14 +207,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   bottomContent: {
+    justifyContent: "flex-end",
+  },
+  titleWrap: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-end",
+    alignItems: "center",
+    gap: 8,
   },
   title: {
+    flex: 1,
     color: COLORS.WHITE,
     fontSize: FONT_SIZE.SMALL_TEXT,
-    fontFamily: FONT_FAMILY.InterTight_Medium
+    fontFamily: FONT_FAMILY.InterTight_Medium,
   },
   desc: {
     color: COLORS.WHITE,
@@ -177,7 +230,6 @@ const styles = StyleSheet.create({
   ratingContainer: {
     flexDirection: "row",
     alignItems: "center",
-    // backgroundColor: "rgba(0,0,0,0.6)",
     paddingHorizontal: 6,
     paddingVertical: 3,
     borderRadius: 10,

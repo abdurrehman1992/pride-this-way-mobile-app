@@ -21,7 +21,7 @@ interface Props {
   tourName: string;
   setTourName: (val: string) => void;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: (nextName: string) => void;
   onUpdateLater?: () => void;
 }
 
@@ -33,7 +33,29 @@ const NameTourModal: React.FC<Props> = ({
   onConfirm,
   onUpdateLater,
 }) => {
-  // const keyboardOffset = Platform.OS === "ios" ? 20 : 0;
+  const [draftName, setDraftName] = React.useState(tourName);
+
+  React.useEffect(() => {
+    if (visible) {
+      setDraftName(tourName);
+    }
+  }, [visible, tourName]);
+
+  const handleClose = () => {
+    setDraftName(tourName);
+    onClose();
+  };
+
+  const handleConfirm = () => {
+    const nextName = draftName.trim() || tourName;
+    setTourName(nextName);
+    onConfirm(nextName);
+  };
+
+  const handleUpdateLaterPress = () => {
+    setDraftName(tourName);
+    onUpdateLater?.();
+  };
 
   return (
     <Modal
@@ -53,7 +75,7 @@ const NameTourModal: React.FC<Props> = ({
           <View style={styles.floatingImageWrapper}>
             <Image source={NameTourIcon} style={styles.floatingImage} />
           </View>
-          <TouchableOpacity style={styles.nameModalClose} onPress={onClose}>
+          <TouchableOpacity style={styles.nameModalClose} onPress={handleClose}>
             <CrossIcon width={12} height={12} />
           </TouchableOpacity>
           <Text style={styles.nameModalTitle}>Name this Tour</Text>
@@ -63,8 +85,8 @@ const NameTourModal: React.FC<Props> = ({
             placeholder="e.g. Weekend in USA, Food Walk, etc."
             style={styles.nameInput}
             placeholderTextColor={COLORS.TEXT_PRIMARY}
-            value={tourName}
-            onChangeText={setTourName}
+            value={draftName}
+            onChangeText={setDraftName}
             numberOfLines={1}
             multiline={false}
             textAlignVertical="center"
@@ -74,10 +96,18 @@ const NameTourModal: React.FC<Props> = ({
           />
 
           <View style={styles.nameModalButtonRow}>
-            <TouchableOpacity style={styles.updateLaterBtn} onPress={onUpdateLater || onClose}>
+            <TouchableOpacity
+              testID="name-tour-update-later"
+              style={styles.updateLaterBtn}
+              onPress={handleUpdateLaterPress}
+            >
               <Text style={styles.updateLaterText}>Update this Later</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmTourBtn} onPress={onConfirm}>
+            <TouchableOpacity
+              testID="name-tour-confirm"
+              style={styles.confirmTourBtn}
+              onPress={handleConfirm}
+            >
               <Text style={styles.btnText}>Confirm</Text>
             </TouchableOpacity>
           </View>

@@ -11,6 +11,7 @@ import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { MapIconMain, IconPlus } from '../../constants/icons';
 import { showError } from '../../components/common/AppToast';
+import { CustomAlert } from '../../utils/CustomAlert';
 import { MyTourStackParamList } from '../../types/types';
 import { RootState } from '../../Redux/store';
 import {
@@ -91,6 +92,16 @@ const CreateTour: React.FC = () => {
     }, [locationSearch, modals.location]);
 
     const handleOpenNameModal = async () => {
+        if (!selectedLocation.trim()) {
+            CustomAlert.alert('Please select a location', 'Choose a location first before creating a tour.');
+            return;
+        }
+
+        if (!selectedPrefs.length) {
+            CustomAlert.alert('Select at least one preference', 'Please choose at least one preference before continuing.');
+            return;
+        }
+
         setLoadingRoutes(true);
         try {
             const recommendations = await fetchRecommendedRoutes({
@@ -130,7 +141,9 @@ const CreateTour: React.FC = () => {
 
         closeModal('name');
         setPendingRecommendations([]);
-        clearFlow();
+
+        // Keep the already-selected location and preferences so the user can reuse them
+        // instead of losing them after creating the tour.
 
         // Defer navigation until after the modal has had a chance to dismiss
         requestAnimationFrame(() => {
@@ -142,8 +155,8 @@ const CreateTour: React.FC = () => {
         });
     };
 
-    const handleNameConfirm = () => {
-        createTourFromRecommendations(tourName);
+    const handleNameConfirm = (nextName?: string) => {
+        createTourFromRecommendations(nextName ?? tourName);
     };
 
     const handleUpdateLater = () => {
@@ -217,7 +230,7 @@ const CreateTour: React.FC = () => {
                 tourName={tourName}
                 setTourName={setTourName}
                 onClose={() => closeModal('name')}
-                onConfirm={handleNameConfirm}
+                onConfirm={(nextName) => handleNameConfirm(nextName)}
                 onUpdateLater={handleUpdateLater}
             />
         </View>

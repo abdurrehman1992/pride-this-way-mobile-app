@@ -36,6 +36,7 @@ export type FavoriteItem = {
   city_name?: string;
   country?: string;
   createdAt?: string;
+  originalPlace?: any; // optional raw place data (e.g., Google Place result)
 };
 
 export type FavoriteBucket = "favorites" | "favoriteTours" | "favoriteEvents";
@@ -48,6 +49,7 @@ type FavoritesContextType = {
   removeFromFavorites: (id: string, category?: CategoryType) => Promise<void>;
   isFavorite: (id: string) => boolean;
   bucketForCategory: (category?: CategoryType) => FavoriteBucket;
+  fallbackPlaceDocs?: Record<string, any>;
 };
 
 const FavoritesContext = createContext<FavoritesContextType | null>(null);
@@ -77,13 +79,13 @@ const isAIGeneratedId = (id: string): boolean => {
 
 const bucketForCategory = (category?: CategoryType): FavoriteBucket => {
   if (category === "Route") return "favoriteTours";
-  if (
-    category === "Event" ||
-    category === "Music" ||
-    category === "Food" ||
-    category === "Restaurant"
-  ) {
+  // Events and Music are grouped under favoriteEvents. Restaurants/Food
+  // should be preserved as place favorites so they appear in the Places tab.
+  if (category === "Event" || category === "Music") {
     return "favoriteEvents";
+  }
+  if (category === "Food" || category === "Restaurant") {
+    return "favorites";
   }
   return "favorites";
 };
@@ -103,6 +105,7 @@ export const FavoritesProvider = ({ children }: any) => {
   const [favorites, setFavorites] = useState<string[]>([]);
   const [favoriteTours, setFavoriteTours] = useState<string[]>([]);
   const [favoriteEvents, setFavoriteEvents] = useState<string[]>([]);
+  const [fallbackPlaceDocs, setFallbackPlaceDocs] = useState<Record<string, any>>({});
 
   useEffect(() => {
     if (!userId) {
@@ -121,10 +124,12 @@ export const FavoritesProvider = ({ children }: any) => {
           const fromFavouritePlaces = extractIds(data?.[FAVOURITE_PLACES_FIELD]);
           const fromLegacy = extractIds(data?.[LEGACY_FAVORITES_FIELD]);
           const places = [...new Set([...fromFavouritePlaces, ...fromLegacy])];
+          const favPlaceDocs = data?.favoritePlaceDocs || {};
           const tours = extractIds(data?.favoriteTours);
           const events = extractIds(data?.favoriteEvents);
 
           setFavorites(places);
+          setFallbackPlaceDocs(favPlaceDocs || {});
           setFavoriteTours(tours);
           setFavoriteEvents(events);
 
@@ -146,9 +151,77 @@ export const FavoritesProvider = ({ children }: any) => {
   const addToFavorites = useCallback(
     async (item: FavoriteItem) => {
       if (!userId || !item?.id) return;
-      if (isAIGeneratedId(item.id)) {
-        console.log('[Favorites] skipping AI-generated id:', item.id);
-        return;
+      // Allow adding AI-generated recommendation IDs as favorites.
+      // Previously we skipped IDs with AI prefixes; keep them but store
+      // a fallback place doc on the user record when a central `places` write
+      // is not possible.
+      let fallbackPlaceDoc: Record<string, any> | null = null;
+      if (item.originalPlace && item.id) {
+        try {
+          const placeDoc: Record<string, any> = {
+            name: item.title || item.originalPlace.name || '',
+            description: item.description || item.originalPlace.formatted_address || '',
+            rating: Number(item.rating || item.originalPlace.rating || 0) || 0,
+            address: item.originalPlace.formatted_address || item.originalPlace.vicinity || '',
+            imageUrl: item.image || item.originalPlace?.icon || '',
+            city_name: item.city_name || '',
+            country: item.country || '',
+            isActive: true,
+            createdAt: firestore.FieldValue.serverTimestamp(),
+            // keep original raw payload for debugging
+            originalPlace: item.originalPlace,
+          };
+          await firestore().collection('places').doc(item.id).set(placeDoc, { merge: true });
+        } catch (err) {
+          // If writing to the central `places` collection fails (e.g. security rules),
+          // keep the place doc as a fallback to store on the user's document so it
+          // can still be displayed in Favorites.
+          console.warn('[Favorites] failed saving originalPlace to places collection, will store under user doc fallback', err);
+          fallbackPlaceDoc = {
+            name: item.title || item.originalPlace.name || '',
+            description: item.description || item.originalPlace.formatted_address || '',
+            rating: Number(item.rating || item.originalPlace.rating || 0) || 0,
+            address: item.originalPlace.formatted_address || item.originalPlace.vicinity || '',
+            imageUrl: item.image || item.originalPlace?.icon || '',
+            city_name: item.city_name || '',
+            country: item.country || '',
+            isActive: true,
+            // keep original raw payload for debugging
+            originalPlace: item.originalPlace,
+          };
+        }
+      } else if (item.id) {
+        // No originalPlace object (likely an AI-generated recommendation).
+        // Attempt to persist a place doc built from the item fields; if that
+        // fails, fall back to storing the doc under the user's record.
+        try {
+          const placeDoc: Record<string, any> = {
+            name: item.title || '',
+            description: item.description || '',
+            rating: Number(item.rating || 0) || 0,
+            address: item.originalPlace?.formatted_address || item.description || '',
+            imageUrl: item.image || item.originalPlace?.icon || '',
+            city_name: item.city_name || '',
+            country: item.country || '',
+            isActive: true,
+            createdAt: firestore.FieldValue.serverTimestamp(),
+            originalPlace: item.originalPlace || null,
+          };
+          await firestore().collection('places').doc(item.id).set(placeDoc, { merge: true });
+        } catch (err) {
+          console.warn('[Favorites] failed saving generated place to places collection, will store under user doc fallback', err);
+          fallbackPlaceDoc = {
+            name: item.title || '',
+            description: item.description || '',
+            rating: Number(item.rating || 0) || 0,
+            address: item.originalPlace?.formatted_address || item.description || '',
+            imageUrl: item.image || item.originalPlace?.icon || '',
+            city_name: item.city_name || '',
+            country: item.country || '',
+            isActive: true,
+            originalPlace: item.originalPlace || null,
+          };
+        }
       }
       const bucket = bucketForCategory(item.category);
       const field = firestoreFieldForBucket(bucket);
@@ -156,18 +229,28 @@ export const FavoritesProvider = ({ children }: any) => {
         ids.includes(item.id) ? ids : [...ids, item.id];
 
       // Do not wait for Firestore's snapshot before updating the UI. This
-      // keeps every heart responsive, even when several tours are rendered.
+      // keeps every heart responsive, even when several items are rendered.
       if (bucket === "favorites") {
-        setFavorites(addId);
+        setFavorites((prev) => addId(prev));
       } else if (bucket === "favoriteTours") {
-        setFavoriteTours(addId);
+        setFavoriteTours((prev) => addId(prev));
       } else {
-        setFavoriteEvents(addId);
+        setFavoriteEvents((prev) => addId(prev));
       }
+
+      console.log('[Favorites] addToFavorites called', { userId, itemId: item.id, bucket, field });
 
       const payload: Record<string, unknown> = {
         [field]: firestore.FieldValue.arrayUnion(item.id),
       };
+
+      // If we couldn't save the place globally, persist the place doc under the user's
+      // document as a fallback so the Favorites screen can read it later.
+      if (fallbackPlaceDoc) {
+        // favoritePlaceDocs.<placeId> = { ...place data }
+        // Firestore supports nested map fields via dot-notation when using set(..., {merge:true})
+        (payload as any)[`favoritePlaceDocs.${item.id}`] = fallbackPlaceDoc;
+      }
 
       if (bucket === "favorites") {
         // Migrate legacy buckets so admin + app stay in sync.
@@ -176,11 +259,14 @@ export const FavoritesProvider = ({ children }: any) => {
       }
 
       try {
+        console.log('[Favorites] writing user payload', payload);
         await firestore()
           .collection(USERS_COLLECTION)
           .doc(userId)
           .set(payload, { merge: true });
+        console.log('[Favorites] user payload written');
       } catch (error) {
+        console.warn('[Favorites] failed writing user payload', error);
         // Restore the visible state if the save did not reach Firestore.
         if (bucket === "favorites") {
           setFavorites((ids) => ids.filter((id) => id !== item.id));
@@ -266,6 +352,7 @@ export const FavoritesProvider = ({ children }: any) => {
       removeFromFavorites,
       isFavorite,
       bucketForCategory,
+      fallbackPlaceDocs,
     }),
     [
       favorites,
@@ -274,6 +361,7 @@ export const FavoritesProvider = ({ children }: any) => {
       addToFavorites,
       removeFromFavorites,
       isFavorite,
+      fallbackPlaceDocs,
     ]
   );
 

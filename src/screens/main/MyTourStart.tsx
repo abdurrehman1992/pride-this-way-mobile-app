@@ -66,6 +66,8 @@ import {
   splitPolylineAt,
   type Coord,
 } from '../../utils/routeProgress';
+import { checkInternetConnection } from '../../utils/networkStatus';
+import { verifyPlaceImageMatch } from '../../services/aiService';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../../Redux/store';
 import { setUserPoints } from '../../Redux/slices/authSlice';
@@ -143,8 +145,11 @@ const visitedStopNameLabelStyle: SymbolLayerStyle = {
   textHaloColor: '#9AA3AF',
 };
 
-const VISIT_DISTANCE_THRESHOLD_METERS = 300;
-const ALLOW_ANY_IMAGE_FOR_TESTING = true;
+// GPS can drift by dozens of metres, especially around dense buildings. Keep a
+// small buffer around the intended 100m visit radius.
+const VISIT_DISTANCE_THRESHOLD_METERS = 150;
+// A stop is complete only when both the visual proof and the live GPS check pass.
+const ALLOW_ANY_IMAGE_FOR_TESTING = false;
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DETAIL_CARD_WIDTH = 260;
 const DETAIL_CARD_HEIGHT = 255;
@@ -157,6 +162,24 @@ const getCurrentPositionAsync = async () =>
       { enableHighAccuracy: true, timeout: 10000 }
     );
   });
+
+const getVerificationFailureMessage = (
+  placeName: string,
+  imageMatched: boolean,
+  locationMatched: boolean,
+  hasGpsFix: boolean,
+): string => {
+  if (!hasGpsFix) {
+    return `We could not confirm your current location. Turn on precise location, move near ${placeName}, and take a clear photo of the place.`;
+  }
+  if (!imageMatched && !locationMatched) {
+    return `Please be physically near ${placeName} and take a clear photo that shows its entrance, signboard, or another identifiable feature.`;
+  }
+  if (!imageMatched) {
+    return `You are near ${placeName}, but the photo does not clearly match it. Take another clear photo of the actual place—avoid map screenshots, generic roads, or unrelated images.`;
+  }
+  return `Your photo matches ${placeName}, but you need to be physically near the location to confirm this stop.`;
+};
 
 // Beyond this straight-line distance, skip road routing and use a great circle arc
 const ROAD_ROUTE_MAX_METERS = 200_000; // 200 km
@@ -522,6 +545,8 @@ const MyTourStart = () => {
         proofImageUri?: string | null;
         pointsEarned?: number;
         addedByUser?: boolean;
+        verifiedByGemini?: boolean;
+        verificationConfidence?: number;
       }
     >
   >({});
@@ -534,6 +559,8 @@ const MyTourStart = () => {
         expired?: boolean;
         visitedAt?: string | null;
         proofImageUri?: string | null;
+        verifiedByGemini?: boolean;
+        verificationConfidence?: number;
       }
     >
   >({});
@@ -797,6 +824,8 @@ const MyTourStart = () => {
                     proofImageUri?: string | null;
                     pointsEarned?: number;
                     addedByUser?: boolean;
+                    verifiedByGemini?: boolean;
+                    verificationConfidence?: number;
                   }
                 >,
                 item: any
@@ -807,6 +836,8 @@ const MyTourStart = () => {
                   proofImageUri: item.proofImageUri,
                   pointsEarned: item.pointsEarned,
                   addedByUser: item.addedByUser,
+                  verifiedByGemini: item.verifiedByGemini,
+                  verificationConfidence: item.verificationConfidence,
                 };
                 return acc;
               },
@@ -818,6 +849,8 @@ const MyTourStart = () => {
                   proofImageUri?: string | null;
                   pointsEarned?: number;
                   addedByUser?: boolean;
+                  verifiedByGemini?: boolean;
+                  verificationConfidence?: number;
                 }
               >
             );
@@ -843,6 +876,8 @@ const MyTourStart = () => {
           dismissed?: boolean;
           visitedAt?: string | null;
           proofImageUri?: string | null;
+          verifiedByGemini?: boolean;
+          verificationConfidence?: number;
         }> = {};
 
         // Build event progress from all_places order field entries
@@ -853,6 +888,8 @@ const MyTourStart = () => {
               attended: item.visited || false,
               visitedAt: item.visitedAt || null,
               proofImageUri: item.proofImageUri || null,
+              verifiedByGemini: Boolean(item.verifiedByGemini),
+              verificationConfidence: Number(item.verificationConfidence || 0),
             };
           });
 
@@ -962,9 +999,10 @@ const MyTourStart = () => {
     (stop: TourStop) => {
       if (stop.kind === 'event' || stop.event) {
         const progress = eventProgress[stop.id];
-        return Boolean(progress?.attended || progress?.expired);
+        return Boolean((progress?.attended && progress?.verifiedByGemini) || progress?.expired);
       }
-      return Boolean(placeProgress[stop.id]?.visited);
+      const progress = placeProgress[stop.id];
+      return Boolean(progress?.visited && progress?.verifiedByGemini);
     },
     [eventProgress, placeProgress]
   );
@@ -1388,10 +1426,10 @@ const MyTourStart = () => {
         if (placesToSave.length === 0) return;
 
         const nextCurrentStopIndex = placesToSave.findIndex(
-          (place) => !placeProgress[place.id]?.visited
+          (place) => !(placeProgress[place.id]?.visited && placeProgress[place.id]?.verifiedByGemini)
         );
         const remainingStops = placesToSave.filter(
-          (place) => !placeProgress[place.id]?.visited
+          (place) => !(placeProgress[place.id]?.visited && placeProgress[place.id]?.verifiedByGemini)
         );
         const computedStatus = isCompletedTour
           ? 'completed'
@@ -1475,6 +1513,8 @@ const MyTourStart = () => {
             visitedAt: progress.visitedAt || null,
             pointsEarned: Number(progress.pointsEarned || 0),
             proofImageUri: progress.proofImageUri || null,
+            verifiedByGemini: Boolean(progress.verifiedByGemini),
+            verificationConfidence: Number(progress.verificationConfidence || 0),
             addedByUser: Boolean(progress.addedByUser),
             order: index + 1,
           } as any;
@@ -1487,6 +1527,8 @@ const MyTourStart = () => {
             visitedAt: progress.visitedAt || null,
             pointsEarned: 0,
             proofImageUri: progress.proofImageUri || null,
+            verifiedByGemini: Boolean(progress.verifiedByGemini),
+            verificationConfidence: Number(progress.verificationConfidence || 0),
             addedByUser: false,
             order: index + 1,
           } as any;
@@ -2485,7 +2527,9 @@ const MyTourStart = () => {
         return null;
       }
 
-      const hasVisited = Object.values(nextProgress).some((item) => item.visited);
+      const hasVisited = Object.values(nextProgress).some(
+        (item) => item.visited && item.verifiedByGemini,
+      );
       const forcePersist =
         forceCreate ||
         (forcedStatus === 'paused' && Boolean(tourId || nextStartedAt));
@@ -2508,10 +2552,10 @@ const MyTourStart = () => {
       }
 
       const nextCurrentStopIndex = placesToSave.findIndex(
-        (place) => !nextProgress[place.id]?.visited
+        (place) => !(nextProgress[place.id]?.visited && nextProgress[place.id]?.verifiedByGemini)
       );
       const remainingStops = placesToSave.filter(
-        (place) => !nextProgress[place.id]?.visited
+        (place) => !(nextProgress[place.id]?.visited && nextProgress[place.id]?.verifiedByGemini)
       );
       const computedStatus = remainingStops.length === 0 ? 'completed' : 'active';
       const status = forcedStatus ?? computedStatus;
@@ -2734,15 +2778,62 @@ const MyTourStart = () => {
       return false;
     }
 
+    const isOnline = await checkInternetConnection();
+    if (!isOnline) {
+      CustomAlert.alert(
+        'No Internet Connection',
+        'Please reconnect to the internet before verifying this event.',
+        [{ text: 'OK', style: 'cancel' }]
+      );
+      return false;
+    }
+
+    const eventMeta = event as any;
     const eventCoordinate: [number, number] = [
       Number(event.coordinates?.longitude || 0),
       Number(event.coordinates?.latitude || 0),
     ];
+    const captureCoordinates = ALLOW_ANY_IMAGE_FOR_TESTING
+      ? currentLocation || eventCoordinate
+      : await getCurrentPositionAsync().catch(() => currentLocation || undefined);
+    const captureDistanceMeters = captureCoordinates
+      ? distanceMetersBetween(captureCoordinates, eventCoordinate)
+      : undefined;
+    const aiMatch = await verifyPlaceImageMatch({
+      title: event.title,
+      description: event.description || event.title,
+      category: event.category || eventMeta.category || 'Event',
+      address: eventMeta.location || event.address || event.title,
+      location: eventMeta.location || event.city_name || event.country || 'Tour location',
+      imageUrl: eventMeta.imageUrl || event.coverImage || '',
+      targetCoordinates: eventCoordinate,
+      captureCoordinates,
+      captureDistanceMeters,
+    }, imageUri);
+    const eventLocationMatched = Boolean(
+      captureCoordinates &&
+      captureDistanceMeters !== undefined &&
+      captureDistanceMeters <= VISIT_DISTANCE_THRESHOLD_METERS,
+    );
+
+    if (!ALLOW_ANY_IMAGE_FOR_TESTING && (!aiMatch.matched || !eventLocationMatched)) {
+      CustomAlert.alert(
+        'Verification Required',
+        getVerificationFailureMessage(
+          event.title,
+          aiMatch.matched,
+          eventLocationMatched,
+          Boolean(captureCoordinates),
+        ),
+        [{ text: 'Retake Photo', style: 'cancel' }]
+      );
+      return false;
+    }
 
     try {
       const coords = ALLOW_ANY_IMAGE_FOR_TESTING
         ? currentLocation || eventCoordinate
-        : await getCurrentPositionAsync();
+        : captureCoordinates;
 
       const expectedNextStop = orderedRemainingStops[0];
       const eventStopId = event.id;
@@ -2754,17 +2845,7 @@ const MyTourStart = () => {
         return false;
       }
 
-      if (!ALLOW_ANY_IMAGE_FOR_TESTING) {
-        const distance = distanceMetersBetween(coords, eventCoordinate);
-
-        if (distance > VISIT_DISTANCE_THRESHOLD_METERS) {
-          showError(
-            'Verification Failed',
-            'You need to be near this event to confirm attendance.'
-          );
-          return false;
-        }
-      }
+      if (!coords) return false;
 
       const visitedAt = new Date().toISOString();
       const nextEventProgress = {
@@ -2775,6 +2856,8 @@ const MyTourStart = () => {
           visited: true,
           visitedAt,
           proofImageUri: imageUri,
+          verifiedByGemini: true,
+          verificationConfidence: aiMatch.confidence,
         },
       };
 
@@ -2798,10 +2881,13 @@ const MyTourStart = () => {
         const remainingStops = placesToSave.filter((place) => !placeProgress[place.id]?.visited);
 
         // Check if all places AND events are complete
-        const checkRemainingPlaces = activePlaceStops.filter((place) => !placeProgress[place.id]?.visited);
+        const checkRemainingPlaces = activePlaceStops.filter((place) => {
+          const progress = placeProgress[place.id];
+          return !(progress?.visited && progress?.verifiedByGemini);
+        });
         const checkRemainingEvents = (routeDetails?.events || []).filter((event) => {
           const eventProg = nextEventProgress[event.id];
-          return !Boolean(eventProg?.attended || eventProg?.expired);
+          return !Boolean((eventProg?.attended && eventProg?.verifiedByGemini) || eventProg?.expired);
         });
         const computedStatus = (checkRemainingPlaces.length === 0 && checkRemainingEvents.length === 0) ? 'completed' : 'active';
 
@@ -2880,10 +2966,59 @@ const MyTourStart = () => {
       return false;
     }
 
+    const isOnline = await checkInternetConnection();
+    if (!isOnline) {
+      CustomAlert.alert(
+        'No Internet Connection',
+        'Please reconnect to the internet before verifying this location.',
+        [{ text: 'OK', style: 'cancel' }]
+      );
+      return false;
+    }
+
+    const placeMeta = selectedStop.place as any;
+    const captureCoordinates = ALLOW_ANY_IMAGE_FOR_TESTING
+      ? currentLocation || selectedStop.coordinate
+      : await getCurrentPositionAsync().catch(() => currentLocation || undefined);
+    const captureDistanceMeters = captureCoordinates
+      ? distanceMetersBetween(captureCoordinates, selectedStop.coordinate)
+      : undefined;
+    const aiMatch = await verifyPlaceImageMatch({
+      title: selectedStop.place.name,
+      description: selectedStop.place.description || selectedStop.place.address || selectedStop.title,
+      category: placeMeta.category || 'Place',
+      address: selectedStop.place.address || selectedStop.title,
+      location: selectedStop.place.city_name || selectedStop.place.country || selectedStop.title,
+      imageUrl: selectedStop.place.imageUrl || placeMeta.image || placeMeta.coverImage || '',
+      targetCoordinates: selectedStop.coordinate,
+      captureCoordinates,
+      captureDistanceMeters,
+    }, imageUri);
+
+    const placeLocationMatched = Boolean(
+      captureCoordinates &&
+      captureDistanceMeters !== undefined &&
+      captureDistanceMeters <= VISIT_DISTANCE_THRESHOLD_METERS,
+    );
+
+    if (!ALLOW_ANY_IMAGE_FOR_TESTING && (!aiMatch.matched || !placeLocationMatched)) {
+      CustomAlert.alert(
+        'Verification Required',
+        getVerificationFailureMessage(
+          selectedStop.place.name,
+          aiMatch.matched,
+          placeLocationMatched,
+          Boolean(captureCoordinates),
+        ),
+        [{ text: 'Retake Photo', style: 'cancel' }]
+      );
+      return false;
+    }
+
     try {
       const coords = ALLOW_ANY_IMAGE_FOR_TESTING
         ? currentLocation || selectedStop.coordinate
-        : await getCurrentPositionAsync();
+        : captureCoordinates;
 
       // Gate confirmation by the SAME ordering used everywhere else
       // (optimized road-distance order). Straight-line nearest gives a
@@ -2900,17 +3035,7 @@ const MyTourStart = () => {
         return false;
       }
 
-      if (!ALLOW_ANY_IMAGE_FOR_TESTING) {
-        const distance = distanceMetersBetween(coords, selectedStop.coordinate);
-
-        if (distance > VISIT_DISTANCE_THRESHOLD_METERS) {
-          showError(
-            'Verification Failed',
-            'You need to be near this location to confirm your visit.'
-          );
-          return false;
-        }
-      }
+      if (!coords) return false;
 
       const visitedAt = new Date().toISOString();
       const pointsEarned = Number(selectedStop.place.points || 10);
@@ -2922,6 +3047,8 @@ const MyTourStart = () => {
           visitedAt,
           proofImageUri: imageUri,
           pointsEarned,
+          verifiedByGemini: true,
+          verificationConfidence: aiMatch.confidence,
           addedByUser:
             placeProgress[selectedStop.id]?.addedByUser ||
             extraPlaceIds.includes(selectedStop.id),
@@ -2958,10 +3085,13 @@ const MyTourStart = () => {
       }
       // Check if all places and events are now complete with the updated progress
       // A better approach: recalculate what remaining stops would be with the new progress
-      const checkRemainingStops = tourStops.filter((stop) => !nextProgress[stop.id]?.visited);
+      const checkRemainingStops = tourStops.filter((stop) => {
+        const progress = nextProgress[stop.id];
+        return !(progress?.visited && progress?.verifiedByGemini);
+      });
       const checkRemainingEvents = (routeDetails?.events || []).filter((event) => {
         const eventProg = eventProgress[event.id];
-        return !Boolean(eventProg?.attended || eventProg?.expired);
+        return !Boolean((eventProg?.attended && eventProg?.verifiedByGemini) || eventProg?.expired);
       });
       const allDone = checkRemainingStops.length === 0 && checkRemainingEvents.length === 0;
 

@@ -74,6 +74,7 @@ const LocationModal: React.FC<Props> = ({
     const [isKeyboardVisible, setKeyboardVisible] = useState(false);
     const [aiCities, setAiCities] = useState<string[]>([]);
     const [aiLoading, setAiLoading] = useState(false);
+    const didInitializeOpenRef = useRef(false);
     const search = searchValue ?? internalSearch;
     const useExternal = locations !== undefined;
 
@@ -106,6 +107,26 @@ const LocationModal: React.FC<Props> = ({
             panY.setValue(1000);
         }
     }, [visible, panY]);
+
+    // Set the initial selection only once per modal opening. Previously this
+    // re-ran after every typed character and treated the query (e.g. "lahore")
+    // as a completed selection, which hides the suggestion list below.
+    useEffect(() => {
+        if (!visible) {
+            didInitializeOpenRef.current = false;
+            return;
+        }
+        if (didInitializeOpenRef.current) return;
+
+        didInitializeOpenRef.current = true;
+        if (useExternal) {
+            setInternalSearch(searchValue || '');
+            setSelected(searchValue || '');
+        } else {
+            setInternalSearch('');
+            setSelected('');
+        }
+    }, [visible, useExternal, searchValue]);
 
     useEffect(() => {
         if (useExternal || !visible) return;
@@ -261,7 +282,7 @@ const LocationModal: React.FC<Props> = ({
             }
             setSelected(normalizedAddress);
             // console.log("Current location :", normalizedAddress)
-        } catch (error) {
+        } catch {
             // console.log("LOCATION ERROR:", error);
             CustomAlert.alert("Error", "Unable to fetch location");
         } finally {
@@ -396,10 +417,21 @@ const LocationModal: React.FC<Props> = ({
                     <TouchableOpacity
                         style={[
                             styles.primaryBtnFull,
-                            (!selected && !search) && styles.primaryBtnDisabled,
+                            (!selected || !selected.trim()) && styles.primaryBtnDisabled,
                         ]}
-                        disabled={!selected && !search}
-                        onPress={() => onNext(selected || search)}
+                        disabled={!selected || !selected.trim()}
+                        onPress={() => {
+                            const value = selected?.trim();
+                            if (!value) {
+                                CustomAlert.alert(
+                                    'Please select a location',
+                                    'Choose a location first before continuing.'
+                                );
+                                return;
+                            }
+
+                            onNext(value);
+                        }}
                     >
                         <Text style={styles.primaryText}>Next</Text>
                     </TouchableOpacity>

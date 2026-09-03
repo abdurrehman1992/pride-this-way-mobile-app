@@ -18,6 +18,7 @@ import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 import { CrossIcon } from "../../constants/icons";
 import { CameraIcon, DoneModalIcon } from "../../constants/images";
+import { CustomAlert } from "../../utils/CustomAlert";
 type Props = {
   visible: boolean;
   title?: string;
@@ -222,6 +223,14 @@ const ScanVerifyModal: React.FC<Props> = ({
       setIsCapturing(true);
       const isVerified = await onScanSuccess(capturedImage.uri);
       if (!isVerified) {
+        CustomAlert.alert(
+          'Place Does Not Match',
+          'This image does not match the location. Please retake the photo from the correct place.',
+          [{ text: 'Retake Photo', style: 'cancel', onPress: () => {
+            setCapturedImage(null);
+            setStep('scan');
+          }}]
+        );
         return;
       }
       setStep("success");

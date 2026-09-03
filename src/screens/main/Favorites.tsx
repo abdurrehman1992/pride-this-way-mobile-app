@@ -33,7 +33,7 @@ type TabValue = 'Places' | 'Tours' | 'Events';
 type FavoriteTourItem = SavedTour & { coverImage?: string };
 
 const Favorites = () => {
-    const { favorites, favoriteTours, favoriteEvents } = useFavorites();
+    const { favorites, favoriteTours, favoriteEvents, fallbackPlaceDocs } = useFavorites();
     const navigation = useNavigation<any>();
     const [activeTab, setActiveTab] = useState<TabValue>('Places');
     const [places, setPlaces] = useState<FirebasePlace[]>([]);
@@ -76,6 +76,28 @@ const Favorites = () => {
             });
 
             const placesById = new Map(placesData.map((p) => [p.id, p]));
+            // Merge any fallback place docs stored on the user's document (favoritePlaceDocs)
+            const favDocs = fallbackPlaceDocs || {};
+            Object.keys(favDocs || {}).forEach((placeId) => {
+                try {
+                    const doc = favDocs[placeId];
+                    if (!doc) return;
+                    const placeObj: FirebasePlace = {
+                        id: placeId,
+                        name: doc.name || '',
+                        description: doc.description || doc.address || '',
+                        rating: Number(doc.rating || 0),
+                        imageUrl: doc.imageUrl || '',
+                        address: doc.address || '',
+                        city_name: doc.city_name || '',
+                        country: doc.country || '',
+                        isActive: doc.isActive !== false,
+                    } as any;
+                    placesById.set(placeId, placeObj);
+                } catch (e) {
+                    // ignore malformed fallback doc
+                }
+            });
             const toursById = new Map(toursData.map((t) => [t.id, t]));
             const eventsById = new Map(eventsData.map((e) => [e.id, e]));
 

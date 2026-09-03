@@ -304,8 +304,8 @@ const MyTour = () => {
         }, 250);
     };
 
-    const handleNameConfirm = () => {
-        createTourFromRecommendations(tourName);
+    const handleNameConfirm = (nextName?: string) => {
+        createTourFromRecommendations(nextName ?? tourName);
     };
 
     const handleUpdateLater = () => {
@@ -1425,7 +1425,7 @@ const MyTour = () => {
                 tourName={tourName}
                 setTourName={setTourName}
                 onClose={() => closeModal('name')}
-                onConfirm={handleNameConfirm}
+                onConfirm={(nextName) => handleNameConfirm(nextName)}
                 onUpdateLater={handleUpdateLater}
             />
 

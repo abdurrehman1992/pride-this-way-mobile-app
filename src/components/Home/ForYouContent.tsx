@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -19,10 +19,14 @@ import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import { FilterIcon } from '../../constants/images';
 import {
   getRecommendations,
-  buildUnsplashUrl,
+  resolvePlaceImageUrl,
   AIRecommendations,
   AIPlace,
+  getLastQuotaExceededTimestamp,
+  clearLastQuotaExceeded,
 } from '../../services/aiService';
+import { fetchTourTags } from '../../services/myTourService';
+import { buildRecommendationQueryKey } from '../../utils/recommendationQuery';
 
 type Props = {
   location: string;
@@ -43,56 +47,167 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
     location: false,
     preference: false,
   });
+  const prevPrefsRef = useRef<string[] | null>(null);
   const [data, setData] = useState<AIRecommendations | null>(null);
+  const [allPreferences, setAllPreferences] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [quotaWarning, setQuotaWarning] = useState(false);
+  const lastRequestKeyRef = useRef<string | null>(null);
 
   const hasFilters = selectedLocation || selectedPrefs.length > 0;
 
-  const loadRecommendations = async (loc: string, p: string[]) => {
+  const loadRecommendations = async (loc: string, p: string[], showLoading = true) => {
     if (!loc) return;
-    setLoading(true);
+    const nextKey = buildRecommendationQueryKey(loc, p);
+    if (nextKey && lastRequestKeyRef.current === nextKey) {
+      return;
+    }
+    lastRequestKeyRef.current = nextKey || null;
+
+    if (showLoading) {
+      setLoading(true);
+    }
     setError(false);
+    setQuotaWarning(false);
     try {
       const result = await getRecommendations(loc, p);
-      setData(result);
+      const placesAround = await Promise.all(
+        (result.placesAroundYou ?? []).map(async item => {
+          const imageUrl = await resolvePlaceImageUrl(item.title, item.imageKeyword, item.location || loc, item.imageUrl);
+          const wikimediaFallback = await resolvePlaceImageUrl(
+            item.title,
+            item.imageKeyword,
+            item.location || loc,
+            item.imageUrl,
+            true,
+          );
+          const fallbackImageUrl = wikimediaFallback !== imageUrl
+            ? wikimediaFallback
+            : item.imageUrl !== imageUrl ? item.imageUrl : undefined;
+          return {
+            ...item,
+            imageUrl,
+            fallbackImageUrl,
+            gallery: [imageUrl, fallbackImageUrl].filter(Boolean) as string[],
+          };
+        }),
+      );
+      const recommended = await Promise.all(
+        (result.recommendedForYou ?? []).map(async item => {
+          const imageUrl = await resolvePlaceImageUrl(item.title, item.imageKeyword, item.location || loc, item.imageUrl);
+          const wikimediaFallback = await resolvePlaceImageUrl(
+            item.title,
+            item.imageKeyword,
+            item.location || loc,
+            item.imageUrl,
+            true,
+          );
+          const fallbackImageUrl = wikimediaFallback !== imageUrl
+            ? wikimediaFallback
+            : item.imageUrl !== imageUrl ? item.imageUrl : undefined;
+          return {
+            ...item,
+            imageUrl,
+            fallbackImageUrl,
+            gallery: [imageUrl, fallbackImageUrl].filter(Boolean) as string[],
+          };
+        }),
+      );
+
+      setData({
+        ...result,
+        placesAroundYou: placesAround,
+        recommendedForYou: recommended,
+      });
+      // If the AI call failed due to quota, the service sets a flag we can inspect
+      try {
+        const ts = getLastQuotaExceededTimestamp();
+        if (ts && ts > 0) {
+          setQuotaWarning(true);
+          // clear the flag so subsequent calls are fresh
+          clearLastQuotaExceeded();
+        }
+      } catch (_e) {
+        // ignore
+      }
     } catch (err) {
       console.warn('[ForYouContent] unexpected error', err);
       setError(true);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    loadRecommendations(location, prefs);
-  }, [location, prefs.sort().join(',')]);
+    setSelectedLocation(location || null);
+    setSelectedPrefs(prefs);
+    lastRequestKeyRef.current = null;
+  }, [location, prefs]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const tags = await fetchTourTags();
+        if (!mounted) return;
+        const names = (tags || []).map(t => t.name).filter(Boolean);
+        setAllPreferences(names.length ? names : ['Food', 'Adventure', 'History', 'Shopping']);
+      } catch (err) {
+        // fallback to defaults
+        setAllPreferences(['Food', 'Adventure', 'History', 'Shopping']);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedLocation) return;
+    const queryPrefs = [...selectedPrefs].slice().sort();
+    const nextKey = buildRecommendationQueryKey(selectedLocation, queryPrefs);
+    if (lastRequestKeyRef.current === nextKey) return;
+
+    const timer = setTimeout(() => {
+      loadRecommendations(selectedLocation, queryPrefs, true);
+    }, 220);
+
+    return () => clearTimeout(timer);
+  }, [selectedLocation, selectedPrefs]);
 
   const openLocationModal = () => {
     setModals({ location: true, preference: false });
   };
 
   const closeModals = () => {
+    // If preference modal was open and user cancels/closes it, restore previous prefs
+    if (modals.preference && prevPrefsRef.current) {
+      setSelectedPrefs(prevPrefsRef.current);
+    }
+    prevPrefsRef.current = null;
     setModals({ location: false, preference: false });
   };
 
   const handleLocationNext = (loc: string) => {
+    // snapshot current prefs so Cancel can restore them
+    prevPrefsRef.current = [...selectedPrefs];
     setSelectedLocation(loc);
     setModals({ location: false, preference: true });
   };
 
   const handleApplyPreferences = (newPrefs: string[]) => {
-    setSelectedPrefs(newPrefs);
+    const nextPrefs = Array.from(new Set(newPrefs));
+    setSelectedPrefs(nextPrefs);
+    prevPrefsRef.current = null;
     closeModals();
-    if (selectedLocation) {
-      loadRecommendations(selectedLocation, newPrefs);
-    }
   };
 
   const resetFilters = () => {
     setSelectedLocation(null);
     setSelectedPrefs([]);
     setData(null);
+    lastRequestKeyRef.current = null;
     if (onReset) onReset();
   };
 
@@ -128,12 +243,15 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
       title={item.title}
       description={item.description}
       rating={item.rating}
-      image={buildUnsplashUrl(item.imageKeyword)}
+      image={item.imageUrl}
+      fallbackImage={item.fallbackImageUrl}
+      category={item.category || 'Place'}
+      originalPlace={(item as any).originalPlace}
       onPress={() =>
         navigation.navigate('RecommendationDetials', {
           item: {
             ...item,
-            image: buildUnsplashUrl(item.imageKeyword),
+            image: item.imageUrl,
           },
         })
       }
@@ -165,7 +283,9 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                 {selectedLocation && (
                   <View style={styles.chip}>
                     <Text style={styles.chipText}>{selectedLocation}</Text>
-                    <TouchableOpacity onPress={() => setSelectedLocation(null)}>
+                    <TouchableOpacity onPress={() => {
+                      setSelectedLocation(null);
+                    }}>
                       <Text style={styles.remove}>✕</Text>
                     </TouchableOpacity>
                   </View>
@@ -213,6 +333,14 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
               </View>
             )}
 
+            {quotaWarning && (
+              <View style={styles.quotaBanner}>
+                <Text style={styles.quotaText}>
+                  AI recommendations currently unavailable — showing fallback suggestions.
+                </Text>
+              </View>
+            )}
+
             {!loading && !error && (
               <>
                 <View>
@@ -242,8 +370,22 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                         title={item.title}
                         description={item.description}
                         rating={item.rating}
-                        image={buildUnsplashUrl(item.imageKeyword)}
+                        image={item.imageUrl}
+                        location={item.location || selectedLocation || 'Lahore, Pakistan'}
+                        time={item.openText || 'Open today'}
+                        category={item.category || 'Event'}
                         width={295}
+                        onPress={() =>
+                          navigation.navigate('RecommendationDetials', {
+                            item: {
+                              ...item,
+                              image: item.imageUrl,
+                              imageUrl: item.imageUrl,
+                              location: item.location || selectedLocation || 'Lahore, Pakistan',
+                              address: item.address || item.location || selectedLocation || 'Lahore, Pakistan',
+                            },
+                          })
+                        }
                       />
                     )}
                   />
@@ -253,15 +395,15 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                     <Text style={styles.sectionHeaderText} numberOfLines={2}>
                       Recommended For You
                     </Text>
-
                     <TouchableOpacity
                       onPress={() => setShowAll(!showAll)}
                       style={styles.headerAction}
                     >
                       <Text style={[styles.seeAllText, styles.recommendedAction]}>
-                        {showAll ? 'Show Less' : 'Show All'}
+                        {showAll ? 'Show Less' : 'See All'}
                       </Text>
                     </TouchableOpacity>
+
                   </View>
                 </View>
               </>
@@ -273,6 +415,8 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
         visible={modals.location}
         onClose={closeModals}
         onNext={handleLocationNext}
+        searchValue={selectedLocation || ''}
+        onSearchChange={(val: string) => setSelectedLocation(val)}
       />
 
       <PreferenceModal
@@ -282,6 +426,9 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
         clearAll={() => setSelectedPrefs([])}
         onClose={closeModals}
         onPrimary={() => handleApplyPreferences(selectedPrefs)}
+        onSecondary={closeModals}
+        preferences={allPreferences}
+        mode="forYou"
       />
     </View>
   );
@@ -348,7 +495,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginHorizontal: 24,
-    marginTop: 10,
+    marginTop: 6,
+    marginBottom: 8,
     alignItems: 'center',
     gap: 8,
   },
@@ -356,11 +504,13 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     backgroundColor: COLORS.BUTTON_COLOR,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 20,
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
+    minHeight: 32,
   },
 
   chipText: {
@@ -411,5 +561,18 @@ const styles = StyleSheet.create({
     color: COLORS.WHITE,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
     fontSize: FONT_SIZE.TEXT,
+  },
+  quotaBanner: {
+    marginHorizontal: 24,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#FFF4E5',
+  },
+  quotaText: {
+    color: '#663C00',
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    fontSize: FONT_SIZE.TEXT,
+    textAlign: 'center',
   },
 });

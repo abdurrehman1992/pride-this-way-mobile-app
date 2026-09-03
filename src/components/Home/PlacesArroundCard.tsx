@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -10,17 +10,20 @@ import {
 import { COLORS } from "../../constants/colors";
 import {
   EventIcon,
+  FoodTabIcon,
   HeartIcon,
   LocationIcon,
+  MusicTabIcon,
   RedHeartIcon,
   StarIcon,
   TimeIcon,
   RouteIcon,
+  ForkIcon,
 } from "../../constants/icons";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
-import { PLACES_ARROUND } from "../../constants/images";
 import { useFavorites } from "../../context/FavoritesContext";
 import { showInfo, showSuccess } from "../common/AppToast";
+import { sanitizeImageUrl } from '../../services/aiService';
 
 type PlacesAroundCardProps = {
   id: string;
@@ -37,14 +40,15 @@ type PlacesAroundCardProps = {
   hideRating?: boolean;
   hideLocation?: boolean;
   hideDivider?: boolean;
+  onPress?: () => void;
 };
 
 const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   id,
   title = "Live Music Night - Jazz Cafe",
   description = "Experience soulful live music tonight",
-  image = PLACES_ARROUND,
-  rating = "4.5",
+  image,
+  rating = undefined,
   location = "California, USA",
   time = "Today 7PM",
   width,
@@ -54,17 +58,82 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   hideRating = false,
   hideLocation = false,
   hideDivider = false,
+  onPress,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
+  const [prefetching, setPrefetching] = useState(false);
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
   const favorite = isFavorite(id);
 
   const resolvedImage =
     imageFailed || !image
-      ? PLACES_ARROUND
+      ? undefined
       : typeof image === 'string'
-      ? { uri: image }
+      ? { uri: sanitizeImageUrl(image, title) || image, cache: 'force-cache' }
       : image;
+
+  useEffect(() => {
+    let mounted = true;
+    if (typeof image === 'string' && !imageFailed) {
+      setPrefetching(true);
+      // Prefetch to warm Android cache and follow redirects
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { Image } = require('react-native');
+      const tryPrefetch = async (url: string) => {
+        try {
+          const sanitized = sanitizeImageUrl(url, title) || url;
+          const ok = await Image.prefetch(sanitized);
+          if (ok) return true;
+        } catch (err) {}
+        try {
+          const resp = await fetch(url);
+          const finalUrl = resp.url || url;
+          const sanitized2 = sanitizeImageUrl(finalUrl, title) || finalUrl;
+          try {
+            const ok2 = await Image.prefetch(sanitized2);
+            if (ok2) return true;
+          } catch (e) {}
+        } catch (e) {}
+        return false;
+      };
+
+      tryPrefetch(image)
+        .then((succeeded) => {
+          if (mounted) {
+            if (!succeeded) setImageFailed(true);
+            setPrefetching(false);
+          }
+        })
+        .catch(() => {
+          if (mounted) {
+            setImageFailed(true);
+            setPrefetching(false);
+          }
+        });
+    }
+    return () => {
+      mounted = false;
+    };
+  }, [image, imageFailed]);
+
+  const badgeCategory = (category || "Place").toString();
+  const normalizedCategory = badgeCategory === "Music" ? "Music" : badgeCategory === "Food" || badgeCategory === "Restaurant" ? "Restaurant" : badgeCategory === "Adventure" || badgeCategory === "Landmark" ? "Place" : badgeCategory;
+
+  const renderBadgeIcon = () => {
+    if (normalizedCategory === "Route") {
+      return <RouteIcon width={12} height={12} />;
+    }
+    if (normalizedCategory === "Restaurant") {
+      return <ForkIcon width={12} height={12} />;
+    }
+    if (normalizedCategory === "Music") {
+      return <MusicTabIcon width={12} height={12} />;
+    }
+    if (normalizedCategory === "Place" || normalizedCategory === "Landmark" || normalizedCategory === "Adventure") {
+      return <LocationIcon width={10} height={12} />;
+    }
+    return <EventIcon width={12} height={14} />;
+  };
 
   const handleFavorite = () => {
     if (favorite) {
@@ -85,41 +154,59 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
     }
   };
 
+  const handleHeartPress = (event: any) => {
+    event?.stopPropagation?.();
+    handleFavorite();
+  };
+
   const showRating = Boolean(rating) && !hideRating;
   const showTime = Boolean(time) && !hideTime;
   const showLocation = Boolean(location) && !hideLocation;
   const visibleCount = (showRating ? 1 : 0) + (showLocation ? 1 : 0) + (showTime ? 1 : 0);
   const hasBottom = visibleCount > 0;
   const containerHeight = hasBottom ? 126 : 96;
+  const displayTime = typeof time === "string"
+    ? time.replace(/^\s*Open\s*(?:[•\-]|\s)*\s*/i, "").trim()
+    : time;
 
   return (
-    <View style={[{ ...styles.container, height: containerHeight }, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact]}>
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={onPress}
+      style={[{ ...styles.container, height: containerHeight }, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact]}
+    >
       <View style={styles.topSection}>
         <Image
           source={resolvedImage}
           onError={() => setImageFailed(true)}
           style={styles.image}
+          resizeMode="cover"
         />
 
         <View style={styles.textContainer}>
           <View style={styles.badge}>
-            {category === "Route" ? (
-              <RouteIcon width={12} height={12} />
-            ) : category === "Place" ? (
-              <LocationIcon width={10} height={12} />
-            ) : (
-              <EventIcon width={12} height={14} />
-            )}
+            {renderBadgeIcon()}
             <Text style={styles.badgeText}>
-              {category === "Route" ? "Route" : category === "Place" ? "Place" : "Event"}
+              {normalizedCategory === "Route"
+                ? "Route"
+                : normalizedCategory === "Restaurant"
+                ? "Restaurant"
+                : normalizedCategory === "Music"
+                ? "Music"
+                : normalizedCategory === "Place" || normalizedCategory === "Landmark" || normalizedCategory === "Adventure"
+                ? "Place"
+                : normalizedCategory}
             </Text>
           </View>
 
-          <Text style={styles.title} numberOfLines={1}>{title}</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.title} numberOfLines={1}>{title}</Text>
+          </View>
+
           <Text style={styles.description} numberOfLines={1}>{description}</Text>
         </View>
 
-        <TouchableOpacity style={styles.heartIcon} onPress={handleFavorite}>
+        <TouchableOpacity style={styles.heartIcon} onPress={handleHeartPress}>
           {favorite ? <RedHeartIcon width={15} height={13} /> : <HeartIcon width={15} height={13} />}
         </TouchableOpacity>
       </View>
@@ -128,17 +215,17 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
 
       {hasBottom ? (
         (() => {
-          const justify = visibleCount === 1 ? 'center' : 'space-between';
+          const justify = visibleCount === 1 ? 'flex-start' : 'space-between';
           return (
             <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact, { justifyContent: justify as any }]}>
-              {showRating ? (
+                {showRating ? (
                 <View style={styles.infoItem}>
-                  <StarIcon width={15} height={14} />
+                  <StarIcon width={12} height={12} />
                   <Text style={styles.infoText}>{rating}</Text>
                 </View>
               ) : null}
 
-              {showLocation ? (
+                {showLocation ? (
                 <View style={styles.infoItem}>
                   <LocationIcon width={10} height={12} />
                   <Text style={styles.infoText}>{location}</Text>
@@ -148,14 +235,14 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
               {showTime ? (
                 <View style={styles.infoItem}>
                   <TimeIcon width={13} height={13} />
-                  <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{time}</Text>
+                  <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{displayTime}</Text>
                 </View>
               ) : null}
             </View>
           );
         })()
       ) : null}
-    </View>
+    </TouchableOpacity>
   );
 };
 
@@ -182,6 +269,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 62,
     borderRadius: 6.71,
+    backgroundColor: COLORS.TEXT_SECONDARY,
   },
 
   textContainer: {
@@ -205,12 +293,21 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.InterTight_Regular,
   },
 
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 6,
+    gap: 8,
+  },
+
   title: {
+    flex: 1,
     fontSize: FONT_SIZE.SMALL_TEXT,
     color: COLORS.TEXT_PRIMARY,
-    marginTop: 6,
     fontFamily: FONT_FAMILY.InterTight_Medium,
   },
+
 
   description: {
     fontSize: FONT_SIZE.CARD_TEXT,

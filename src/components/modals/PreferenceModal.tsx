@@ -17,6 +17,7 @@ import {
     PreferenceIcon,
 } from "../../constants/icons";
 
+import { CustomAlert } from "../../utils/CustomAlert";
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 
@@ -91,6 +92,7 @@ const PreferenceModal: React.FC<Props> = ({
 
     const secondaryText =
         secondaryLabel || (mode === "forYou" ? "Cancel" : "Back");
+    const hasSelection = selectedPrefs.length > 0;
 
     return (
         <Modal visible={visible} transparent animationType="fade">
@@ -166,10 +168,23 @@ const PreferenceModal: React.FC<Props> = ({
                             </TouchableOpacity>
 
                             <TouchableOpacity
-                                style={styles.primaryBtnSmall}
-                                onPress={onPrimary}
+                                style={[styles.primaryBtnSmall, !hasSelection && styles.primaryBtnSmallDisabled]}
+                                disabled={!hasSelection}
+                                onPress={() => {
+                                    if (!selectedPrefs.length) {
+                                        const alertMessage =
+                                            mode === 'forYou'
+                                                ? 'Please select at least one preference to see recommendations.'
+                                                : 'Please choose at least one preference before continuing.';
+
+                                        CustomAlert.alert('Select a preference', alertMessage, [{ text: 'OK', style: 'cancel' }]);
+                                        return;
+                                    }
+
+                                    onPrimary?.();
+                                }}
                             >
-                                <Text style={styles.primaryText}>
+                                <Text style={[styles.primaryText, !hasSelection && styles.primaryTextDisabled]}>
                                     {primaryText}
                                 </Text>
                             </TouchableOpacity>
@@ -280,6 +295,9 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
     },
+    primaryBtnSmallDisabled: {
+        backgroundColor: '#D9D9D9',
+    },
 
     secondaryText: {
         color: COLORS.TEXT_PRIMARY,
@@ -291,5 +309,8 @@ const styles = StyleSheet.create({
         color: COLORS.WHITE,
         fontFamily: FONT_FAMILY.InterTight_SemiBold,
         fontSize: FONT_SIZE.TEXT,
+    },
+    primaryTextDisabled: {
+        color: '#A8A8A8',
     },
 });

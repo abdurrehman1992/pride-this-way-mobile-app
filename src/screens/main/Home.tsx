@@ -68,8 +68,8 @@ const Home: React.FC = () => {
             description={item.description}
             rating={item.rating}
             image={item.image}
+            category={item.category}
             onPress={() => navigation.navigate("RecommendationDetials")}
-
           />
         )}
         ListHeaderComponent={
@@ -97,6 +97,7 @@ const Home: React.FC = () => {
                     description={item.description}
                     rating={item.rating}
                     image={item.image}
+                    category={item.category}
                     width={295}
                   />
                 )}
