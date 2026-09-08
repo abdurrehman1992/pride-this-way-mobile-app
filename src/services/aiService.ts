@@ -5,6 +5,7 @@ import { GEMINI_API_KEY, GEMINI_TOKEN, GEMINI_ENDPOINT } from '@env';
 import { buildExactImageKeyword, isGenericRecommendationTitle } from '../utils/recommendationData';
 import { checkInternetConnection } from '../utils/networkStatus';
 import { RECOMMENDED_IMAGE } from '../constants/images';
+import { loadImage } from 'react-native-nitro-image';
 
 export type AIPlace = {
   id: string;
@@ -836,26 +837,223 @@ export async function suggestLocations(query: string): Promise<string[]> {
   }
 }
 
-async function uriToBase64(uri: string): Promise<string> {
-  const response = await fetch(uri);
-  const arrayBuffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-  let binary = '';
-
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-
+function bytesToBase64(bytes: Uint8Array): string {
   const globalObject = globalThis as typeof globalThis & {
     btoa?: (value: string) => string;
   };
+
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
 
   if (typeof globalObject.btoa === 'function') {
     return globalObject.btoa(binary);
   }
 
-  return binary;
+  // React Native does not provide btoa on every Android runtime. Returning
+  // raw binary here produces an invalid Gemini request, so encode it locally.
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let base64 = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const first = bytes[i];
+    const second = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const third = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    const combined = (first << 16) | (second << 8) | third;
+    base64 += alphabet[(combined >> 18) & 63];
+    base64 += alphabet[(combined >> 12) & 63];
+    base64 += i + 1 < bytes.length ? alphabet[(combined >> 6) & 63] : '=';
+    base64 += i + 2 < bytes.length ? alphabet[combined & 63] : '=';
+  }
+  return base64;
 }
+
+async function uriToBase64(uri: string): Promise<string> {
+  const dataUriMatch = uri.match(/^data:[^;,]+;base64,(.+)$/i);
+  if (dataUriMatch) {
+    return dataUriMatch[1];
+  }
+
+  // VisionCamera returns a local file path. Android's fetch implementation is
+  // not reliable for file:// URIs, so read local photos through the native
+  // image module instead of treating them as network resources.
+  if (/^(?:file:\/\/|content:\/\/)/i.test(uri) || uri.startsWith('/')) {
+    const filePath = uri.replace(/^file:\/\//i, '');
+    const image = await loadImage({ filePath });
+    const encoded = await image.toEncodedImageDataAsync('jpg', 85);
+    return bytesToBase64(new Uint8Array(encoded.buffer));
+  }
+
+  if (!/^https?:\/\//i.test(uri) && !/^data:/i.test(uri)) {
+    throw new Error(`Unsupported captured image URI: ${uri.slice(0, 80)}`);
+  }
+
+  console.log('[aiService] Downloading remote image for verification:', {
+    scheme: uri.split(':')[0],
+    host: uri.startsWith('http') ? new URL(uri).host : undefined,
+  });
+  const response = await fetch(uri);
+  if (!response.ok) {
+    throw new Error(`Image download failed with HTTP ${response.status}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return bytesToBase64(new Uint8Array(arrayBuffer));
+}
+
+// export async function verifyPlaceImageMatch(
+//   place: {
+//     title?: string;
+//     description?: string;
+//     category?: string;
+//     address?: string;
+//     location?: string;
+//     imageUrl?: string;
+//     targetCoordinates?: [number, number];
+//     captureCoordinates?: [number, number];
+//     captureDistanceMeters?: number;
+//   },
+//   localImageUri: string,
+// ): Promise<{ matched: boolean; reason: string; confidence: number }> {
+//   const isOnline = await checkInternetConnection();
+//   if (!isOnline) {
+//     return {
+//       matched: false,
+//       reason: 'No internet connection. Please reconnect and try again to verify this stop.',
+//       confidence: 0,
+//     };
+//   }
+
+//   if (!localImageUri) {
+//     return {
+//       matched: false,
+//       reason: 'No image was captured for this stop. Please take a clear picture of the place before confirming.',
+//       confidence: 0,
+//     };
+//   }
+
+//   const targetTitle = place?.title || 'this place';
+//   const targetLocation = place?.location || place?.address || 'this location';
+//   const targetDescription = place?.description || 'landmark';
+//   const targetCategory = place?.category || 'destination';
+//   const targetImageHint = place?.imageUrl || `${targetTitle} ${targetLocation}`;
+//   const targetCoordinates = place?.targetCoordinates;
+//   const captureCoordinates = place?.captureCoordinates;
+//   const captureDistance = Number.isFinite(place?.captureDistanceMeters)
+//     ? Math.round(Number(place.captureDistanceMeters))
+//     : undefined;
+//   const locationProof = targetCoordinates && captureCoordinates
+//     ? `\nTarget GPS (longitude, latitude): ${targetCoordinates[0]}, ${targetCoordinates[1]}\nCapture GPS (longitude, latitude): ${captureCoordinates[0]}, ${captureCoordinates[1]}${captureDistance !== undefined ? `\nApp-calculated GPS distance: ${captureDistance} metres` : ''}\nThe app independently enforces the GPS visit radius. Use this only as supporting context; do not claim visual certainty from coordinates alone.`
+//     : '';
+
+//   const mimeType = /\.png$/i.test(localImageUri) ? 'image/png' : 'image/jpeg';
+
+//   try {
+//     const base64 = await uriToBase64(localImageUri);
+
+//     const endpoint = `${GEMINI_BASE_V1BETA}/models/${GEMINI_DEFAULT_MODEL}:generateContent`;
+//     const headers: Record<string, string> = {
+//       'Content-Type': 'application/json',
+//     };
+
+//     if (GEMINI_API_KEY) {
+//       headers['x-goog-api-key'] = GEMINI_API_KEY;
+//     } else if (GEMINI_TOKEN) {
+//       headers.Authorization = `Bearer ${GEMINI_TOKEN}`;
+//     } else {
+//       return {
+//         matched: false,
+//         reason: 'AI verification is unavailable because no Gemini API key is configured.',
+//         confidence: 0,
+//       };
+//     }
+
+//     const parts: any[] = [
+//       {
+//         text: `Verify whether the CAPTURED photo was taken at the exact target place. Use the REFERENCE image as a strong visual anchor when it is provided. Photos from a different angle, distance, lighting, or side of the same place should still be accepted when the architecture, signage, entrance, colors, or other physical details are consistent and the GPS context is within the visit radius. Be conservative only when the photo is generic, blurry, unrelated, or could plausibly be another place.\n\nTarget place: ${targetTitle}\nLocation/address: ${targetLocation}\nCategory: ${targetCategory}\nDescription: ${targetDescription}\nReference hint: ${targetImageHint}${locationProof}\n\nReturn valid JSON only: {"matched": true|false, "confidence": 0-100, "reason": "short evidence-based explanation"}. Return matched=true when the captured image reasonably indicates this target place and confidence is at least 80.`,
+//       },
+//     ];
+
+//     if (place?.imageUrl) {
+//       try {
+//         const referenceBase64 = await uriToBase64(place.imageUrl);
+//         if (referenceBase64) {
+//           parts.push({ text: 'REFERENCE image of the target place:' });
+//           parts.push({ inline_data: { mime_type: 'image/jpeg', data: referenceBase64 } });
+//         }
+//       } catch {
+//         // The textual place identity is still usable when its reference image is unavailable.
+//       }
+//     }
+//     parts.push({ text: 'CAPTURED photo to verify:' });
+//     parts.push({ inline_data: { mime_type: mimeType, data: base64 } });
+
+//     const response = await fetch(endpoint, {
+//       method: 'POST',
+//       headers,
+//       body: JSON.stringify({
+//         contents: [
+//           {
+//             parts: [
+//               ...parts,
+//             ],
+//           },
+//         ],
+//         generationConfig: {
+//           temperature: 0.1,
+//           responseMimeType: 'application/json',
+//         },
+//       }),
+//     });
+
+//     if (!response.ok) {
+//       const errText = await response.text();
+//       return {
+//         matched: false,
+//         reason: `AI verification failed: ${errText || 'Unable to compare the photo right now.'}`,
+//         confidence: 0,
+//       };
+//     }
+
+//     const body = await response.json();
+//     const rawText = (body?.candidates?.[0]?.content?.parts ?? [])
+//       .map((part: any) => part?.text || '')
+//       .join('\n');
+
+//     if (!rawText) {
+//       return {
+//         matched: false,
+//         reason: 'AI verification did not return a result. Please try again with a clear photo of the place.',
+//         confidence: 0,
+//       };
+//     }
+
+//     const cleaned = rawText.replace(/```json|```/gi, '').trim();
+//     const jsonStart = cleaned.indexOf('{');
+//     const jsonEnd = cleaned.lastIndexOf('}');
+//     const jsonText = jsonStart >= 0 && jsonEnd > jsonStart
+//       ? cleaned.slice(jsonStart, jsonEnd + 1)
+//       : cleaned;
+//     const parsed = JSON.parse(jsonText);
+//     const confidence = Math.max(0, Math.min(100, Number(parsed?.confidence) || 0));
+//     const matched = parsed?.matched === true && confidence >= 80;
+
+//     return {
+//       matched,
+//       reason: matched
+//         ? `Verified: this image matches ${targetTitle}.`
+//         : parsed?.reason || `This image does not match ${targetTitle}. Please re-take the photo at the correct place.`,
+//       confidence,
+//     };
+//   } catch (error) {
+//     console.error('[aiService] place verification error:', error);
+//     return {
+//       matched: false,
+//       reason: 'AI verification could not compare this photo. Please make sure you are connected to the internet and try again with a clear image of the place.',
+//       confidence: 0,
+//     };
+//   }
+// }
+
 
 export async function verifyPlaceImageMatch(
   place: {
@@ -868,14 +1066,16 @@ export async function verifyPlaceImageMatch(
     targetCoordinates?: [number, number];
     captureCoordinates?: [number, number];
     captureDistanceMeters?: number;
+    verificationRadius?: number;
   },
   localImageUri: string,
 ): Promise<{ matched: boolean; reason: string; confidence: number }> {
   const isOnline = await checkInternetConnection();
+
   if (!isOnline) {
     return {
       matched: false,
-      reason: 'No internet connection. Please reconnect and try again to verify this stop.',
+      reason: 'No internet connection. Please reconnect and try again.',
       confidence: 0,
     };
   }
@@ -883,31 +1083,72 @@ export async function verifyPlaceImageMatch(
   if (!localImageUri) {
     return {
       matched: false,
-      reason: 'No image was captured for this stop. Please take a clear picture of the place before confirming.',
+      reason: 'Please capture a photo of the destination.',
       confidence: 0,
     };
   }
 
-  const targetTitle = place?.title || 'this place';
-  const targetLocation = place?.location || place?.address || 'this location';
-  const targetDescription = place?.description || 'landmark';
-  const targetCategory = place?.category || 'destination';
-  const targetImageHint = place?.imageUrl || `${targetTitle} ${targetLocation}`;
-  const targetCoordinates = place?.targetCoordinates;
-  const captureCoordinates = place?.captureCoordinates;
-  const captureDistance = Number.isFinite(place?.captureDistanceMeters)
-    ? Math.round(Number(place.captureDistanceMeters))
-    : undefined;
-  const locationProof = targetCoordinates && captureCoordinates
-    ? `\nTarget GPS (longitude, latitude): ${targetCoordinates[0]}, ${targetCoordinates[1]}\nCapture GPS (longitude, latitude): ${captureCoordinates[0]}, ${captureCoordinates[1]}${captureDistance !== undefined ? `\nApp-calculated GPS distance: ${captureDistance} metres` : ''}\nThe app independently enforces the GPS visit radius. Use this only as supporting context; do not claim visual certainty from coordinates alone.`
-    : '';
+  const targetTitle = place.title || 'this place';
+  const targetLocation = place.location || place.address || '';
+  const targetCoordinates = place.targetCoordinates;
+  const captureCoordinates = place.captureCoordinates;
 
-  const mimeType = /\.png$/i.test(localImageUri) ? 'image/png' : 'image/jpeg';
+  const captureDistance = Number.isFinite(place.captureDistanceMeters)
+    ? Number(place.captureDistanceMeters)
+    : undefined;
+
+  const visitRadius = Number.isFinite(place.verificationRadius)
+    ? Number(place.verificationRadius)
+    : 100;
+
+  /*
+   * GPS should already be validated by the app before calling Gemini.
+   * This check is an additional safety check so Gemini is never called
+   * when the user is clearly outside the allowed radius.
+   */
+  if (
+    captureDistance !== undefined &&
+    captureDistance > visitRadius
+  ) {
+    return {
+      matched: false,
+      reason: `You must be within ${visitRadius} meters of ${targetTitle} to verify this location.`,
+      confidence: 0,
+    };
+  }
+
+  const locationProof =
+    targetCoordinates && captureCoordinates
+      ? `
+Target GPS (longitude, latitude): ${targetCoordinates[0]}, ${targetCoordinates[1]}
+User GPS (longitude, latitude): ${captureCoordinates[0]}, ${captureCoordinates[1]}
+App-calculated distance: ${captureDistance !== undefined ? `${Math.round(captureDistance)} meters` : 'unknown'
+      }
+Allowed visit radius: ${visitRadius} meters
+
+The GPS distance was calculated independently by the app.
+Use GPS only as supporting context. Do not treat coordinates alone as visual proof.
+A large destination may extend far beyond its coordinate pin, so the user does not need to be at the exact pin.
+`
+      : '';
+
+  const targetImageHint = place.imageUrl
+    ? 'A reference image of the target place is provided.'
+    : 'No reference image is available.';
+
+  const mimeType = /\.png$/i.test(localImageUri)
+    ? 'image/png'
+    : 'image/jpeg';
+
+  let verificationStage = `preparing captured image (${localImageUri.split(':')[0] || 'local'})`;
 
   try {
     const base64 = await uriToBase64(localImageUri);
 
-    const endpoint = `${GEMINI_BASE_V1BETA}/models/${GEMINI_DEFAULT_MODEL}:generateContent`;
+    const defaultEndpoint =
+      `${GEMINI_BASE_V1BETA}/models/${GEMINI_DEFAULT_MODEL}:generateContent`;
+    const endpoint = GEMINI_ENDPOINT?.trim() || defaultEndpoint;
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -924,82 +1165,213 @@ export async function verifyPlaceImageMatch(
       };
     }
 
-    const parts: any[] = [
-      {
-        text: `Verify whether the CAPTURED photo was taken at the exact target place. Be conservative: visual similarity alone is not enough. Look for unique signage, architecture, branding, exhibits, or landmark features. If the image is generic, blurry, lacks identifying evidence, shows only a person/food/road, or could plausibly be another place, matched must be false.\n\nTarget place: ${targetTitle}\nLocation/address: ${targetLocation}\nCategory: ${targetCategory}\nDescription: ${targetDescription}\nReference hint: ${targetImageHint}${locationProof}\n\nReturn valid JSON only: {"matched": true|false, "confidence": 0-100, "reason": "short evidence-based explanation"}. Only return matched=true when confidence is at least 80 and the captured visual evidence identifies this exact place.`,
-      },
-    ];
+    const prompt = `
+Verify whether the CAPTURED photo reasonably shows the TARGET PLACE.
 
-    if (place?.imageUrl) {
+Target place: ${targetTitle}
+${targetLocation ? `Location/address: ${targetLocation}` : ''}
+${targetImageHint}
+${locationProof}
+
+Use the reference image as a strong visual anchor when available.
+
+The captured photo may be taken from:
+- a different angle
+- a different distance
+- a different side or entrance
+- different lighting or weather conditions
+
+Do NOT require the captured photo to look identical to the reference image.
+
+Look for consistent physical evidence such as:
+- architecture
+- building structure
+- entrance
+- signage
+- colors
+- monuments
+- distinctive surroundings
+- recognizable features of the target
+
+For large places, the user may be physically inside or near the destination but far from its exact GPS pin.
+
+Be conservative when the image is:
+- generic
+- blurry
+- unrelated
+- clearly another place
+- insufficient to reasonably identify the target
+
+Return valid JSON only:
+{
+  "matched": true|false,
+  "confidence": 0-100,
+  "reason": "short evidence-based explanation"
+}
+
+Return matched=true only when the captured image provides reasonable visual evidence that it is the target place and confidence is at least 80.
+`;
+
+    const parts: any[] = [{ text: prompt }];
+
+    // Reference image from Cloudinary
+    verificationStage = 'loading destination reference image';
+    if (place.imageUrl) {
       try {
         const referenceBase64 = await uriToBase64(place.imageUrl);
+
         if (referenceBase64) {
-          parts.push({ text: 'REFERENCE image of the target place:' });
-          parts.push({ inline_data: { mime_type: 'image/jpeg', data: referenceBase64 } });
+          parts.push({
+            text: 'REFERENCE IMAGE OF TARGET PLACE:',
+          });
+
+          parts.push({
+            inline_data: {
+              mime_type: 'image/jpeg',
+              data: referenceBase64,
+            },
+          });
         }
-      } catch {
-        // The textual place identity is still usable when its reference image is unavailable.
+      } catch (error) {
+        console.warn(
+          '[aiService] Could not load Cloudinary reference image:',
+          error,
+        );
       }
     }
-    parts.push({ text: 'CAPTURED photo to verify:' });
-    parts.push({ inline_data: { mime_type: mimeType, data: base64 } });
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              ...parts,
-            ],
-          },
-        ],
-      }),
+    // Fresh captured image
+    verificationStage = 'sending verification request to Gemini';
+    parts.push({
+      text: 'CAPTURED IMAGE TO VERIFY:',
     });
+
+    parts.push({
+      inline_data: {
+        mime_type: mimeType,
+        data: base64,
+      },
+    });
+
+    console.log('[aiService] Gemini verification request:', {
+      endpoint: endpoint.replace(/([?&](?:key|api_key)=)[^&]+/gi, '$1[redacted]'),
+      hasReferenceImage: Boolean(place.imageUrl),
+      capturedImageBytes: base64.length,
+      hasTargetCoordinates: Boolean(targetCoordinates),
+      hasCaptureCoordinates: Boolean(captureCoordinates),
+    });
+
+    const requestController = new AbortController();
+    const requestTimeoutId = setTimeout(() => requestController.abort(), 30000);
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        signal: requestController.signal,
+        body: JSON.stringify({
+          contents: [
+            {
+              parts,
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+    } finally {
+      clearTimeout(requestTimeoutId);
+    }
 
     if (!response.ok) {
       const errText = await response.text();
+
+      console.error('[aiService] Gemini verification HTTP error:', {
+        status: response.status,
+        response: errText,
+      });
+
       return {
         matched: false,
-        reason: `AI verification failed: ${errText || 'Unable to compare the photo right now.'}`,
+        reason: `AI verification failed: ${errText || 'Unable to verify this location right now.'
+          }`,
         confidence: 0,
       };
     }
 
+    verificationStage = 'reading Gemini response';
     const body = await response.json();
+
     const rawText = (body?.candidates?.[0]?.content?.parts ?? [])
       .map((part: any) => part?.text || '')
       .join('\n');
 
+    console.log('[aiService] Gemini verification raw response:', rawText);
+
     if (!rawText) {
       return {
         matched: false,
-        reason: 'AI verification did not return a result. Please try again with a clear photo of the place.',
+        reason:
+          'AI verification did not return a result. Please try again with a clear photo.',
         confidence: 0,
       };
     }
 
-    const cleaned = rawText.replace(/```json|```/gi, '').trim();
-    const parsed = JSON.parse(cleaned);
-    const confidence = Math.max(0, Math.min(100, Number(parsed?.confidence) || 0));
-    const matched = parsed?.matched === true && confidence >= 80;
+    const cleaned = rawText
+      .replace(/```json|```/gi, '')
+      .trim();
+
+    const jsonStart = cleaned.indexOf('{');
+    const jsonEnd = cleaned.lastIndexOf('}');
+
+    const jsonText =
+      jsonStart >= 0 && jsonEnd > jsonStart
+        ? cleaned.slice(jsonStart, jsonEnd + 1)
+        : cleaned;
+
+    const parsed = JSON.parse(jsonText);
+
+    const confidence = Math.max(
+      0,
+      Math.min(100, Number(parsed?.confidence) || 0),
+    );
+
+    const matched =
+      parsed?.matched === true &&
+      confidence >= 80;
+
+    console.log('[aiService] Gemini verification parsed result:', {
+      matched,
+      confidence,
+      reason: parsed?.reason,
+    });
 
     return {
       matched,
-      reason: matched
-        ? `Verified: this image matches ${targetTitle}.`
-        : parsed?.reason || `This image does not match ${targetTitle}. Please re-take the photo at the correct place.`,
+      reason: parsed?.reason || (
+        matched
+          ? `Verified: this image reasonably matches ${targetTitle}.`
+          : `This image does not provide enough evidence for ${targetTitle}.`
+      ),
       confidence,
     };
   } catch (error) {
+    console.error(
+      `[aiService] place verification error while ${verificationStage}:`,
+      error,
+    );
+
     return {
       matched: false,
-      reason: 'AI verification could not compare this photo. Please make sure you are connected to the internet and try again with a clear image of the place.',
+      reason:
+        `AI verification could not compare this photo while ${verificationStage}. Please check your internet connection and try again.`,
       confidence: 0,
     };
   }
 }
+
 
 function getGeminiAuthHeaders(): Record<string, string> | undefined {
   if (GEMINI_API_KEY) {

@@ -24,7 +24,10 @@ type Props = {
   title?: string;
   successPoints?: number;
   onClose: () => void;
-  onScanSuccess: (imageUri: string) => boolean | Promise<boolean>;
+  onScanSuccess: (imageUri: string) =>
+    | boolean
+    | { verified: boolean; reason?: string }
+    | Promise<boolean | { verified: boolean; reason?: string }>;
 };
 
 type StepType = "scan" | "confirm" | "success";
@@ -43,6 +46,7 @@ const ScanVerifyModal: React.FC<Props> = ({
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const cameraRef = useRef<any>(null);
+  const confirmInFlightRef = useRef(false);
   const scanAnim = useRef(new Animated.Value(0)).current;
 
   /* eslint-disable no-bitwise */
@@ -182,7 +186,10 @@ const ScanVerifyModal: React.FC<Props> = ({
           ? rawPath
           : `file://${rawPath}`;
 
-        // console.log("Resolved capture URI:", uri);
+        console.log("[ScanVerifyModal] Resolved capture URI:", {
+          scheme: uri.split(':')[0],
+          pathPreview: uri.slice(0, 120),
+        });
         setCapturedImage({ uri });
         setStep("confirm");
         return;
@@ -215,17 +222,23 @@ const ScanVerifyModal: React.FC<Props> = ({
     }
   };
   const handleConfirmYes = async () => {
-    if (!capturedImage?.uri) {
+    if (!capturedImage?.uri || confirmInFlightRef.current) {
       return;
     }
 
+    confirmInFlightRef.current = true;
     try {
       setIsCapturing(true);
-      const isVerified = await onScanSuccess(capturedImage.uri);
+      const verification = await onScanSuccess(capturedImage.uri);
+      const isVerified = typeof verification === 'boolean'
+        ? verification
+        : verification.verified;
       if (!isVerified) {
         CustomAlert.alert(
-          'Place Does Not Match',
-          'This image does not match the location. Please retake the photo from the correct place.',
+          'Verification Failed',
+          typeof verification === 'object' && verification.reason
+            ? verification.reason
+            : 'This image does not match the location. Please retake the photo from the correct place.',
           [{ text: 'Retake Photo', style: 'cancel', onPress: () => {
             setCapturedImage(null);
             setStep('scan');
@@ -236,6 +249,7 @@ const ScanVerifyModal: React.FC<Props> = ({
       setStep("success");
     } finally {
       setIsCapturing(false);
+      confirmInFlightRef.current = false;
     }
   };
   const handleConfirmNo = () => {

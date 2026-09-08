@@ -11,9 +11,16 @@ import { AlertProvider } from "./context/AlertContext";
 import CustomAlertModal from "./components/modals/CustomAlertModal";
 import { useInternetConnectivity } from './utils/networkStatus';
 import { CustomAlert } from './utils/CustomAlert';
+import { initializeMapbox } from './services/mapboxConfig';
 
 const App = () => {
   const isOnline = useInternetConnectivity();
+
+  useEffect(() => {
+    initializeMapbox().catch(() => {
+      // Map screens render their fallback state if Mapbox cannot initialize.
+    });
+  }, []);
 
   useEffect(() => {
     if (!isOnline) {

@@ -67,7 +67,9 @@ import {
   type Coord,
 } from '../../utils/routeProgress';
 import { checkInternetConnection } from '../../utils/networkStatus';
+import { requestLocationPermission } from '../../utils/location';
 import { verifyPlaceImageMatch } from '../../services/aiService';
+import { initializeMapbox } from '../../services/mapboxConfig';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../../Redux/store';
 import { setUserPoints } from '../../Redux/slices/authSlice';
@@ -101,6 +103,12 @@ const routeLineLayerStyle: LineLayerStyle = {
   lineDasharray: [1.4, 1.6],
   lineCap: 'round',
   lineJoin: 'round',
+};
+
+const futureRouteLineLayerStyle: LineLayerStyle = {
+  ...routeLineLayerStyle,
+  lineColor: '#F3A0A0',
+  lineOpacity: 0.8,
 };
 
 const completedRouteLineLayerStyle: LineLayerStyle = {
@@ -145,23 +153,26 @@ const visitedStopNameLabelStyle: SymbolLayerStyle = {
   textHaloColor: '#9AA3AF',
 };
 
-// GPS can drift by dozens of metres, especially around dense buildings. Keep a
-// small buffer around the intended 100m visit radius.
-const VISIT_DISTANCE_THRESHOLD_METERS = 150;
+// Keep the visit radius in one place so it can be tuned later.
+const VISIT_DISTANCE_THRESHOLD_METERS = 100;
+const LIVE_ROUTE_REFRESH_DISTANCE_METERS = 25;
+const MAX_ACCEPTED_GPS_ACCURACY_METERS = 100;
 // A stop is complete only when both the visual proof and the live GPS check pass.
 const ALLOW_ANY_IMAGE_FOR_TESTING = false;
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DETAIL_CARD_WIDTH = 260;
 const DETAIL_CARD_HEIGHT = 255;
 
-const getCurrentPositionAsync = async () =>
+const getCurrentPositionAsync = async (timeout = 5000) =>
   new Promise<[number, number]>((resolve, reject) => {
     Geolocation.getCurrentPosition(
       (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
       reject,
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, timeout, maximumAge: 0 }
     );
   });
+
+type VerificationFailure = { verified: false; reason: string };
 
 const getVerificationFailureMessage = (
   placeName: string,
@@ -501,7 +512,10 @@ const MyTourStart = () => {
     }
   }, []);
   const [tourStarted, setTourStarted] = useState(Boolean(route.params?.autoStart));
-  const [mapReady, setMapReady] = useState(false);
+  // MAPBOX_TOKEN is loaded synchronously from react-native-config. Mount the
+  // native MapView immediately on first launch; waiting for the native token
+  // promise here can leave a brand-new install stuck on the blue fallback.
+  const [mapReady, setMapReady] = useState(Boolean(Config.MAPBOX_TOKEN));
   const [loading, setLoading] = useState(true);
   const [roadSegments, setRoadSegments] = useState<[number, number][][]>([]);
   const [airSegments, setAirSegments] = useState<[number, number][][]>([]);
@@ -609,6 +623,8 @@ const MyTourStart = () => {
   const pendingSaveInProgressRef = useRef(false);
   const introPlayedRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
+  const lastLiveRouteOriginRef = useRef<[number, number] | null>(null);
+  const lastLiveRouteStopsKeyRef = useRef<string>('');
 
   const fetchRoadSegment = useCallback(
     async (from: [number, number], to: [number, number]): Promise<[number, number][] | null> => {
@@ -681,27 +697,20 @@ const MyTourStart = () => {
 
       const road: [number, number][][] = [];
       const air: [number, number][][] = [];
-      let currentRoad: [number, number][] = [];
 
       for (const { pts, isAir } of results) {
         if (!pts) {
-          // Routing failed for this leg — break the running road chain
-          // so we don't connect across a gap with a straight line.
-          if (currentRoad.length >= 2) road.push(currentRoad);
-          currentRoad = [];
           continue;
         }
         if (isAir) {
-          if (currentRoad.length >= 2) road.push(currentRoad);
-          currentRoad = [];
-          air.push(pts);
+          if (pts.length >= 2) air.push(pts);
         } else {
-          currentRoad =
-            currentRoad.length === 0 ? [...pts] : [...currentRoad, ...pts.slice(1)];
+          // Keep every leg separate. This lets the map style the current
+          // user-to-stop leg differently from the future legs, even when
+          // Mapbox's road geometry is one continuous route.
+          if (pts.length >= 2) road.push(pts);
         }
       }
-
-      if (currentRoad.length >= 2) road.push(currentRoad);
 
       return {
         road: road.length > 0 ? road : air.length > 0 ? [] : [lineStops],
@@ -733,12 +742,19 @@ const MyTourStart = () => {
     let isMounted = true;
     if (!Config.MAPBOX_TOKEN) return undefined;
 
-    Mapbox.setAccessToken(Config.MAPBOX_TOKEN)
+    // The token call is still made before normal map interaction, but MapView
+    // must not be gated on its native promise resolving.
+    setMapReady(true);
+    initializeMapbox()
       .then(() => {
         if (isMounted) setMapReady(true);
       })
       .catch(() => {
-        if (isMounted) setMapReady(false);
+        // Keep the MapView mounted. The native module may reject a duplicate
+        // or transient initialization even though the configured token is
+        // valid, and hiding the map here recreates the first-launch blank
+        // screen.
+        if (isMounted) setMapReady(Boolean(Config.MAPBOX_TOKEN));
       });
 
     return () => {
@@ -1763,38 +1779,54 @@ const MyTourStart = () => {
 
   // Continuous GPS tracking — runs while the screen is mounted.
   useEffect(() => {
+    let cancelled = false;
+
     if (watchIdRef.current !== null) {
       Geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
 
-    watchIdRef.current = Geolocation.watchPosition(
-      (position) => {
-        const next: [number, number] = [
-          position.coords.longitude,
-          position.coords.latitude,
-        ];
-        setCurrentLocation(next);
+    (async () => {
+      if (!(await requestLocationPermission()) || cancelled) return;
 
-        const heading = position.coords.heading;
-        if (typeof heading === 'number' && heading >= 0 && heading <= 360) {
-          setUserHeading(heading);
+      watchIdRef.current = Geolocation.watchPosition(
+        (position) => {
+          const accuracy = Number(position.coords.accuracy);
+          if (
+            !Number.isFinite(position.coords.longitude) ||
+            !Number.isFinite(position.coords.latitude) ||
+            (Number.isFinite(accuracy) && accuracy > MAX_ACCEPTED_GPS_ACCURACY_METERS)
+          ) {
+            return;
+          }
+
+          const next: [number, number] = [
+            position.coords.longitude,
+            position.coords.latitude,
+          ];
+          setCurrentLocation(next);
+
+          const heading = position.coords.heading;
+          if (typeof heading === 'number' && heading >= 0 && heading <= 360) {
+            setUserHeading(heading);
+          }
+        },
+        () => {
+          // Silently ignore transient GPS errors; keep last known location.
+        },
+        {
+          enableHighAccuracy: true,
+          distanceFilter: 1,
+          maximumAge: 0,
+          timeout: 15000,
+          interval: 1000,
+          fastestInterval: 500,
         }
-      },
-      () => {
-        // Silently ignore transient GPS errors; keep last known location.
-      },
-      {
-        enableHighAccuracy: true,
-        distanceFilter: 1,
-        maximumAge: 1000,
-        timeout: 5000,
-        interval: 500,
-        fastestInterval: 250,
-      }
-    );
+      );
+    })();
 
     return () => {
+      cancelled = true;
       if (watchIdRef.current !== null) {
         Geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
@@ -1815,7 +1847,7 @@ const MyTourStart = () => {
   // Follow-mode camera tracking — smoothly pan to user while tour is active.
   // Camera stays north-up; the user pin itself rotates with GPS heading.
   useEffect(() => {
-    if (!tourStarted || followMode !== 'follow' || !currentLocation) return;
+    if (!mapReady || !tourStarted || followMode !== 'follow' || !currentLocation) return;
     const heading =
       typeof userHeading === 'number' && userHeading >= 0 && userHeading <= 360
         ? userHeading
@@ -1824,10 +1856,10 @@ const MyTourStart = () => {
       centerCoordinate: currentLocation,
       zoomLevel: 16,
       heading,
-      animationDuration: 800,
+      animationDuration: 250,
       animationMode: 'easeTo',
     });
-  }, [currentLocation, followMode, tourStarted, userHeading]);
+  }, [currentLocation, followMode, mapReady, tourStarted, userHeading]);
 
   // On next-stop transition, briefly frame both user and the new pending stop
   // before resuming follow mode.
@@ -1961,9 +1993,25 @@ const MyTourStart = () => {
       return;
     }
 
+    const liveStopsKey = navigablePlaceStops.map((stop) => stop.id).join(',');
+    const isLiveRoute = tourStarted || hasVisitedProgress;
+    if (
+      isLiveRoute &&
+      routeStartCoordinate &&
+      lastLiveRouteOriginRef.current &&
+      lastLiveRouteStopsKeyRef.current === liveStopsKey &&
+      distanceMetersBetween(lastLiveRouteOriginRef.current, routeStartCoordinate) <
+        LIVE_ROUTE_REFRESH_DISTANCE_METERS
+    ) {
+      return;
+    }
+
+    if (isLiveRoute && routeStartCoordinate) {
+      lastLiveRouteOriginRef.current = routeStartCoordinate;
+      lastLiveRouteStopsKeyRef.current = liveStopsKey;
+    }
+
     let isMounted = true;
-    setRoadSegments([]);
-    setAirSegments([]);
 
     const fetchRoadRoute = async () => {
       try {
@@ -2119,18 +2167,35 @@ const MyTourStart = () => {
     orderedPlaceStops,
   ]);
 
+  const pendingRouteFeatures = useMemo(() =>
+    [...roadSegments, ...airSegments]
+      .filter((seg) => seg.length >= 2)
+      .map((seg) => ({
+        type: 'Feature' as const,
+        properties: {},
+        geometry: { type: 'LineString' as const, coordinates: seg },
+      })),
+    [roadSegments, airSegments]
+  );
+
+  const activeRouteLine = useMemo<FeatureCollection<LineString>>(
+    () => ({
+      type: 'FeatureCollection',
+      features: (tourStarted || hasVisitedProgress) && pendingRouteFeatures.length > 0
+        ? [pendingRouteFeatures[0]]
+        : [],
+    }),
+    [hasVisitedProgress, pendingRouteFeatures, tourStarted]
+  );
+
   const routeLine = useMemo<FeatureCollection<LineString>>(
     () => ({
       type: 'FeatureCollection',
-      features: [...roadSegments, ...airSegments]
-        .filter((seg) => seg.length >= 2)
-        .map((seg) => ({
-          type: 'Feature' as const,
-          properties: {},
-          geometry: { type: 'LineString' as const, coordinates: seg },
-        })),
+      features: (tourStarted || hasVisitedProgress)
+        ? pendingRouteFeatures.slice(1)
+        : pendingRouteFeatures,
     }),
-    [roadSegments, airSegments]
+    [hasVisitedProgress, pendingRouteFeatures, tourStarted]
   );
 
   const completedRouteLine = useMemo<FeatureCollection<LineString>>(
@@ -2736,6 +2801,7 @@ const MyTourStart = () => {
       });
 
     try {
+      if (!(await requestLocationPermission())) return;
       const pos = await getPos();
       setCurrentLocation(pos);
       if (zoom) {
@@ -2755,6 +2821,80 @@ const MyTourStart = () => {
   useEffect(() => {
     handleCurrentLocation(false);
   }, [handleCurrentLocation]);
+
+  // On a fresh install Android may still be resolving the first permission
+  // dialog/GPS fix when the screen mounts. The recenter button works because
+  // it retries this exact request later, so do the same automatically.
+  useEffect(() => {
+    if (!tourStarted && !routeDetails) return;
+
+    let cancelled = false;
+    const retryInitialLocation = async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (cancelled || currentLocationRef.current) return;
+        await handleCurrentLocation(false);
+        if (cancelled || currentLocationRef.current) return;
+        await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      }
+    };
+
+    retryInitialLocation();
+    return () => {
+      cancelled = true;
+    };
+  }, [handleCurrentLocation, routeDetails, tourStarted]);
+
+  const prepareVerification = async (
+    destinationName: string,
+    destinationCoordinate: [number, number],
+  ): Promise<[number, number] | null> => {
+    // The watcher already maintains the latest GPS fix. Use it immediately
+    // for the radius gate so an out-of-range user gets feedback without
+    // waiting for another OS GPS request to time out.
+    const latestCoordinates = currentLocationRef.current;
+    if (latestCoordinates) {
+      const latestDistance = distanceMetersBetween(latestCoordinates, destinationCoordinate);
+      if (latestDistance > VISIT_DISTANCE_THRESHOLD_METERS) {
+        CustomAlert.alert(
+          'Too Far Away',
+          `You must be within 100 meters of ${destinationName} to verify this location.`,
+          [{ text: 'OK', style: 'cancel' }],
+        );
+        return null;
+      }
+      return latestCoordinates;
+    }
+
+    const captureCoordinates = await getCoordinatesForVerification();
+    if (!captureCoordinates) {
+      CustomAlert.alert(
+        'Location Required',
+        'Unable to get your current location. Please enable location access and try again.',
+        [{ text: 'OK', style: 'cancel' }],
+      );
+      return null;
+    }
+
+    setCurrentLocation(captureCoordinates);
+    const distance = distanceMetersBetween(captureCoordinates, destinationCoordinate);
+    if (distance > VISIT_DISTANCE_THRESHOLD_METERS) {
+      CustomAlert.alert(
+        'Too Far Away',
+        `You must be within 100 meters of ${destinationName} to verify this location.`,
+        [{ text: 'OK', style: 'cancel' }],
+      );
+      return null;
+    }
+
+    return captureCoordinates;
+  };
+
+  const getCoordinatesForVerification = async (): Promise<[number, number] | null> => {
+    const permitted = await requestLocationPermission();
+    if (!permitted) return currentLocationRef.current;
+
+    return getCurrentPositionAsync().catch(() => currentLocationRef.current);
+  };
 
   const handlePauseTour = async () => {
     if (isCompletedTour) {
@@ -2795,20 +2935,30 @@ const MyTourStart = () => {
     ];
     const captureCoordinates = ALLOW_ANY_IMAGE_FOR_TESTING
       ? currentLocation || eventCoordinate
-      : await getCurrentPositionAsync().catch(() => currentLocation || undefined);
+      : await getCoordinatesForVerification();
     const captureDistanceMeters = captureCoordinates
       ? distanceMetersBetween(captureCoordinates, eventCoordinate)
       : undefined;
+    if (!ALLOW_ANY_IMAGE_FOR_TESTING && !captureCoordinates) {
+      return {
+        verified: false,
+        reason: 'Unable to get your current location. Please enable location access and try again.',
+      } satisfies VerificationFailure;
+    }
+    if (!ALLOW_ANY_IMAGE_FOR_TESTING && captureDistanceMeters !== undefined && captureDistanceMeters > VISIT_DISTANCE_THRESHOLD_METERS) {
+      return {
+        verified: false,
+        reason: `You must be within 100 meters of ${event.title} to verify this location.`,
+      } satisfies VerificationFailure;
+    }
     const aiMatch = await verifyPlaceImageMatch({
       title: event.title,
-      description: event.description || event.title,
-      category: event.category || eventMeta.category || 'Event',
-      address: eventMeta.location || event.address || event.title,
-      location: eventMeta.location || event.city_name || event.country || 'Tour location',
+      location: eventMeta.location || event.address || event.city_name || event.country,
       imageUrl: eventMeta.imageUrl || event.coverImage || '',
       targetCoordinates: eventCoordinate,
-      captureCoordinates,
+      captureCoordinates: captureCoordinates || undefined,
       captureDistanceMeters,
+      verificationRadius: VISIT_DISTANCE_THRESHOLD_METERS,
     }, imageUri);
     const eventLocationMatched = Boolean(
       captureCoordinates &&
@@ -2817,17 +2967,15 @@ const MyTourStart = () => {
     );
 
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && (!aiMatch.matched || !eventLocationMatched)) {
-      CustomAlert.alert(
-        'Verification Required',
-        getVerificationFailureMessage(
+      return {
+        verified: false,
+        reason: aiMatch.reason || getVerificationFailureMessage(
           event.title,
           aiMatch.matched,
           eventLocationMatched,
           Boolean(captureCoordinates),
         ),
-        [{ text: 'Retake Photo', style: 'cancel' }]
-      );
-      return false;
+      } satisfies VerificationFailure;
     }
 
     try {
@@ -2979,20 +3127,30 @@ const MyTourStart = () => {
     const placeMeta = selectedStop.place as any;
     const captureCoordinates = ALLOW_ANY_IMAGE_FOR_TESTING
       ? currentLocation || selectedStop.coordinate
-      : await getCurrentPositionAsync().catch(() => currentLocation || undefined);
+      : await getCoordinatesForVerification();
     const captureDistanceMeters = captureCoordinates
       ? distanceMetersBetween(captureCoordinates, selectedStop.coordinate)
       : undefined;
+    if (!ALLOW_ANY_IMAGE_FOR_TESTING && !captureCoordinates) {
+      return {
+        verified: false,
+        reason: 'Unable to get your current location. Please enable location access and try again.',
+      } satisfies VerificationFailure;
+    }
+    if (!ALLOW_ANY_IMAGE_FOR_TESTING && captureDistanceMeters !== undefined && captureDistanceMeters > VISIT_DISTANCE_THRESHOLD_METERS) {
+      return {
+        verified: false,
+        reason: `You must be within 100 meters of ${selectedStop.place.name} to verify this location.`,
+      } satisfies VerificationFailure;
+    }
     const aiMatch = await verifyPlaceImageMatch({
       title: selectedStop.place.name,
-      description: selectedStop.place.description || selectedStop.place.address || selectedStop.title,
-      category: placeMeta.category || 'Place',
-      address: selectedStop.place.address || selectedStop.title,
-      location: selectedStop.place.city_name || selectedStop.place.country || selectedStop.title,
+      location: selectedStop.place.address || selectedStop.place.city_name || selectedStop.place.country,
       imageUrl: selectedStop.place.imageUrl || placeMeta.image || placeMeta.coverImage || '',
       targetCoordinates: selectedStop.coordinate,
-      captureCoordinates,
+      captureCoordinates: captureCoordinates || undefined,
       captureDistanceMeters,
+      verificationRadius: VISIT_DISTANCE_THRESHOLD_METERS,
     }, imageUri);
 
     const placeLocationMatched = Boolean(
@@ -3002,17 +3160,15 @@ const MyTourStart = () => {
     );
 
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && (!aiMatch.matched || !placeLocationMatched)) {
-      CustomAlert.alert(
-        'Verification Required',
-        getVerificationFailureMessage(
+      return {
+        verified: false,
+        reason: aiMatch.reason || getVerificationFailureMessage(
           selectedStop.place.name,
           aiMatch.matched,
           placeLocationMatched,
           Boolean(captureCoordinates),
         ),
-        [{ text: 'Retake Photo', style: 'cancel' }]
-      );
-      return false;
+      } satisfies VerificationFailure;
     }
 
     try {
@@ -3206,7 +3362,17 @@ const MyTourStart = () => {
 
               {routeLine.features.length > 0 && (
                 <Mapbox.ShapeSource id="tourRouteLine" shape={routeLine}>
-                  <Mapbox.LineLayer id="tourRouteLineLayer" style={routeLineLayerStyle} />
+                  <Mapbox.LineLayer id="tourRouteLineLayer" style={
+                    (tourStarted || hasVisitedProgress)
+                      ? futureRouteLineLayerStyle
+                      : routeLineLayerStyle
+                  } />
+                </Mapbox.ShapeSource>
+              )}
+
+              {activeRouteLine.features.length > 0 && (
+                <Mapbox.ShapeSource id="activePendingRouteLine" shape={activeRouteLine}>
+                  <Mapbox.LineLayer id="activePendingRouteLineLayer" style={routeLineLayerStyle} />
                 </Mapbox.ShapeSource>
               )}
 
@@ -3511,7 +3677,7 @@ const MyTourStart = () => {
                       Boolean(placeProgress[selectedStop.id]?.visited)) &&
                     styles.confirmBtnDisabled,
                   ]}
-                  onPress={() => {
+                  onPress={async () => {
                     if (!selectedStopIsNearestPending) {
                       const nearestTitle = nearestPendingStop?.title || 'the nearest location';
                       showInfo(
@@ -3521,6 +3687,8 @@ const MyTourStart = () => {
                       return;
                     }
 
+                    const coords = await prepareVerification(selectedStop.title, selectedStop.coordinate);
+                    if (!coords) return;
                     setScanForEvent(false);
                     setScanVisible(true);
                   }}
@@ -3620,7 +3788,7 @@ const MyTourStart = () => {
               !eventProgress[selectedEvent.id]?.attended &&
               !eventProgress[selectedEvent.id]?.expired &&
               !isEventTimeExpired(selectedEvent)
-              ? () => {
+              ? async () => {
                 if (
                   nearestPendingStop &&
                   nearestPendingStop.id !== selectedEvent.id
@@ -3631,6 +3799,12 @@ const MyTourStart = () => {
                   );
                   return;
                 }
+                const eventCoordinate: [number, number] = [
+                  Number(selectedEvent.coordinates?.longitude || 0),
+                  Number(selectedEvent.coordinates?.latitude || 0),
+                ];
+                const coords = await prepareVerification(selectedEvent.title, eventCoordinate);
+                if (!coords) return;
                 setScanForEvent(true);
                 setScanTargetEvent(selectedEvent);
                 if (Platform.OS === 'ios') {
