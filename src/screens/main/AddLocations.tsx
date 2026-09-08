@@ -4,8 +4,6 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  TouchableOpacity,
-  Image,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
@@ -52,7 +50,6 @@ const AddLocations = () => {
   const [searchText, setSearchText] = useState('');
   const [places, setPlaces] = useState<FirebasePlace[]>([]);
   const [loading, setLoading] = useState(false);
-  const [cityOnly, setCityOnly] = useState(false);
   const selectedPlaceIds = useMemo(
     () => new Set([...existingPlaceIds, ...extraPlaceIds]),
     [existingPlaceIds, extraPlaceIds]
@@ -62,13 +59,15 @@ const AddLocations = () => {
     setLoading(true);
 
     const timeout = setTimeout(() => {
-      fetchPlacesForLocation(cityLabel, searchText, { cityOnly })
+      // Add Locations is always scoped to the city selected for this tour.
+      // Do not expose the global/all-places mode here.
+      fetchPlacesForLocation(cityLabel, searchText, { cityOnly: true })
         .then(setPlaces)
         .finally(() => setLoading(false));
     }, 300);
 
     return () => clearTimeout(timeout);
-  }, [cityLabel, cityOnly, searchText]);
+  }, [cityLabel, searchText]);
 
   const title = useMemo(() => {
     if (!cityLabel) {
@@ -99,12 +98,6 @@ const AddLocations = () => {
               </View>
             ) : null}
 
-            <View style={[styles.pill, styles.filterModePill]}>
-              <Text style={styles.pillText}>
-                {cityOnly ? 'Selected City Only' : 'All Places'}
-              </Text>
-            </View>
-
             <Text style={styles.title}>{title}</Text>
           </View>
 
@@ -123,60 +116,7 @@ const AddLocations = () => {
                 const isAlreadyAdded = selectedPlaceIds.has(item.id);
 
                 return (
-                  <TouchableOpacity
-                    activeOpacity={0.9}
-                    style={isAlreadyAdded && styles.selectedCard}
-                    onPress={() => {
-                      if (isAlreadyAdded) {
-                        showInfo(
-                          'Location already added',
-                          `${item.name} is already in your tour.`
-                        );
-                        return;
-                      }
-
-                      showSuccess(
-                        'Location added',
-                        `${item.name} has been added to your tour.`
-                      );
-                      navigation.goBack();
-
-                    setTimeout(() => {
-                      if (fromScreen === 'TourSuggestion') {
-                        navigation.navigate({
-                          name: 'TourSuggestion',
-                          params: {
-                            addedPlaceId: item.id,
-                            timestamp: Date.now(),
-                          },
-                          merge: true,
-                        });
-                        return;
-                      }
-
-                      if (fromScreen === 'MyTourStart') {
-                        navigation.navigate('MyTourStart', {
-                          routeId,
-                          routeName,
-                          tourName,
-                          cityLabel,
-                          addedPlaceId: item.id,
-                          extraPlaceIds,
-                          removedPlaceIds,
-                          tourId,
-                          isEdited: true,
-                        });
-                        return;
-                      }
-
-                      navigation.navigate('MyTour', {
-                        routeId,
-                        addedPlaceId: item.id,
-                        timestamp: Date.now(),
-                      });
-                    }, 100);
-                    }}
-                  >
+                  <View style={isAlreadyAdded ? styles.selectedCard : undefined}>
                     <PlacesArroundCard
                       id={item.id}
                       title={item.name}
@@ -185,13 +125,63 @@ const AddLocations = () => {
                       image={item.imageUrl || 'https://picsum.photos/200'}
                       location={[item.city_name, item.country].filter(Boolean).join(', ')}
                       category="Place"
+                      onPress={() => {
+                        if (isAlreadyAdded) {
+                          showInfo(
+                            'Location already added',
+                            `${item.name} is already in your tour.`
+                          );
+                          return;
+                        }
+
+                        showSuccess(
+                          'Location added',
+                          `${item.name} has been added to your tour.`
+                        );
+                        navigation.goBack();
+
+                        setTimeout(() => {
+                          if (fromScreen === 'TourSuggestion') {
+                            navigation.navigate({
+                              name: 'TourSuggestion',
+                              params: {
+                                addedPlaceId: item.id,
+                                timestamp: Date.now(),
+                              },
+                              merge: true,
+                            });
+                            return;
+                          }
+
+                          if (fromScreen === 'MyTourStart') {
+                            navigation.navigate('MyTourStart', {
+                              routeId,
+                              routeName,
+                              tourName,
+                              cityLabel,
+                              addedPlaceId: item.id,
+                              extraPlaceIds,
+                              removedPlaceIds,
+                              tourId,
+                              isEdited: true,
+                            });
+                            return;
+                          }
+
+                          navigation.navigate('MyTour', {
+                            routeId,
+                            addedPlaceId: item.id,
+                            timestamp: Date.now(),
+                          });
+                        }, 100);
+                      }}
                     />
                     {isAlreadyAdded ? (
                       <View style={styles.selectedBadge} pointerEvents="none">
                         <Text style={styles.selectedBadgeText}>Already added</Text>
                       </View>
                     ) : null}
-                  </TouchableOpacity>
+                  </View>
                 );
               }}
               ListEmptyComponent={
@@ -247,9 +237,6 @@ const styles = StyleSheet.create({
     color: COLORS.WHITE,
     fontSize: FONT_SIZE.CARD_TEXT,
     fontFamily: FONT_FAMILY.InterTight_Medium,
-  },
-  filterModePill: {
-    marginTop: -2,
   },
   title: {
     fontSize: FONT_SIZE.LARGE_TEXT,

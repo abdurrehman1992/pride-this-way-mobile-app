@@ -7,6 +7,9 @@ export type PlaceSuggestion = {
     subtitle: string;
     country: string;
     countryCode: string;
+    /** Actual city and administrative region for city-only search results. */
+    city?: string;
+    region?: string;
     coordinates: [number, number];
     placeTypes: string[];
 };
@@ -163,6 +166,15 @@ function featureToSuggestion(
     const { country, countryCode } = parseCountryFromContext(feature);
     const { title, subtitle } = buildLines(feature, country);
     const placeTypes = feature.place_type || [];
+    const cityContext = feature.context?.find(
+        (ctx) => ctx.id.startsWith('place.') || ctx.id.startsWith('locality.')
+    )?.text;
+    const city = placeTypes.includes('place') || placeTypes.includes('locality')
+        ? title || feature.text
+        : cityContext || undefined;
+    const region = feature.context?.find(
+        (ctx) => ctx.id.startsWith('region.')
+    )?.text;
 
     return {
         id: feature.id,
@@ -171,6 +183,8 @@ function featureToSuggestion(
         subtitle,
         country,
         countryCode,
+        city,
+        region,
         coordinates: [lng, lat],
         placeTypes,
     };

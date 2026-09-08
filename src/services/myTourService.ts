@@ -90,6 +90,7 @@ export type LocationSuggestion = {
   id: string;
   label: string;
   city?: string;
+  region?: string;
   country?: string;
   coordinates?: [number, number];
 };
@@ -420,11 +421,16 @@ const routeMatchesLocation = (
     return true;
   }
 
-  if (locationMatches(locationLabel, route.city_name, route.country)) {
-    return true;
+  const routeCity = normalizeText(route.city_name);
+  const requestedCity = normalizeText(locationLabel.split(',')[0]);
+
+  // A city selection must be authoritative. Do not let a shared country
+  // (for example, Austin and Denver both being in the United States) make a
+  // route from the wrong city eligible.
+  if (requestedCity && routeCity) {
+    return routeCity === requestedCity;
   }
 
-  const routeCity = normalizeText(route.city_name);
   const addressParts = locationLabel
     .split(',')
     .map((part) => normalizeText(part))
@@ -449,7 +455,7 @@ const routeMatchesLocation = (
     return true;
   }
 
-  const cityOnly = normalizeText(locationLabel.split(',')[0]);
+  const cityOnly = requestedCity;
   if (cityOnly) {
     if (routeCity === cityOnly) {
       return true;
@@ -629,21 +635,40 @@ export const searchLocationSuggestions = async (
   });
 
   const seen = new Set<string>();
+  const queryCity = normalizeText(trimmed.split(',')[0]);
 
   return suggestions
+    // Tour recommendations are city-based only. Do not show neighborhoods,
+    // housing schemes, districts, POIs or addresses, even when Mapbox also
+    // provides their parent city (for example, "Bahria Town Lahore").
+    .filter((item) => item.placeTypes.length === 1 && item.placeTypes[0] === 'place')
     .map((item) => {
-      const city = item.title;
+      const city = item.title.trim();
+      const region = item.region?.trim() || '';
       const country =
         item.country || item.subtitle.split(',').pop()?.trim() || '';
-      const label = buildLocationLabel(city, country);
+      const label = [city, region, country].filter(Boolean).join(', ');
 
       return {
         id: item.id,
         label,
         city,
+        region,
         country,
         coordinates: item.coordinates,
       };
+    })
+    .filter((item) => {
+      const city = normalizeText(item.city);
+      if (!city || !queryCity) return false;
+      if (city === queryCity) return true;
+
+      // While typing, allow a short city prefix, but avoid near matches such
+      // as "Lahorefla" when the user searched for "Lahore".
+      return (
+        queryCity.length < 6 && city.startsWith(queryCity) ||
+        city.startsWith(queryCity) && city.length - queryCity.length <= 2
+      );
     })
     .filter((item) => {
       if (!item.label || seen.has(item.label.toLowerCase())) {
@@ -813,21 +838,37 @@ export const fetchRecommendedRoutes = async ({
   selectedTagIds: string[];
   userId?: string;
 }): Promise<RecommendedRoute[]> => {
-  const [routesSnapshot, placesMap, favoritePlaceIds] =
+  const [routesSnapshot, placesMap, favoritePlaceIds, tags] =
     await Promise.all([
       firestore()
         .collection(ROUTES_COLLECTION)
-        .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>,
+        .get(),
       fetchAllPlacesMap(),
       fetchUserFavoritePlaceIds(userId),
+      fetchTourTags().catch(() => []),
     ]);
 
   const allPlaces = Array.from(placesMap.values()).filter(
     (place: FirebasePlace) => place.isActive !== false
   );
   const favoritePlaceIdSet = new Set(favoritePlaceIds);
+  // Routes created by different data flows may store either the tag document
+  // id or the tag name. Resolve both forms to one canonical key before
+  // counting matches.
+  const tagAliases = new Map<string, string>();
+  tags.forEach((tag) => {
+    const canonicalId = normalizeText(tag.id);
+    if (!canonicalId) return;
+    tagAliases.set(canonicalId, canonicalId);
+    tagAliases.set(normalizeText(tag.name), canonicalId);
+  });
+  const canonicalTag = (value?: string | null) => {
+    const normalized = normalizeText(value);
+    return normalized ? tagAliases.get(normalized) || normalized : '';
+  };
+
   const normalizedSelectedTagIds = Array.from(
-    new Set(selectedTagIds.map((tagId) => normalizeTagId(tagId)).filter(Boolean))
+    new Set(selectedTagIds.map(canonicalTag).filter(Boolean))
   );
   const selectedTagIdSet = new Set(normalizedSelectedTagIds);
 
@@ -845,7 +886,9 @@ export const fetchRecommendedRoutes = async ({
       //   .map((eventId) => eventsMap.get(eventId))
       //   .filter((event): event is FirebaseEvent => Boolean(event && event.isActive !== false));
       const events: FirebaseEvent[] = [];
-      const routeTagIds = extractRoutePreferenceTagIds(route);
+      const routeTagIds = extractRoutePreferenceTagIds(route)
+        .map(canonicalTag)
+        .filter(Boolean);
       const selectedIds = new Set(places.map((place) => place.id));
       const favoritePlaces = allPlaces
         .filter((place) => favoritePlaceIdSet.has(place.id))
@@ -872,8 +915,19 @@ export const fetchRecommendedRoutes = async ({
           .sort((a, b) => (b.rating || 0) - (a.rating || 0))[0] || null;
 
       const matchedTagCount = routeTagIds.filter((tagId) =>
-        selectedTagIdSet.has(normalizeTagId(tagId))
+        selectedTagIdSet.has(tagId)
       ).length;
+
+      // Prefer the route's persisted stop count. Using only the successfully
+      // loaded places can under-count a route when one place document is
+      // missing/inactive, which breaks the required tie-breaker.
+      const persistedLocationCount = Number(route.totalStops) > 0
+        ? Number(route.totalStops)
+        : (route.selected_places || []).length + (route.event_ids || []).length;
+      const locationCount = Math.max(
+        persistedLocationCount,
+        places.length + events.length
+      );
 
       return {
         route,
@@ -882,6 +936,7 @@ export const fetchRecommendedRoutes = async ({
         favoritePlace: favoritePlaces[0] || fallbackPlace,
         favoritePlaces,
         matchedTagCount,
+        locationCount,
         locationMatched: routeMatchesLocation(locationLabel, route, places, events),
       };
     });
@@ -909,7 +964,7 @@ export const fetchRecommendedRoutes = async ({
         return tagMatchDiff;
       }
 
-      const locationCountDiff = b.places.length - a.places.length;
+      const locationCountDiff = b.locationCount - a.locationCount;
       if (locationCountDiff !== 0) {
         return locationCountDiff;
       }
@@ -923,6 +978,19 @@ export const fetchRecommendedRoutes = async ({
       return a.originalIndex - b.originalIndex;
     })
     .map(({ locationMatched: _locationMatched, originalIndex: _originalIndex, ...item }) => item);
+
+  console.log('[myTourService] route recommendation ranking:', {
+    selectedTagIds: normalizedSelectedTagIds,
+    selectedLocation: locationLabel,
+    routes: sorted.map((item) => ({
+    name: item.route.name,
+    city: item.route.city_name,
+    matchedTagCount: item.matchedTagCount,
+    locationCount: item.locationCount,
+    createdAt: item.route.createdAt,
+    updatedAt: item.route.updatedAt,
+    })),
+  });
 
   return sorted.slice(0, 1);
 };
@@ -1594,6 +1662,12 @@ export const clearUserFavoritesForDeletedTour = async ({
 }) => {
   const userRef = firestore().collection('users').doc(userId);
   const payload: Record<string, unknown> = {
+    // Keep the user's denormalized tour index in sync with the deleted
+    // document. Otherwise other screens can keep showing the old tour.
+    tours: firestore.FieldValue.arrayRemove(
+      tourId,
+      ...(routeId ? [routeId] : [])
+    ),
     favoriteTours: firestore.FieldValue.arrayRemove(
       tourId,
       ...(routeId ? [routeId] : [])
@@ -1626,6 +1700,25 @@ export const deleteUserTour = async (
     .collection(TOURS_COLLECTION)
     .doc(tourId)
     .get();
+
+  // A user may only delete their own saved-tour document. Never delete the
+  // shared route template from `routes`, and never delete another user's tour.
+  if (options?.userId) {
+    if (!tourDoc.exists) {
+      // The document is already gone; still clean stale references for this
+      // user so every app screen converges to the same state.
+      await clearUserFavoritesForDeletedTour({
+        userId: options.userId,
+        tourId,
+      });
+      return;
+    }
+
+    const ownerId = tourDoc.data()?.user_id;
+    if (ownerId !== options.userId) {
+      throw new Error('You can only delete your own tour.');
+    }
+  }
 
   if (tourDoc.exists) {
     const data = tourDoc.data() || {};

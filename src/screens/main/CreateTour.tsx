@@ -196,6 +196,7 @@ const CreateTour: React.FC = () => {
                 visible={modals.location}
                 title="Select Your Location"
                 locations={locationSuggestions}
+                cityOnlyResults
                 searchValue={locationSearch}
                 onSearchChange={setLocationSearch}
                 loadingSuggestions={loadingSuggestions}

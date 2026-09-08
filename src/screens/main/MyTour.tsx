@@ -180,6 +180,7 @@ const MyTour = () => {
     const localStatusOverrides = useRef<Map<string, { status: string; updatedAt: string }>>(
         new Map()
     );
+    const deletedTourIds = useRef<Set<string>>(new Set());
     const [tags, setTags] = useState<FirebaseTag[]>([]);
     const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
     const [tourName, setTourName] = useState('');
@@ -390,7 +391,9 @@ const MyTour = () => {
                     }
                 }
 
-            const cards = tours.map((tour) => {
+            const cards = tours
+                .filter((tour) => !deletedTourIds.current.has(tour.id))
+                .map((tour) => {
                 const details = routeDetailsMap.get(tour.route_id);
 
                 const fallbackRoute = details || {
@@ -459,7 +462,7 @@ const MyTour = () => {
                     createdAt: tour.createdAt || tour.updatedAt || '',
                     places: tourPlaces,
                 } satisfies RouteCardState;
-            });
+                });
 
             const reconciled = cards.map((card) => {
                 if (!card.tourId) return card;
@@ -651,8 +654,17 @@ const MyTour = () => {
                 text: 'Delete',
                 style: 'destructive',
                 onPress: async () => {
+                    if (tour.tourId) {
+                        deletedTourIds.current.add(tour.tourId);
+                    }
                     setSavedTourCards((prev) =>
-                        normalizeTourCards(prev.filter((card) => card.cardId !== tour.cardId))
+                        normalizeTourCards(
+                            prev.filter((card) =>
+                                tour.tourId
+                                    ? card.tourId !== tour.tourId
+                                    : card.cardId !== tour.cardId
+                            )
+                        )
                     );
                     showInfo('Tour Removed', 'This tour has been removed.');
 
@@ -663,6 +675,9 @@ const MyTour = () => {
                         const errorMessage =
                             error instanceof Error ? error.message : 'Unable to remove this tour right now.';
                         showError('Delete Failed', errorMessage);
+                        if (tour.tourId) {
+                            deletedTourIds.current.delete(tour.tourId);
+                        }
                         loadSavedTours();
                     }
                 },
@@ -989,7 +1004,10 @@ const MyTour = () => {
                     isFavorite(tour.tourId || tour.route.id)
                 );
             default:
-                return allCards.filter((tour) => tour.status !== 'scheduled');
+                // "All" must include scheduled tours as well. Hiding them
+                // here made the screen look empty while tour records still
+                // existed, leaving the tabs visible with no cards.
+                return allCards;
         }
     }, [activeFilter, allCards, isFavorite]);
 
@@ -1391,6 +1409,7 @@ const MyTour = () => {
                 visible={modals.location}
                 title="Select Your Location"
                 locations={locationSuggestions}
+                cityOnlyResults
                 searchValue={locationSearch}
                 onSearchChange={setLocationSearch}
                 loadingSuggestions={loadingSuggestions}

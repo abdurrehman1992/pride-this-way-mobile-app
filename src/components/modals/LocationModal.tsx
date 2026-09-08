@@ -12,7 +12,8 @@ import {
     ActivityIndicator,
     Animated,
     PanResponder,
-    KeyboardAvoidingView
+    KeyboardAvoidingView,
+    StatusBar,
 } from "react-native";
 
 import {
@@ -21,6 +22,7 @@ import {
     getAddressFromCoords,
 } from "../../utils/location";
 import { suggestLocations } from "../../services/aiService";
+import { searchLocationSuggestions } from "../../services/myTourService";
 import { CustomAlert } from "../../utils/CustomAlert";
 
 import {
@@ -46,6 +48,7 @@ interface Props {
     primaryLabel?: string;
     secondaryLabel?: string;
     onSecondaryPress?: () => void;
+    cityOnlyResults?: boolean;
 }
 const DEFAULT_LOCATION_LIST = [
     "San Diego, CA",
@@ -58,6 +61,37 @@ const DEFAULT_LOCATION_LIST = [
     "Austin, TX",
 ];
 
+// Tour recommendations require a real city, not a neighborhood or housing
+// scheme. Keep the final guard here as well as in the search service so stale
+// or cached suggestions can never reach the selectable list.
+const isCityOnlyLabel = (value: string) => {
+    const parts = value
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    if (parts.length < 3) return false;
+
+    const firstPart = parts[0].toLowerCase();
+    const areaWords = [
+        'bahria',
+        'dha',
+        'defence',
+        'model town',
+        'phase ',
+        'township',
+        'colony',
+        'society',
+        'housing',
+        'sector ',
+        'block ',
+        'village',
+        'neighborhood',
+        'district',
+    ];
+
+    return !areaWords.some((word) => firstPart.includes(word));
+};
+
 const LocationModal: React.FC<Props> = ({
     visible,
     onClose,
@@ -67,6 +101,7 @@ const LocationModal: React.FC<Props> = ({
     searchValue,
     onSearchChange,
     loadingSuggestions,
+    cityOnlyResults = false,
 }) => {
     const [internalSearch, setInternalSearch] = useState("");
     const [selected, setSelected] = useState("");
@@ -135,8 +170,15 @@ const LocationModal: React.FC<Props> = ({
         setAiLoading(true);
         const handle = setTimeout(async () => {
             try {
-                const cities = await suggestLocations(search);
-                if (!cancelled) setAiCities(cities);
+                if (search.trim()) {
+                    // Use the same strict city-only geocoder as tour creation.
+                    // The AI autocomplete can return neighborhoods/areas.
+                    const results = await searchLocationSuggestions(search);
+                    if (!cancelled) setAiCities(results.map((item) => item.label));
+                } else {
+                    const cities = await suggestLocations('');
+                    if (!cancelled) setAiCities(cities);
+                }
             } catch (err) {
                 console.warn("[LocationModal] suggestLocations failed", err);
                 if (!cancelled) setAiCities(DEFAULT_LOCATION_LIST);
@@ -189,14 +231,15 @@ const LocationModal: React.FC<Props> = ({
 
     const filteredLocations = useMemo(() => {
         if (useExternal) {
-            const list = locations as string[];
+            const rawList = locations as string[];
+            const list = cityOnlyResults ? rawList.filter(isCityOnlyLabel) : rawList;
             if (!search.trim()) return list;
             return list.filter((item) =>
                 item.toLowerCase().includes(search.toLowerCase())
             );
         }
-        return aiCities;
-    }, [locations, search, useExternal, aiCities]);
+        return cityOnlyResults ? aiCities.filter(isCityOnlyLabel) : aiCities;
+    }, [locations, search, useExternal, aiCities, cityOnlyResults]);
 
     const showLoadingSuggestions = useExternal
         ? !!loadingSuggestions
@@ -291,7 +334,20 @@ const LocationModal: React.FC<Props> = ({
     };
 
     return (
-        <Modal visible={visible} transparent animationType="fade" onRequestClose={closeWithAnimation}>
+        <Modal
+            visible={visible}
+            transparent
+            statusBarTranslucent={Platform.OS === 'android'}
+            animationType="fade"
+            onRequestClose={closeWithAnimation}
+        >
+            {Platform.OS === 'android' ? (
+                <StatusBar
+                    translucent
+                    backgroundColor="transparent"
+                    barStyle="light-content"
+                />
+            ) : null}
             <KeyboardAvoidingView
                 behavior={Platform.OS === "ios" ? "padding" : "height"}
                 keyboardVerticalOffset={0}
@@ -398,7 +454,13 @@ const LocationModal: React.FC<Props> = ({
                                         onPress={() => handleSelect(item)}
                                     >
                                         <SelectedLocationIcon width={36} height={36} />
-                                        <Text style={styles.locationText}>{item}</Text>
+                                        <Text
+                                            style={styles.locationText}
+                                            numberOfLines={2}
+                                            ellipsizeMode="tail"
+                                        >
+                                            {item}
+                                        </Text>
                                     </TouchableOpacity>
                                 ))}
                             </>
@@ -532,9 +594,11 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.InterTight_Regular,
     },
     locationText: {
+        flex: 1,
         fontSize: FONT_SIZE.TEXT,
         fontFamily: FONT_FAMILY.InterTight_Medium,
         color: COLORS.TEXT_PRIMARY,
+        lineHeight: 24,
     },
     primaryBtnFull: {
         width: "100%",

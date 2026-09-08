@@ -516,6 +516,7 @@ const MyTourStart = () => {
   // native MapView immediately on first launch; waiting for the native token
   // promise here can leave a brand-new install stuck on the blue fallback.
   const [mapReady, setMapReady] = useState(Boolean(Config.MAPBOX_TOKEN));
+  const [nativeMapReady, setNativeMapReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [roadSegments, setRoadSegments] = useState<[number, number][][]>([]);
   const [airSegments, setAirSegments] = useState<[number, number][][]>([]);
@@ -1847,7 +1848,7 @@ const MyTourStart = () => {
   // Follow-mode camera tracking — smoothly pan to user while tour is active.
   // Camera stays north-up; the user pin itself rotates with GPS heading.
   useEffect(() => {
-    if (!mapReady || !tourStarted || followMode !== 'follow' || !currentLocation) return;
+    if (!mapReady || !nativeMapReady || !tourStarted || followMode !== 'follow' || !currentLocation) return;
     const heading =
       typeof userHeading === 'number' && userHeading >= 0 && userHeading <= 360
         ? userHeading
@@ -1859,7 +1860,7 @@ const MyTourStart = () => {
       animationDuration: 250,
       animationMode: 'easeTo',
     });
-  }, [currentLocation, followMode, mapReady, tourStarted, userHeading]);
+  }, [currentLocation, followMode, mapReady, nativeMapReady, tourStarted, userHeading]);
 
   // On next-stop transition, briefly frame both user and the new pending stop
   // before resuming follow mode.
@@ -3321,6 +3322,18 @@ const MyTourStart = () => {
               scrollEnabled
               zoomEnabled
               surfaceView={false}
+              onDidFinishLoadingMap={() => {
+                setNativeMapReady(true);
+              }}
+              onDidFinishLoadingStyle={() => {
+                // On a fresh Android install the style can finish after the
+                // map event. Either event is sufficient to safely issue the
+                // first camera update.
+                setNativeMapReady(true);
+              }}
+              onMapLoadingError={() => {
+                console.warn('[MyTourStart] Mapbox loading error');
+              }}
               onCameraChanged={() => {
                 if (selectedStop) {
                   updateSelectedStopPosition(selectedStop).catch(() => { });
