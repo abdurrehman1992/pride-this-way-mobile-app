@@ -40,6 +40,7 @@ type PlacesAroundCardProps = {
   hideRating?: boolean;
   hideLocation?: boolean;
   hideDivider?: boolean;
+  timeColor?: string;
   onPress?: () => void;
 };
 
@@ -58,6 +59,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   hideRating = false,
   hideLocation = false,
   hideDivider = false,
+  timeColor = COLORS.TEXT_GREEN,
   onPress,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
@@ -69,7 +71,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
     imageFailed || !image
       ? undefined
       : typeof image === 'string'
-      ? { uri: sanitizeImageUrl(image, title) || image, cache: 'force-cache' }
+      ? { uri: sanitizeImageUrl(image) || image, cache: 'force-cache' }
       : image;
 
   useEffect(() => {
@@ -81,14 +83,14 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
       const { Image } = require('react-native');
       const tryPrefetch = async (url: string) => {
         try {
-          const sanitized = sanitizeImageUrl(url, title) || url;
+          const sanitized = sanitizeImageUrl(url) || url;
           const ok = await Image.prefetch(sanitized);
           if (ok) return true;
         } catch (err) {}
         try {
           const resp = await fetch(url);
           const finalUrl = resp.url || url;
-          const sanitized2 = sanitizeImageUrl(finalUrl, title) || finalUrl;
+          const sanitized2 = sanitizeImageUrl(finalUrl) || finalUrl;
           try {
             const ok2 = await Image.prefetch(sanitized2);
             if (ok2) return true;
@@ -162,12 +164,10 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   const showRating = Boolean(rating) && !hideRating;
   const showTime = Boolean(time) && !hideTime;
   const showLocation = Boolean(location) && !hideLocation;
-  const visibleCount = (showRating ? 1 : 0) + (showLocation ? 1 : 0) + (showTime ? 1 : 0);
+  const visibleCount = (showLocation ? 1 : 0) + (showTime ? 1 : 0);
   const hasBottom = visibleCount > 0;
   const containerHeight = hasBottom ? 126 : 96;
-  const displayTime = typeof time === "string"
-    ? time.replace(/^\s*Open\s*(?:[•\-]|\s)*\s*/i, "").trim()
-    : time;
+  const displayTime = time;
 
   return (
     <TouchableOpacity
@@ -201,6 +201,12 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
 
           <View style={styles.titleRow}>
             <Text style={styles.title} numberOfLines={1}>{title}</Text>
+            {showRating ? (
+              <View style={styles.titleRating}>
+                <StarIcon width={12} height={12} />
+                <Text style={styles.titleRatingText}>{rating}</Text>
+              </View>
+            ) : null}
           </View>
 
           <Text style={styles.description} numberOfLines={1}>{description}</Text>
@@ -218,24 +224,17 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
           const justify = visibleCount === 1 ? 'flex-start' : 'space-between';
           return (
             <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact, { justifyContent: justify as any }]}>
-                {showRating ? (
-                <View style={styles.infoItem}>
-                  <StarIcon width={12} height={12} />
-                  <Text style={styles.infoText}>{rating}</Text>
-                </View>
-              ) : null}
-
                 {showLocation ? (
-                <View style={styles.infoItem}>
+                <View style={[styles.infoItem, styles.locationInfoItem]}>
                   <LocationIcon width={10} height={12} />
-                  <Text style={styles.infoText}>{location}</Text>
+                  <Text style={styles.infoText} numberOfLines={1} ellipsizeMode="tail">{location}</Text>
                 </View>
               ) : null}
 
               {showTime ? (
-                <View style={styles.infoItem}>
-                  <TimeIcon width={13} height={13} />
-                  <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{displayTime}</Text>
+                <View style={[styles.infoItem, styles.timeInfoItem]}>
+                  <TimeIcon width={13} height={13} color={timeColor} />
+                  <Text style={[styles.infoText, styles.timeInfoText, { color: timeColor }]}>{displayTime}</Text>
                 </View>
               ) : null}
             </View>
@@ -308,6 +307,20 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.InterTight_Medium,
   },
 
+  titleRating: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 24,
+    paddingLeft: 4,
+  },
+
+  titleRatingText: {
+    fontSize: FONT_SIZE.CARD_TEXT,
+    color: COLORS.TEXT_PRIMARY,
+    marginLeft: 4,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+  },
+
 
   description: {
     fontSize: FONT_SIZE.CARD_TEXT,
@@ -335,6 +348,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 14,
     height: 43,
+    gap: 8,
   },
 
   bottomSectionCompact: {
@@ -344,6 +358,16 @@ const styles = StyleSheet.create({
   infoItem: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 1,
+    minWidth: 0,
+  },
+
+  locationInfoItem: {
+    flex: 1,
+  },
+
+  timeInfoItem: {
+    flexShrink: 0,
   },
 
   infoText: {
@@ -351,5 +375,10 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     color: COLORS.TEXT_PRIMARY,
     fontFamily: FONT_FAMILY.InterTight_Regular,
+    flexShrink: 1,
+  },
+
+  timeInfoText: {
+    flexShrink: 0,
   },
 });

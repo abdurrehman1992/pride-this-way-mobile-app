@@ -101,6 +101,8 @@ export type SavedTourEventEntry = {
   place_id?: string;
   visited: boolean;
   visitedAt: string | null;
+  verifiedByGemini?: boolean;
+  verificationConfidence?: number;
   pointsEarned: number;
   proofImageUri?: string | null;
   addedByUser?: boolean;
@@ -118,6 +120,8 @@ export type SavedTourPlace = {
   event_id?: string;
   visited: boolean;
   visitedAt: string | null;
+  verifiedByGemini?: boolean;
+  verificationConfidence?: number;
   pointsEarned: number;
   proofImageUri?: string | null;
   addedByUser?: boolean;
@@ -234,6 +238,23 @@ const toArray = <T,>(value: unknown): T[] => {
   return value as T[];
 };
 
+// Firestore rejects `undefined` anywhere inside a document. Optional tour
+// progress fields are intentionally absent for a brand-new tour, so strip
+// those values before every save instead of sending an invalid payload.
+const removeUndefinedDeep = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value.map(removeUndefinedDeep);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, removeUndefinedDeep(entry)])
+    );
+  }
+  return value;
+};
+
 const normalizeText = (value?: string | null) =>
   (value || '')
     .toLowerCase()
@@ -332,6 +353,10 @@ const parseSavedTour = (
         event_id: String(item.event_id),
         visited: Boolean(item.visited || item.attended),
         visitedAt: item.visitedAt || null,
+        verifiedByGemini: item.verifiedByGemini === undefined
+          ? undefined
+          : Boolean(item.verifiedByGemini),
+        verificationConfidence: Number(item.verificationConfidence || 0),
         pointsEarned: Number(item.pointsEarned || 0),
         proofImageUri: item.proofImageUri || null,
         addedByUser: Boolean(item.addedByUser),
@@ -351,6 +376,10 @@ const parseSavedTour = (
       place_id: item.place_id || '',
       visited: Boolean(item.visited),
       visitedAt: item.visitedAt || null,
+      verifiedByGemini: item.verifiedByGemini === undefined
+        ? undefined
+        : Boolean(item.verifiedByGemini),
+      verificationConfidence: Number(item.verificationConfidence || 0),
       pointsEarned: Number(item.pointsEarned || 0),
       proofImageUri: item.proofImageUri || null,
       addedByUser: Boolean(item.addedByUser),
@@ -632,6 +661,8 @@ export const searchLocationSuggestions = async (
 
   const suggestions = await searchPlaceSuggestions(trimmed, {
     limit: 10,
+    cityOnly: true,
+    anchorInnerCity: false,
   });
 
   const seen = new Set<string>();
@@ -1206,6 +1237,8 @@ export const saveUserTour = async ({
     {
       visited: boolean;
       visitedAt?: string | null;
+      verifiedByGemini?: boolean;
+      verificationConfidence?: number;
       proofImageUri?: string | null;
       pointsEarned?: number;
       addedByUser?: boolean;
@@ -1244,6 +1277,8 @@ export const saveUserTour = async ({
       place_id: place.id,
       visited: Boolean(progress?.visited),
       visitedAt: progress?.visitedAt || null,
+      verifiedByGemini: progress?.verifiedByGemini,
+      verificationConfidence: Number(progress?.verificationConfidence || 0),
       pointsEarned: Number(progress?.pointsEarned || 0),
       proofImageUri: progress?.proofImageUri || null,
       addedByUser: Boolean(progress?.addedByUser),
@@ -1262,6 +1297,8 @@ export const saveUserTour = async ({
         event_id: event.id,
         visited: Boolean(progress.visited || progress.attended),
         visitedAt: progress.visitedAt || null,
+        verifiedByGemini: (progress as any).verifiedByGemini,
+        verificationConfidence: Number((progress as any).verificationConfidence || 0),
         pointsEarned: 0,
         proofImageUri: progress.proofImageUri || null,
         addedByUser: false,
@@ -1299,6 +1336,10 @@ export const saveUserTour = async ({
             place_id: item.place_id,
             visited: Boolean(progress.visited) || Boolean(item.visited),
             visitedAt: progress.visitedAt || item.visitedAt || null,
+            verifiedByGemini: progress.verifiedByGemini ?? item.verifiedByGemini,
+            verificationConfidence: Number(
+              progress.verificationConfidence || item.verificationConfidence || 0
+            ),
             pointsEarned: Number(progress.pointsEarned || item.pointsEarned || 0),
             proofImageUri: progress.proofImageUri || item.proofImageUri || null,
             addedByUser: Boolean(progress.addedByUser || item.addedByUser),
@@ -1311,6 +1352,10 @@ export const saveUserTour = async ({
             event_id: item.event_id,
             visited: Boolean(progress.visited || progress.attended) || Boolean(item.visited),
             visitedAt: progress.visitedAt || item.visitedAt || null,
+            verifiedByGemini: progress.verifiedByGemini ?? item.verifiedByGemini,
+            verificationConfidence: Number(
+              progress.verificationConfidence || item.verificationConfidence || 0
+            ),
             pointsEarned: Number(item.pointsEarned || 0),
             proofImageUri: progress.proofImageUri || item.proofImageUri || null,
             addedByUser: Boolean(item.addedByUser || false),
@@ -1333,6 +1378,10 @@ export const saveUserTour = async ({
             ...place,
             visited: Boolean(progress.visited) || Boolean(place.visited),
             visitedAt: progress.visitedAt || place.visitedAt || null,
+            verifiedByGemini: progress.verifiedByGemini ?? place.verifiedByGemini,
+            verificationConfidence: Number(
+              progress.verificationConfidence || place.verificationConfidence || 0
+            ),
             pointsEarned: Number(progress.pointsEarned || place.pointsEarned || 0),
             proofImageUri: progress.proofImageUri || place.proofImageUri || null,
             addedByUser: Boolean(progress.addedByUser || place.addedByUser),
@@ -1346,6 +1395,10 @@ export const saveUserTour = async ({
             ...event,
             visited: Boolean(progress.visited || progress.attended) || Boolean(event.visited),
             visitedAt: progress.visitedAt || event.visitedAt || null,
+            verifiedByGemini: progress.verifiedByGemini ?? event.verifiedByGemini,
+            verificationConfidence: Number(
+              progress.verificationConfidence || event.verificationConfidence || 0
+            ),
             proofImageUri: progress.proofImageUri || event.proofImageUri || null,
           };
         }
@@ -1392,7 +1445,7 @@ export const saveUserTour = async ({
     allPlacesAndEventsFinal as Array<{ visited?: boolean; pointsEarned?: number | string | null }>
   );
 
-  const payload = {
+  const payload = removeUndefinedDeep({
     title: title.trim() || route.name,
     user_id: userId,
     route_id: route.id,
@@ -1408,7 +1461,7 @@ export const saveUserTour = async ({
     event_ids: events.map((event) => event.id),
     all_places: allPlacesAndEventsFinal,
     updatedAt: now,
-  };
+  });
 
   console.log('DEBUG saveUserTour - final all_places payload:', allPlacesAndEventsFinal.map(p=>p.place_id || p.event_id));
 

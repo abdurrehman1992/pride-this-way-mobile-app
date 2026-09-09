@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   Animated,
+  AppState,
   View,
   Text,
   StyleSheet,
@@ -162,11 +163,23 @@ const ALLOW_ANY_IMAGE_FOR_TESTING = false;
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DETAIL_CARD_WIDTH = 260;
 const DETAIL_CARD_HEIGHT = 255;
+const MAX_INITIAL_FIX_AGE_MS = 15_000;
+
+const isFreshGpsPosition = (position: any) => {
+  const timestamp = Number(position?.timestamp);
+  return !Number.isFinite(timestamp) || timestamp <= 0 || Date.now() - timestamp <= MAX_INITIAL_FIX_AGE_MS;
+};
 
 const getCurrentPositionAsync = async (timeout = 5000) =>
   new Promise<[number, number]>((resolve, reject) => {
     Geolocation.getCurrentPosition(
-      (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
+      (pos) => {
+        if (!isFreshGpsPosition(pos)) {
+          reject(new Error('Stale GPS position'));
+          return;
+        }
+        resolve([pos.coords.longitude, pos.coords.latitude]);
+      },
       reject,
       { enableHighAccuracy: true, timeout, maximumAge: 0 }
     );
@@ -190,37 +203,6 @@ const getVerificationFailureMessage = (
     return `You are near ${placeName}, but the photo does not clearly match it. Take another clear photo of the actual place—avoid map screenshots, generic roads, or unrelated images.`;
   }
   return `Your photo matches ${placeName}, but you need to be physically near the location to confirm this stop.`;
-};
-
-// Beyond this straight-line distance, skip road routing and use a great circle arc
-const ROAD_ROUTE_MAX_METERS = 200_000; // 200 km
-
-// Spherical interpolation along the great circle — produces a curved arc on Mercator maps
-const greatCircleArc = (
-  from: [number, number],
-  to: [number, number],
-  numPoints = 60
-): [number, number][] => {
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const toDeg = (r: number) => (r * 180) / Math.PI;
-  const lat1 = toRad(from[1]); const lon1 = toRad(from[0]);
-  const lat2 = toRad(to[1]); const lon2 = toRad(to[0]);
-  const d = 2 * Math.asin(Math.sqrt(
-    Math.sin((lat1 - lat2) / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin((lon1 - lon2) / 2) ** 2
-  ));
-  if (d === 0) return [from, to];
-  const pts: [number, number][] = [];
-  for (let i = 0; i <= numPoints; i++) {
-    const f = i / numPoints;
-    const A = Math.sin((1 - f) * d) / Math.sin(d);
-    const B = Math.sin(f * d) / Math.sin(d);
-    const x = A * Math.cos(lat1) * Math.cos(lon1) + B * Math.cos(lat2) * Math.cos(lon2);
-    const y = A * Math.cos(lat1) * Math.sin(lon1) + B * Math.cos(lat2) * Math.sin(lon2);
-    const z = A * Math.sin(lat1) + B * Math.sin(lat2);
-    pts.push([toDeg(Math.atan2(y, x)), toDeg(Math.atan2(z, Math.sqrt(x * x + y * y)))]);
-  }
-  return pts;
 };
 
 const startOfCalendarDay = (date: Date) => {
@@ -515,7 +497,10 @@ const MyTourStart = () => {
   // MAPBOX_TOKEN is loaded synchronously from react-native-config. Mount the
   // native MapView immediately on first launch; waiting for the native token
   // promise here can leave a brand-new install stuck on the blue fallback.
-  const [mapReady, setMapReady] = useState(Boolean(Config.MAPBOX_TOKEN));
+  // Do not mount the native MapView until setAccessToken has completed. On a
+  // fresh Android install mounting it during token initialization can leave
+  // the surface stuck on the blue background until the screen is restarted.
+  const [mapReady, setMapReady] = useState(false);
   const [nativeMapReady, setNativeMapReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [roadSegments, setRoadSegments] = useState<[number, number][][]>([]);
@@ -541,6 +526,7 @@ const MyTourStart = () => {
   const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(
     null
   );
+  const [locationUnavailable, setLocationUnavailable] = useState(false);
   const currentLocationRef = useRef<[number, number] | null>(null);
   useEffect(() => {
     currentLocationRef.current = currentLocation;
@@ -595,6 +581,8 @@ const MyTourStart = () => {
   const [, setTourActionVisible] = useState(false);
   const [isPausedTour, setIsPausedTour] = useState(false);
   const leavingRef = useRef(false);
+  const locationPauseAlertRef = useRef(false);
+  const locationUnavailableErrorsRef = useRef(0);
 
   // Walking polyline cache keyed by `${fromStopId}->${toStopId}`.
   const [legPolylines, setLegPolylines] = useState<Record<string, [number, number][]>>({});
@@ -630,10 +618,6 @@ const MyTourStart = () => {
   const fetchRoadSegment = useCallback(
     async (from: [number, number], to: [number, number]): Promise<[number, number][] | null> => {
       const dist = distanceMetersBetween(from, to);
-      if (dist > ROAD_ROUTE_MAX_METERS) {
-        return greatCircleArc(from, to);
-      }
-
       if (!Config.MAPBOX_TOKEN) {
         return null;
       }
@@ -648,7 +632,7 @@ const MyTourStart = () => {
         const { data } = await axios.get<DirectionsResponse>(
           // driving-traffic profile follows actual roads with live traffic awareness —
           // prefers city streets over motorways for short urban legs
-          `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${from[0]},${from[1]};${to[0]},${to[1]}`,
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${from[0]},${from[1]};${to[0]},${to[1]}`,
           {
             params: {
               access_token: Config.MAPBOX_TOKEN,
@@ -688,34 +672,27 @@ const MyTourStart = () => {
       const results = await Promise.all(
         lineStops.slice(0, -1).map(async (from, i) => {
           const to = lineStops[i + 1] as [number, number];
-          const isAir = distanceMetersBetween(from as [number, number], to) > ROAD_ROUTE_MAX_METERS;
-          const pts = isAir
-            ? greatCircleArc(from as [number, number], to)
-            : await fetchRoadSegment(from as [number, number], to);
-          return { pts, isAir };
+          const pts = await fetchRoadSegment(from as [number, number], to);
+          return { pts };
         })
       );
 
       const road: [number, number][][] = [];
-      const air: [number, number][][] = [];
 
-      for (const { pts, isAir } of results) {
+      for (const { pts } of results) {
         if (!pts) {
           continue;
         }
-        if (isAir) {
-          if (pts.length >= 2) air.push(pts);
-        } else {
-          // Keep every leg separate. This lets the map style the current
-          // user-to-stop leg differently from the future legs, even when
-          // Mapbox's road geometry is one continuous route.
-          if (pts.length >= 2) road.push(pts);
-        }
+        // Keep every road leg separate so the current user-to-stop leg can
+        // be styled differently from future legs.
+        if (pts.length >= 2) road.push(pts);
       }
 
       return {
-        road: road.length > 0 ? road : air.length > 0 ? [] : [lineStops],
-        air,
+        // Never use [start, stop] as a visual fallback: that is a straight
+        // line and falsely suggests the user can travel through buildings.
+        road,
+        air: [] as [number, number][][],
       };
     },
     [fetchRoadSegment]
@@ -743,19 +720,12 @@ const MyTourStart = () => {
     let isMounted = true;
     if (!Config.MAPBOX_TOKEN) return undefined;
 
-    // The token call is still made before normal map interaction, but MapView
-    // must not be gated on its native promise resolving.
-    setMapReady(true);
     initializeMapbox()
       .then(() => {
         if (isMounted) setMapReady(true);
       })
       .catch(() => {
-        // Keep the MapView mounted. The native module may reject a duplicate
-        // or transient initialization even though the configured token is
-        // valid, and hiding the map here recreates the first-launch blank
-        // screen.
-        if (isMounted) setMapReady(Boolean(Config.MAPBOX_TOKEN));
+        if (isMounted) setMapReady(false);
       });
 
     return () => {
@@ -1019,7 +989,10 @@ const MyTourStart = () => {
         return Boolean((progress?.attended && progress?.verifiedByGemini) || progress?.expired);
       }
       const progress = placeProgress[stop.id];
-      return Boolean(progress?.visited && progress?.verifiedByGemini);
+      // Older tours did not persist verifiedByGemini. A persisted `visited`
+      // flag is still authoritative for those tours; newly completed stops
+      // continue to write verifiedByGemini=true.
+      return Boolean(progress?.visited && progress?.verifiedByGemini !== false);
     },
     [eventProgress, placeProgress]
   );
@@ -1792,6 +1765,9 @@ const MyTourStart = () => {
 
       watchIdRef.current = Geolocation.watchPosition(
         (position) => {
+          if (!isFreshGpsPosition(position)) {
+            return;
+          }
           const accuracy = Number(position.coords.accuracy);
           if (
             !Number.isFinite(position.coords.longitude) ||
@@ -1806,14 +1782,24 @@ const MyTourStart = () => {
             position.coords.latitude,
           ];
           setCurrentLocation(next);
+          locationUnavailableErrorsRef.current = 0;
+          setLocationUnavailable(false);
 
           const heading = position.coords.heading;
           if (typeof heading === 'number' && heading >= 0 && heading <= 360) {
             setUserHeading(heading);
           }
         },
-        () => {
-          // Silently ignore transient GPS errors; keep last known location.
+        (error) => {
+          // Android can emit POSITION_UNAVAILABLE during a normal cold-GPS
+          // fix. Do not pause on one transient callback; require repeated
+          // failures while the tour is active before treating it as disabled.
+          if (Number(error?.code) === 2) {
+            locationUnavailableErrorsRef.current += 1;
+            if (locationUnavailableErrorsRef.current >= 3) {
+              setLocationUnavailable(true);
+            }
+          }
         },
         {
           enableHighAccuracy: true,
@@ -1974,6 +1960,15 @@ const MyTourStart = () => {
       return;
     }
 
+    // Never build an active-tour route from the stop list alone. On a fresh
+    // install Android may still be resolving the first GPS fix; waiting here
+    // prevents the route from being anchored to a stale/default location.
+    if ((tourStarted || hasVisitedProgress) && !currentLocation) {
+      setRoadSegments([]);
+      setAirSegments([]);
+      return;
+    }
+
     // Route line connects today's events and locations in optimized order.
     const navigablePlaceStops =
       (tourStarted || hasVisitedProgress) && orderedRemainingStops.length > 0
@@ -1993,6 +1988,12 @@ const MyTourStart = () => {
       setAirSegments([]);
       return;
     }
+
+    // Do not render a provisional straight line. Until Mapbox returns actual
+    // driving geometry, keep the route empty and show the existing loading
+    // pill so the map never presents an inaccurate route.
+    setRoadSegments([]);
+    setAirSegments([]);
 
     const liveStopsKey = navigablePlaceStops.map((stop) => stop.id).join(',');
     const isLiveRoute = tourStarted || hasVisitedProgress;
@@ -2023,7 +2024,7 @@ const MyTourStart = () => {
         setAirSegments(next.air);
       } catch {
         if (isMounted) {
-          setRoadSegments([lineStops as [number, number][]]);
+          setRoadSegments([]);
           setAirSegments([]);
         }
       }
@@ -2062,7 +2063,7 @@ const MyTourStart = () => {
         setCompletedAirSegments(next.air);
       } catch {
         if (isMounted) {
-          setCompletedRoadSegments([completedStops as [number, number][]]);
+          setCompletedRoadSegments([]);
           setCompletedAirSegments([]);
         }
       }
@@ -2114,7 +2115,7 @@ const MyTourStart = () => {
         setCompletedApproachAirSegments(next.air);
       } catch {
         if (isMounted) {
-          setCompletedApproachRoadSegments([lineStops]);
+          setCompletedApproachRoadSegments([]);
           setCompletedApproachAirSegments([]);
         }
       }
@@ -2691,8 +2692,54 @@ const MyTourStart = () => {
     setSelectedEvent(null);
     const savedId = await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => null);
     showInfo('Tour Paused', 'You can resume this tour anytime.');
-    return savedId || tourId || null;
+    // `persistTourIfNeeded` may create the document during this call. Use the
+    // ref as the authoritative ID so the screen we navigate back to updates
+    // the exact paused card instead of leaving a stale/duplicate route.
+    return savedId || tourIdRef.current || tourId || null;
   }, [isCompletedTour, persistTourIfNeeded, placeProgress, startedAt, tourId]);
+
+  // If the user disables device location while the tour is active, the OS
+  // cannot be intercepted before the Settings change. Detect it as soon as
+  // the app returns, pause safely, and prevent a route from continuing on a
+  // stale position.
+  useEffect(() => {
+    if (!locationUnavailable || !tourStarted || locationPauseAlertRef.current) return;
+
+    locationPauseAlertRef.current = true;
+    setCurrentLocation(null);
+    setRoadSegments([]);
+    setAirSegments([]);
+    pauseTourState().finally(() => {
+      CustomAlert.alert(
+        'Tour Paused',
+        'Location is turned off. Turn on device location before starting or resuming this tour.',
+        [{ text: 'OK', onPress: () => { locationPauseAlertRef.current = false; } }],
+      );
+    });
+  }, [locationUnavailable, pauseTourState, tourStarted]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active' || !tourStarted || locationPauseAlertRef.current) return;
+
+      let cancelled = false;
+      const verifyLocationService = async () => {
+        if (!(await requestLocationPermission()) || cancelled) return;
+        try {
+          await getCurrentPositionAsync(4000);
+        } catch {
+          // A resume-time timeout is also common while Android reacquires a
+          // cold GPS fix. The watcher is the debounced source of truth for
+          // location-disabled handling, so never pause from this one probe.
+          return;
+        }
+      };
+
+      verifyLocationService();
+    });
+
+    return () => subscription.remove();
+  }, [pauseTourState, tourStarted]);
 
   // Expose tour-active state to the TabNavigator so it can intercept any
   // tab press while a tour is running. Reading route.params from the
@@ -2789,15 +2836,30 @@ const MyTourStart = () => {
     const getPos = (): Promise<[number, number]> =>
       new Promise((resolve, reject) => {
         Geolocation.getCurrentPosition(
-          (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
+          (pos) => {
+            if (!isFreshGpsPosition(pos)) {
+              reject(new Error('Stale GPS position'));
+              return;
+            }
+            resolve([pos.coords.longitude, pos.coords.latitude]);
+          },
           () => {
             Geolocation.getCurrentPosition(
-              (pos) => resolve([pos.coords.longitude, pos.coords.latitude]),
+              (pos) => {
+                if (!isFreshGpsPosition(pos)) {
+                  reject(new Error('Stale GPS position'));
+                  return;
+                }
+                resolve([pos.coords.longitude, pos.coords.latitude]);
+              },
               reject,
-              { enableHighAccuracy: false, timeout: 2000 }
+              { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
             );
           },
-          { enableHighAccuracy: true, timeout: 3000 }
+          // Network-assisted location is faster on a cold start. The
+          // timestamp is still validated above, so an old hostel fix cannot
+          // be accepted; the live high-accuracy watcher refines it afterward.
+          { enableHighAccuracy: false, timeout: 5000, maximumAge: 0 }
         );
       });
 
@@ -2831,11 +2893,14 @@ const MyTourStart = () => {
 
     let cancelled = false;
     const retryInitialLocation = async () => {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      // A cold Android GPS fix can need several seconds after permission is
+      // granted. Retry automatically so the user never has to press recenter
+      // just to start the first route.
+      for (let attempt = 0; attempt < 8; attempt += 1) {
         if (cancelled || currentLocationRef.current) return;
         await handleCurrentLocation(false);
         if (cancelled || currentLocationRef.current) return;
-        await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+        await new Promise<void>((resolve) => setTimeout(resolve, 2000));
       }
     };
 
@@ -3384,8 +3449,15 @@ const MyTourStart = () => {
               )}
 
               {activeRouteLine.features.length > 0 && (
-                <Mapbox.ShapeSource id="activePendingRouteLine" shape={activeRouteLine}>
-                  <Mapbox.LineLayer id="activePendingRouteLineLayer" style={routeLineLayerStyle} />
+                <Mapbox.ShapeSource
+                  key={`active-${orderedRemainingStops[0]?.id || 'none'}-${roadSegments[0]?.length || 0}`}
+                  id="activePendingRouteLine"
+                  shape={activeRouteLine}
+                >
+                  <Mapbox.LineLayer
+                    id="activePendingRouteLineLayer"
+                    style={{ ...routeLineLayerStyle, lineWidth: 6, lineOpacity: 1 }}
+                  />
                 </Mapbox.ShapeSource>
               )}
 
@@ -3562,6 +3634,13 @@ const MyTourStart = () => {
             </View>
           )}
         </View>
+
+        {tourStarted && !currentLocation ? (
+          <View style={styles.locationLoadingOverlay} pointerEvents="none">
+            <ActivityIndicator size="small" color={COLORS.BUTTON_COLOR} />
+            <Text style={styles.locationLoadingText}>Getting your current location…</Text>
+          </View>
+        ) : null}
 
         {tourStarted && nearestPendingStop && currentLocation ? (
           <NextStopBanner
@@ -3981,6 +4060,19 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_PRIMARY,
     fontFamily: FONT_FAMILY.InterTight_Medium,
     fontSize: 13,
+  },
+  locationLoadingOverlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(246, 242, 236, 0.58)',
+    zIndex: 20,
+  },
+  locationLoadingText: {
+    marginTop: 10,
+    color: COLORS.TEXT_PRIMARY,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    fontSize: 14,
   },
   distancePill: {
     position: 'absolute',

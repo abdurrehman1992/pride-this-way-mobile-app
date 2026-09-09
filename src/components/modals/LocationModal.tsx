@@ -349,7 +349,10 @@ const LocationModal: React.FC<Props> = ({
                 />
             ) : null}
             <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                // Android's height behavior can leave the transparent modal
+                // viewport shortened after the keyboard is dismissed. That
+                // moves the sheet upward and exposes the tab bar underneath.
+                behavior={Platform.OS === "ios" ? "padding" : undefined}
                 keyboardVerticalOffset={0}
                 style={styles.overlay}
             >
@@ -508,6 +511,7 @@ export default LocationModal;
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
+        width: "100%",
         backgroundColor: "rgba(0,0,0,0.5)",
         justifyContent: "flex-end",
     },
@@ -517,6 +521,8 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
         paddingBottom: Platform.OS === "ios" ? 40 : 20,
+        zIndex: 100,
+        elevation: 24,
     },
     clearButton: {
         width: 20,

@@ -181,6 +181,7 @@ const MyTour = () => {
         new Map()
     );
     const deletedTourIds = useRef<Set<string>>(new Set());
+    const deletedTourKeys = useRef<Set<string>>(new Set());
     const [tags, setTags] = useState<FirebaseTag[]>([]);
     const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
     const [tourName, setTourName] = useState('');
@@ -392,7 +393,11 @@ const MyTour = () => {
                 }
 
             const cards = tours
-                .filter((tour) => !deletedTourIds.current.has(tour.id))
+                .filter((tour) => {
+                    if (deletedTourIds.current.has(tour.id)) return false;
+                    const key = `${tour.route_id}:${tour.title || 'Custom Tour'}`;
+                    return !deletedTourKeys.current.has(key);
+                })
                 .map((tour) => {
                 const details = routeDetailsMap.get(tour.route_id);
 
@@ -654,6 +659,8 @@ const MyTour = () => {
                 text: 'Delete',
                 style: 'destructive',
                 onPress: async () => {
+                    const deletedKey = `${tour.route.id}:${tour.displayName}`;
+                    deletedTourKeys.current.add(deletedKey);
                     if (tour.tourId) {
                         deletedTourIds.current.add(tour.tourId);
                     }
@@ -671,6 +678,10 @@ const MyTour = () => {
                     if (!tour.tourId) return;
                     try {
                         await deleteUserTour(tour.tourId, { userId: userId || undefined });
+                        // Re-read Firestore after deletion. The tombstones stay
+                        // in memory so an already-running/stale query cannot
+                        // reinsert the deleted card.
+                        await loadSavedTours();
                     } catch (error) {
                         const errorMessage =
                             error instanceof Error ? error.message : 'Unable to remove this tour right now.';
@@ -678,6 +689,7 @@ const MyTour = () => {
                         if (tour.tourId) {
                             deletedTourIds.current.delete(tour.tourId);
                         }
+                        deletedTourKeys.current.delete(deletedKey);
                         loadSavedTours();
                     }
                 },

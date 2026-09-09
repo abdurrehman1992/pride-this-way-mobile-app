@@ -24,9 +24,12 @@ import {
   AIPlace,
   getLastQuotaExceededTimestamp,
   clearLastQuotaExceeded,
+  distanceLabelBetween,
+  getPlaceOpenStatus,
 } from '../../services/aiService';
 import { fetchTourTags } from '../../services/myTourService';
 import { buildRecommendationQueryKey } from '../../utils/recommendationQuery';
+import { getCurrentPosition } from '../../utils/location';
 
 type Props = {
   location: string;
@@ -52,15 +55,42 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
   const [allPreferences, setAllPreferences] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [errorReason, setErrorReason] = useState('');
   const [quotaWarning, setQuotaWarning] = useState(false);
   const lastRequestKeyRef = useRef<string | null>(null);
+  const [currentCoordinates, setCurrentCoordinates] = useState<{ latitude: number; longitude: number }>();
+  const [now, setNow] = useState(() => new Date());
 
   const hasFilters = selectedLocation || selectedPrefs.length > 0;
 
-  const loadRecommendations = async (loc: string, p: string[], showLoading = true) => {
-    if (!loc) return;
+  useEffect(() => {
+    let mounted = true;
+    getCurrentPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 })
+      .then((position) => {
+        if (mounted && position?.coords) {
+          setCurrentCoordinates({
+            latitude: Number(position.coords.latitude),
+            longitude: Number(position.coords.longitude),
+          });
+        }
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const loadRecommendations = async (loc: string, p: string[], showLoading = true, force = false) => {
+    if (!loc) {
+      setErrorReason('Please select a city first, then try again.');
+      setError(true);
+      return;
+    }
     const nextKey = buildRecommendationQueryKey(loc, p);
-    if (nextKey && lastRequestKeyRef.current === nextKey) {
+    if (!force && nextKey && lastRequestKeyRef.current === nextKey) {
       return;
     }
     lastRequestKeyRef.current = nextKey || null;
@@ -69,56 +99,47 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
       setLoading(true);
     }
     setError(false);
+    setErrorReason('');
     setQuotaWarning(false);
     try {
       const result = await getRecommendations(loc, p);
-      const placesAround = await Promise.all(
-        (result.placesAroundYou ?? []).map(async item => {
-          const imageUrl = await resolvePlaceImageUrl(item.title, item.imageKeyword, item.location || loc, item.imageUrl);
-          const wikimediaFallback = await resolvePlaceImageUrl(
-            item.title,
-            item.imageKeyword,
-            item.location || loc,
-            item.imageUrl,
-            true,
-          );
-          const fallbackImageUrl = wikimediaFallback !== imageUrl
-            ? wikimediaFallback
-            : item.imageUrl !== imageUrl ? item.imageUrl : undefined;
-          return {
-            ...item,
-            imageUrl,
-            fallbackImageUrl,
-            gallery: [imageUrl, fallbackImageUrl].filter(Boolean) as string[],
-          };
-        }),
-      );
-      const recommended = await Promise.all(
-        (result.recommendedForYou ?? []).map(async item => {
-          const imageUrl = await resolvePlaceImageUrl(item.title, item.imageKeyword, item.location || loc, item.imageUrl);
-          const wikimediaFallback = await resolvePlaceImageUrl(
-            item.title,
-            item.imageKeyword,
-            item.location || loc,
-            item.imageUrl,
-            true,
-          );
-          const fallbackImageUrl = wikimediaFallback !== imageUrl
-            ? wikimediaFallback
-            : item.imageUrl !== imageUrl ? item.imageUrl : undefined;
-          return {
-            ...item,
-            imageUrl,
-            fallbackImageUrl,
-            gallery: [imageUrl, fallbackImageUrl].filter(Boolean) as string[],
-          };
-        }),
-      );
+      // Render Gemini's data immediately. Image lookup is supplementary and
+      // must not block the recommendation cards from appearing.
+      setData(result);
 
-      setData({
-        ...result,
-        placesAroundYou: placesAround,
-        recommendedForYou: recommended,
+      const hydrateImages = async (items: AIPlace[]) => Promise.all(items.map(async item => {
+        const imageUrl = await resolvePlaceImageUrl(item.title, item.imageKeyword, item.location || loc, item.imageUrl);
+        const wikimediaFallback = await resolvePlaceImageUrl(
+          item.title,
+          item.imageKeyword,
+          item.location || loc,
+          item.imageUrl,
+          true,
+        );
+        const fallbackImageUrl = wikimediaFallback !== imageUrl
+          ? wikimediaFallback
+          : item.imageUrl !== imageUrl ? item.imageUrl : undefined;
+        return {
+          ...item,
+          imageUrl,
+          fallbackImageUrl,
+          gallery: [imageUrl, fallbackImageUrl].filter(Boolean) as string[],
+        };
+      }));
+
+      void Promise.all([
+        hydrateImages(result.placesAroundYou ?? []),
+        hydrateImages(result.recommendedForYou ?? []),
+      ]).then(([placesAround, recommended]) => {
+        // Do not let a slower image request overwrite a newer city/preferences query.
+        if (lastRequestKeyRef.current !== nextKey) return;
+        setData(current => current ? {
+          ...current,
+          placesAroundYou: placesAround,
+          recommendedForYou: recommended,
+        } : current);
+      }).catch(error => {
+        console.warn('[ForYouContent] image hydration failed:', error);
       });
       // If the AI call failed due to quota, the service sets a flag we can inspect
       try {
@@ -133,6 +154,15 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
       }
     } catch (err) {
       console.warn('[ForYouContent] unexpected error', err);
+      const message = String((err as any)?.message || '').toLowerCase();
+      const reason = message.includes('quota') || message.includes('429')
+        ? 'Gemini is temporarily busy. Please wait a moment and try again.'
+        : message.includes('network') || message.includes('fetch') || message.includes('timeout')
+          ? 'Please check your internet connection and try again.'
+          : 'We could not get recommendations for this city right now. Confirm the city and preferences, then try again.';
+      setErrorReason(reason);
+      // Unlock this query so Retry can always start a new request.
+      if (lastRequestKeyRef.current === nextKey) lastRequestKeyRef.current = null;
       setError(true);
     } finally {
       if (showLoading) {
@@ -142,9 +172,13 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
   };
 
   useEffect(() => {
-    setSelectedLocation(location || null);
+    const nextLocation = location || null;
+    const nextPrefs = [...prefs].sort();
+    const currentKey = buildRecommendationQueryKey(selectedLocation || '', [...selectedPrefs].sort());
+    const nextKey = buildRecommendationQueryKey(nextLocation || '', nextPrefs);
+    if (currentKey === nextKey) return;
+    setSelectedLocation(nextLocation);
     setSelectedPrefs(prefs);
-    lastRequestKeyRef.current = null;
   }, [location, prefs]);
 
   useEffect(() => {
@@ -322,11 +356,13 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
             {error && !loading && (
               <View style={styles.errorWrap}>
                 <Text style={styles.errorText}>Couldn’t load recommendations.</Text>
+                <Text style={styles.errorReasonText}>
+                  {errorReason || 'Please check your connection and try again.'}
+                </Text>
                 <TouchableOpacity
                   style={styles.retryBtn}
-                  onPress={() =>
-                    loadRecommendations(selectedLocation || '', selectedPrefs)
-                  }
+                  disabled={loading}
+                  onPress={() => loadRecommendations(selectedLocation || '', selectedPrefs, true, true)}
                 >
                   <Text style={styles.retryText}>Retry</Text>
                 </TouchableOpacity>
@@ -364,15 +400,22 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                     keyExtractor={item => item.id}
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.listContainer}
-                    renderItem={({ item }) => (
-                      <PlacesArroundCard
+                    renderItem={({ item }) => {
+                      const availability = getPlaceOpenStatus(item, now);
+                      const statusColor = availability.isOpen === true
+                        ? COLORS.TEXT_GREEN
+                        : availability.isOpen === false
+                          ? COLORS.LOGOUT_TEXT
+                          : COLORS.TEXT_SECONDARY;
+                      return <PlacesArroundCard
                         id={item.id}
                         title={item.title}
                         description={item.description}
                         rating={item.rating}
                         image={item.imageUrl}
                         location={item.location || selectedLocation || 'Lahore, Pakistan'}
-                        time={item.openText || 'Open today'}
+                        time={availability.label}
+                        timeColor={statusColor}
                         category={item.category || 'Event'}
                         width={295}
                         onPress={() =>
@@ -383,11 +426,14 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                               imageUrl: item.imageUrl,
                               location: item.location || selectedLocation || 'Lahore, Pakistan',
                               address: item.address || item.location || selectedLocation || 'Lahore, Pakistan',
+                              openText: availability.label,
+                              isOpen: availability.isOpen,
+                              distance: distanceLabelBetween(currentCoordinates, item.coordinates),
                             },
                           })
                         }
                       />
-                    )}
+                    }}
                   />
                 </View>
                 <View style={styles.recommendedSection}>
@@ -550,6 +596,13 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.TEXT,
     textAlign: 'center',
     paddingHorizontal: 24,
+  },
+  errorReasonText: {
+    color: COLORS.TEXT_SECONDARY,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    fontSize: FONT_SIZE.CARD_TEXT,
+    textAlign: 'center',
+    paddingHorizontal: 34,
   },
   retryBtn: {
     paddingHorizontal: 30,

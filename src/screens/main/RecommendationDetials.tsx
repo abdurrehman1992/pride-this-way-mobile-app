@@ -37,6 +37,8 @@ import {
 import { useFavorites } from "../../context/FavoritesContext";
 import { showInfo, showSuccess } from "../../components/common/AppToast";
 import { sanitizeImageUrl } from '../../services/aiService';
+import { distanceLabelBetween, getPlaceOpenStatus } from '../../services/aiService';
+import { getCurrentPosition } from '../../utils/location';
 
 const FALLBACK_IMAGE =
     "https://fastly.picsum.photos/id/1/800/600.jpg?hmac=jH5bDkLr6Tgy3oAg5khKCHeunZMHq0ehBZr6vGifPLY";
@@ -59,6 +61,28 @@ const RecommendationDetials = () => {
     const navigation = useNavigation();
 
     const item = route?.params?.item;
+    const [currentCoordinates, setCurrentCoordinates] = useState<{ latitude: number; longitude: number }>();
+    const [now, setNow] = useState(() => new Date());
+
+    useEffect(() => {
+        let mounted = true;
+        getCurrentPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 })
+            .then((position) => {
+                if (mounted && position?.coords) {
+                    setCurrentCoordinates({
+                        latitude: Number(position.coords.latitude),
+                        longitude: Number(position.coords.longitude),
+                    });
+                }
+            })
+            .catch(() => {});
+        return () => { mounted = false; };
+    }, []);
+
+    useEffect(() => {
+        const timer = setInterval(() => setNow(new Date()), 60 * 1000);
+        return () => clearInterval(timer);
+    }, []);
 
     const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
 
@@ -84,10 +108,9 @@ const RecommendationDetials = () => {
         highlights = [],
         gallery = [],
         reviews = [],
-        distance = "2.3 km away",
-        openText = "Open • Closes 9:00 PM",
-        isOpen = true,
     } = item;
+    const availability = getPlaceOpenStatus(item, now);
+    const actualDistance = distanceLabelBetween(currentCoordinates, item.coordinates);
 
         const originalPlace = (item as any)?.originalPlace;
 
@@ -271,14 +294,20 @@ const RecommendationDetials = () => {
 
             {/* ================= MINI INFO ================= */}
             <View style={styles.miniContainer}>
-                <View style={styles.miniBtn}>
-                    <TimeIcon width={16} height={16} />
-                    <Text style={styles.miniText}>{isOpen ? 'Open Now' : 'Closed'}</Text>
+                <View style={[styles.miniBtn, availability.isOpen === false && styles.miniBtnClosed, availability.isOpen === null && styles.miniBtnUnavailable]}>
+                    <TimeIcon
+                        width={16}
+                        height={16}
+                        color={availability.isOpen === true ? COLORS.TEXT_GREEN : availability.isOpen === false ? COLORS.LOGOUT_TEXT : COLORS.TEXT_SECONDARY}
+                    />
+                    <Text style={[styles.miniText, availability.isOpen === false && styles.miniTextClosed, availability.isOpen === null && styles.miniTextUnavailable]}>
+                        {availability.label}
+                    </Text>
                 </View>
 
                 <View style={styles.miniBtnWhite}>
                     <MiniMapIcon width={16} height={16} />
-                    <Text style={styles.miniTextDark}>{distance}</Text>
+                    <Text style={styles.miniTextDark}>{actualDistance}</Text>
                 </View>
             </View>
 
@@ -355,7 +384,7 @@ const RecommendationDetials = () => {
             </View>
             {/* ================= BUTTON ================= */}
             <View style={styles.footerButton}>
-                <CustomButton title="Start Route" />
+                {/* <CustomButton title="Start Route" /> */}
             </View>
 
         </ScrollView>
@@ -497,6 +526,14 @@ const styles = StyleSheet.create({
         gap: 6,
     },
 
+    miniBtnClosed: {
+        backgroundColor: '#FEE2E2',
+    },
+
+    miniBtnUnavailable: {
+        backgroundColor: '#E5E7EB',
+    },
+
     miniBtnWhite: {
         flexDirection: "row",
         alignItems: "center",
@@ -512,6 +549,14 @@ const styles = StyleSheet.create({
         color: COLORS.TEXT_GREEN,
         fontSize: FONT_SIZE.CARD_TEXT,
         fontFamily: FONT_FAMILY.InterTight_Medium,
+    },
+
+    miniTextClosed: {
+        color: COLORS.LOGOUT_TEXT,
+    },
+
+    miniTextUnavailable: {
+        color: COLORS.TEXT_SECONDARY,
     },
 
     miniTextDark: {

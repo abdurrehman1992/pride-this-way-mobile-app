@@ -32,11 +32,100 @@ export type AIPlace = {
   distance?: string;
   openText?: string;
   isOpen?: boolean;
+  coordinates?: {
+    latitude: number;
+    longitude: number;
+  };
+  openingTime?: string;
+  closingTime?: string;
+  openingHours?: Record<string, { open?: string; close?: string } | string | null>;
+  hours?: Record<string, { open?: string; close?: string } | string | null>;
 };
 
 export type AIRecommendations = {
   placesAroundYou: AIPlace[];
   recommendedForYou: AIPlace[];
+};
+
+const parseClockMinutes = (value?: string): number | null => {
+  if (!value) return null;
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = match[3]?.toUpperCase();
+  if (minute > 59 || hour > 23) return null;
+  if (meridiem) {
+    if (hour === 12) hour = 0;
+    if (meridiem === 'PM') hour += 12;
+  }
+  return hour * 60 + minute;
+};
+
+export const getPlaceOpenStatus = (place: AIPlace, now = new Date()) => {
+  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const day = dayNames[now.getDay()];
+  const previousDay = dayNames[(now.getDay() + 6) % 7];
+  const hours = place.openingHours || {};
+  const entryFor = (name: string) => hours[name] || hours[name.slice(0, 3)] || undefined;
+  const parseEntry = (entry: { open?: string; close?: string } | string | null | undefined) => {
+    if (!entry) return null;
+    const openValue = typeof entry === 'string' ? entry.split(/\s*(?:-|–|—|to)\s*/i)[0] : entry.open;
+    const closeValue = typeof entry === 'string' ? entry.split(/\s*(?:-|–|—|to)\s*/i)[1] : entry.close;
+    if (!openValue || !closeValue || /closed|holiday/i.test(openValue)) return null;
+    const opening = parseClockMinutes(openValue);
+    const closing = parseClockMinutes(closeValue);
+    return opening !== null && closing !== null && opening !== closing ? { opening, closing } : null;
+  };
+
+  const currentEntry = parseEntry(entryFor(day)) || parseEntry(
+    place.openingTime && place.closingTime ? { open: place.openingTime, close: place.closingTime } : undefined,
+  );
+  const previousEntry = parseEntry(entryFor(previousDay));
+  const current = now.getHours() * 60 + now.getMinutes();
+
+  if (currentEntry || previousEntry) {
+    const activeEntry = previousEntry && previousEntry.opening > previousEntry.closing && current < previousEntry.closing
+      ? previousEntry
+      : currentEntry;
+    const isOpen = Boolean(activeEntry && (
+      activeEntry.opening <= activeEntry.closing
+        ? current >= activeEntry.opening && current < activeEntry.closing
+        : current >= activeEntry.opening || current < activeEntry.closing
+    ));
+    const closing = activeEntry?.closing ?? currentEntry?.closing;
+    const formatted = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const closingLabel = closing === undefined ? '' : new Date(2000, 0, 1, Math.floor(closing / 60), closing % 60)
+      .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const openingLabel = activeEntry ? new Date(2000, 0, 1, Math.floor(activeEntry.opening / 60), activeEntry.opening % 60)
+      .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    const beforeOpening = Boolean(currentEntry && currentEntry.opening <= currentEntry.closing && current < currentEntry.opening);
+    return {
+      isOpen,
+      label: isOpen ? `Open ${closingLabel}` : beforeOpening ? `Closed until ${openingLabel}` : `Closed ${closingLabel}`,
+      currentTime: formatted,
+    };
+  }
+
+  return {
+    isOpen: null,
+    label: 'Hours unavailable',
+    currentTime: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+  };
+};
+
+export const distanceLabelBetween = (
+  from?: { latitude: number; longitude: number },
+  to?: { latitude: number; longitude: number }
+) => {
+  if (!from || !to) return 'Distance unavailable';
+  const rad = (value: number) => (value * Math.PI) / 180;
+  const dLat = rad(to.latitude - from.latitude);
+  const dLon = rad(to.longitude - from.longitude);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(from.latitude)) * Math.cos(rad(to.latitude)) * Math.sin(dLon / 2) ** 2;
+  const km = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return km < 1 ? `${Math.round(km * 1000)} m away` : `${km.toFixed(1)} km away`;
 };
 
 // Google Generative Language endpoints
@@ -207,7 +296,7 @@ function normalizeText(value?: string | null): string {
 
 function recsCacheKey(location: string, prefs: string[]): string {
   const normalized =
-    'recs|' + location.toLowerCase().trim() + '|' + [...prefs].sort().join(',');
+    'recs-hours-v5|' + location.toLowerCase().trim() + '|' + [...prefs].sort().join(',');
   return `recs:${simpleHash(normalized)}`;
 }
 
@@ -716,23 +805,34 @@ export async function getRecommendations(
       throw new Error('Gemini credentials are required for recommendations');
     }
 
+    const cacheKey = recsCacheKey(location, prefs);
+    const cached = await getCached<AIRecommendations>(cacheKey);
+    if (cached?.placesAroundYou?.length && cached?.recommendedForYou?.length) {
+      console.log('[Gemini][recommendations][cached]', JSON.stringify({ location, prefs, response: cached }, null, 2));
+      return cached;
+    }
+
     const preferenceText = prefs.length ? prefs.join(', ') : 'popular local experiences';
     const prompt = `Recommend real, currently existing named places in ${location} for a user interested in: ${preferenceText}.
 
 Return JSON only in this exact shape:
 {"placesAroundYou":[3 items],"recommendedForYou":[8 items]}
 
-Every item must contain: {"id","title","description","rating","category","imageKeyword","location","address","about","highlights"}.
+Every item must contain: {"id","title","description","rating","category","imageKeyword","location","address","about","highlights","coordinates","openingHours"}.
 - Use the official, searchable place name in title. Never invent or use generic names.
 - Every place must physically exist in or very near ${location}.
 - imageKeyword must be the exact official place name followed by ${location}.
 - rating must be a string from 4.0 to 4.9.
 - highlights must be an array of 2-3 short strings.
+- coordinates must be the real place coordinates as {"latitude": number, "longitude": number}; never invent them.
+- openingHours must contain the real local hours for each weekday, for example {"monday":{"open":"10:00 AM","close":"11:00 PM"},"tuesday":null}. Use null for a day the place is closed. Do not guess: if the place's hours cannot be verified, return an empty object. Never return a generic "Open now" or a made-up closing time.
+- Prefer places with published/known hours. If a place has no verifiable hours, replace it with another real place whose weekly hours can be returned; do not leave the app with fabricated or missing hours when another suitable place exists.
 - Match the user's preferences and do not duplicate a place.`;
     const raw = await callGemini(
       prompt,
       'You are a location-aware travel recommendation engine. Return valid JSON only.',
     );
+    console.log('[Gemini][recommendations][raw]', JSON.stringify({ location, prefs, response: raw }, null, 2));
 
     const normalizeGeminiPlaces = (items: unknown, prefix: string): AIPlace[] =>
       ensureIds(Array.isArray(items) ? items : [], prefix)
@@ -748,6 +848,28 @@ Every item must contain: {"id","title","description","rating","category","imageK
           address: String(item.address || location),
           about: String(item.about || item.description || ''),
           highlights: Array.isArray(item.highlights) ? item.highlights.slice(0, 3) : [],
+          coordinates: item.coordinates && Number.isFinite(Number(item.coordinates.latitude)) && Number.isFinite(Number(item.coordinates.longitude))
+            ? { latitude: Number(item.coordinates.latitude), longitude: Number(item.coordinates.longitude) }
+            : undefined,
+          openingTime: String(item.openingTime || '').trim() || undefined,
+          closingTime: String(item.closingTime || '').trim() || undefined,
+          openingHours: (() => {
+            const rawHours = (item as any).openingHours || (item as any).opening_hours || (item as any).hours;
+            return rawHours && typeof rawHours === 'object'
+              ? Object.fromEntries(Object.entries(rawHours).map(([day, value]) => {
+                if (Array.isArray(value)) {
+                  const firstPeriod = value.find(period => period && typeof period === 'object');
+                  value = firstPeriod || null;
+                }
+                if (typeof value === 'string') return [day.toLowerCase(), value.trim() || null];
+                if (!value || typeof value !== 'object') return [day.toLowerCase(), null];
+                return [day.toLowerCase(), {
+                  open: String((value as any).open || '').trim() || undefined,
+                  close: String((value as any).close || '').trim() || undefined,
+                }];
+              }))
+              : {};
+          })(),
         }));
 
     const placesAroundYou = normalizeGeminiPlaces(raw?.placesAroundYou, 'gemini-nearby').slice(0, 3);
@@ -756,8 +878,57 @@ Every item must contain: {"id","title","description","rating","category","imageK
       throw new Error('Gemini returned an incomplete recommendation list');
     }
 
-    // Deliberately no Firestore read/write here: Gemini owns the recommendation list.
-    return { placesAroundYou, recommendedForYou };
+    const enrichMissingHours = async (places: AIPlace[]): Promise<AIPlace[]> => {
+      const missing = places.filter(place => !place.openingHours || !Object.keys(place.openingHours).length);
+      if (!missing.length) return places;
+      try {
+        const hoursRaw = await callGemini(
+          `Return the verified local weekly opening hours for these exact places in ${location}.
+Places: ${missing.map(place => `${place.id}: ${place.title}`).join('; ')}
+
+Return JSON only: {"hours":[{"id":"place id","openingHours":{"monday":{"open":"10:00 AM","close":"11:00 PM"},"tuesday":null}}]}
+Use all seven weekday keys. Use null for closed days. Do not guess or invent hours; use an empty object only when the hours cannot be verified. Keep each place id unchanged.`,
+          'You verify business hours for named places. Return only valid JSON and never fabricate opening hours.',
+        );
+        console.log('[Gemini][recommendations][hours-enrichment]', JSON.stringify({ location, places: missing.map(place => place.title), response: hoursRaw }, null, 2));
+        const updates = new Map<string, AIPlace['openingHours']>();
+        (Array.isArray(hoursRaw?.hours) ? hoursRaw.hours : []).forEach((entry: any) => {
+          const rawHours = entry?.openingHours || entry?.opening_hours || entry?.hours;
+          if (!entry?.id || !rawHours || typeof rawHours !== 'object') return;
+          const normalized = Object.fromEntries(Object.entries(rawHours).map(([day, value]: [string, any]) => {
+            if (Array.isArray(value)) value = value.find(period => period && typeof period === 'object') || null;
+            if (typeof value === 'string') return [day.toLowerCase(), value.trim() || null];
+            if (!value || typeof value !== 'object') return [day.toLowerCase(), null];
+            return [day.toLowerCase(), {
+              open: String(value.open || '').trim() || undefined,
+              close: String(value.close || '').trim() || undefined,
+            }];
+          }));
+          updates.set(String(entry.id), normalized);
+        });
+        return places.map(place => updates.has(place.id)
+          ? { ...place, openingHours: updates.get(place.id) }
+          : place);
+      } catch (error) {
+        console.warn('[aiService] opening-hours enrichment failed:', error);
+        return places;
+      }
+    };
+
+    const [enrichedAroundYou, enrichedRecommended] = await Promise.all([
+      enrichMissingHours(placesAroundYou),
+      enrichMissingHours(recommendedForYou),
+    ]);
+
+    const recommendations = {
+      placesAroundYou: enrichedAroundYou,
+      recommendedForYou: enrichedRecommended,
+    };
+    // console.log('[Gemini][recommendations][normalized]', JSON.stringify(recommendations, null, 2));
+    // Keep this exact city/preferences snapshot stable. It is replaced only
+    // when the query key changes (or the cache version is deliberately bumped).
+    await setCached(cacheKey, recommendations, null, 'recs');
+    return recommendations;
   } catch (err) {
     console.warn('[aiService] Gemini recommendations failed:', err);
     if ((err as any)?.message === 'GeminiQuotaExceeded' || (err as any)?.status === 429) {
