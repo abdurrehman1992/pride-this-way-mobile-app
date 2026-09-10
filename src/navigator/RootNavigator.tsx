@@ -12,6 +12,7 @@ import {
 } from "../Redux/slices/authSlice";
 import { subscribeToAuthState } from "../services/authService";
 import { getActiveTour } from "../services/myTourService";
+import { getNativeTourLocationStatus } from "../utils/nativeTourLocation";
 
 const RootNavigator: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
@@ -64,6 +65,12 @@ const RootNavigator: React.FC = () => {
           getActiveTour(userId),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
         ]);
+        // Read the switch immediately before constructing the restored route;
+        // doing this after the Firestore lookup avoids passing a stale value if
+        // the user toggles Location while the splash screen is visible.
+        const initialLocationStatus = active
+          ? await getNativeTourLocationStatus()
+          : null;
         if (cancelled) return;
         if (active) {
           setInitialNavState({
@@ -91,6 +98,14 @@ const RootNavigator: React.FC = () => {
                                     tourName: active.title,
                                     autoStart: true,
                                     tourActive: true,
+                                    // Resolve the Android master-location
+                                    // switch during splash/bootstrap so the
+                                    // active-tour screen never flashes or gets
+                                    // stuck on "Getting your location" when
+                                    // the app is reopened with GPS disabled.
+                                    initialLocationStatusChecked: Boolean(initialLocationStatus),
+                                    initialLocationUnavailable:
+                                      initialLocationStatus?.locationEnabled === false,
                                   },
                                 },
                               ],

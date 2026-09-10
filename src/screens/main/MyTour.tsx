@@ -59,6 +59,9 @@ import {
 import { useSelector } from 'react-redux';
 import { RootState } from '../../Redux/store';
 import { useFavorites } from '../../context/FavoritesContext';
+import { getCurrentPosition, requestLocationPermission } from '../../utils/location';
+import { getNativeTourLocationStatus } from '../../utils/nativeTourLocation';
+import { showLocationRequiredAlert } from '../../utils/locationRequiredAlert';
 
 type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'MyTour'>;
 
@@ -698,6 +701,36 @@ const MyTour = () => {
     }, [loadSavedTours]);
 
     const handleStartTour = async (tour: RouteCardState) => {
+        if (tour.status !== 'completed') {
+            const permitted = await requestLocationPermission(true);
+            let locationReady = permitted;
+
+            if (permitted) {
+                const nativeStatus = await getNativeTourLocationStatus();
+                if (nativeStatus) {
+                    locationReady = nativeStatus.locationEnabled !== false;
+                } else {
+                    // iOS and older Android builds do not expose the native
+                    // provider status. Require a real position before start.
+                    try {
+                        await getCurrentPosition({
+                            enableHighAccuracy: false,
+                            timeout: 6000,
+                            maximumAge: 15_000,
+                        });
+                        locationReady = true;
+                    } catch {
+                        locationReady = false;
+                    }
+                }
+            }
+
+            if (!locationReady) {
+                showLocationRequiredAlert();
+                return;
+            }
+        }
+
         const now = new Date().toISOString();
 
         if (tour.status !== 'completed' && tour.status !== 'active') {

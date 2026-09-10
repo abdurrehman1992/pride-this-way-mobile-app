@@ -69,6 +69,13 @@ import {
 } from '../../utils/routeProgress';
 import { checkInternetConnection } from '../../utils/networkStatus';
 import { requestLocationPermission } from '../../utils/location';
+import {
+  getNativeTourLocationStatus,
+  startNativeTourLocation,
+  stopNativeTourLocation,
+  subscribeToNativeTourLocation,
+} from '../../utils/nativeTourLocation';
+import { showLocationRequiredAlert } from '../../utils/locationRequiredAlert';
 import { verifyPlaceImageMatch } from '../../services/aiService';
 import { initializeMapbox } from '../../services/mapboxConfig';
 import { useDispatch, useSelector } from 'react-redux';
@@ -156,7 +163,30 @@ const visitedStopNameLabelStyle: SymbolLayerStyle = {
 
 // Keep the visit radius in one place so it can be tuned later.
 const VISIT_DISTANCE_THRESHOLD_METERS = 100;
-const LIVE_ROUTE_REFRESH_DISTANCE_METERS = 25;
+// The visual progress is updated locally for every GPS fix. A network
+// reroute is only needed when the user has genuinely left the current road
+// geometry; using the reported accuracy avoids reroute storms from noisy GPS.
+const MIN_OFF_ROUTE_REROUTE_DISTANCE_METERS = 12;
+const MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS = 45;
+const INTRACITY_ROUTE_DISTANCE_METERS = 50_000;
+const FLIGHT_ROUTE_DISTANCE_METERS = 150_000;
+
+// Route data arrives asynchronously from Directions and, while a request is
+// being replaced, an individual leg can briefly be absent. Keep every map
+// render path defensive: an incomplete leg should mean "draw nothing yet",
+// never a React render crash.
+const isRenderableRouteSegment = (segment: unknown): segment is Coord[] =>
+  Array.isArray(segment) &&
+  segment.length >= 2 &&
+  segment.every(
+    (coordinate) =>
+      Array.isArray(coordinate) &&
+      coordinate.length >= 2 &&
+      Number.isFinite(coordinate[0]) &&
+      Number.isFinite(coordinate[1])
+  );
+const LIVE_ROUTE_REFRESH_MIN_INTERVAL_MS = 2_500;
+const ROUTE_RETRY_DELAY_MS = 1_500;
 const MAX_ACCEPTED_GPS_ACCURACY_METERS = 100;
 // A stop is complete only when both the visual proof and the live GPS check pass.
 const ALLOW_ANY_IMAGE_FOR_TESTING = false;
@@ -493,6 +523,7 @@ const MyTourStart = () => {
       eventScanTimerRef.current = null;
     }
   }, []);
+
   const [tourStarted, setTourStarted] = useState(Boolean(route.params?.autoStart));
   // MAPBOX_TOKEN is loaded synchronously from react-native-config. Mount the
   // native MapView immediately on first launch; waiting for the native token
@@ -505,6 +536,9 @@ const MyTourStart = () => {
   const [loading, setLoading] = useState(true);
   const [roadSegments, setRoadSegments] = useState<[number, number][][]>([]);
   const [airSegments, setAirSegments] = useState<[number, number][][]>([]);
+  const [renderedRouteStopsKey, setRenderedRouteStopsKey] = useState('');
+  const [routeGeometryVersion, setRouteGeometryVersion] = useState(0);
+  const [routeRetryNonce, setRouteRetryNonce] = useState(0);
   const [completedRoadSegments, setCompletedRoadSegments] = useState<[number, number][][]>([]);
   const [completedAirSegments, setCompletedAirSegments] = useState<[number, number][][]>([]);
   const [completedApproachRoadSegments, setCompletedApproachRoadSegments] = useState<[number, number][][]>([]);
@@ -526,11 +560,172 @@ const MyTourStart = () => {
   const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(
     null
   );
-  const [locationUnavailable, setLocationUnavailable] = useState(false);
+  const initialLocationUnavailable =
+    route.params?.initialLocationUnavailable === true;
+  const [locationUnavailable, setLocationUnavailable] = useState(
+    initialLocationUnavailable
+  );
+  const [locationStatusChecked, setLocationStatusChecked] = useState(
+    !tourStarted ||
+      route.params?.initialLocationStatusChecked === true ||
+      initialLocationUnavailable
+  );
   const currentLocationRef = useRef<[number, number] | null>(null);
+  const currentLocationAccuracyRef = useRef<number>(MAX_ACCEPTED_GPS_ACCURACY_METERS);
+  const nativeLocationDisabledRef = useRef(initialLocationUnavailable);
+  // If an already-active tour is restored after the process was closed with
+  // GPS off, keep it suspended on this screen (rather than converting it to a
+  // manually paused tour). Turning GPS back on can then continue it in place.
+  const locationBlockedOnEntryRef = useRef(initialLocationUnavailable);
   useEffect(() => {
     currentLocationRef.current = currentLocation;
   }, [currentLocation]);
+
+  // Android keeps an active tour alive in a native foreground service so the
+  // JS watcher is not the only source of GPS updates while the screen is
+  // locked. The service also persists its latest fix; restore it immediately
+  // when the app returns from the background.
+  useEffect(() => {
+    let cancelled = false;
+    const subscription = subscribeToNativeTourLocation((status) => {
+      if (cancelled || !tourStarted) return;
+      setLocationStatusChecked(true);
+      if (status.type === 'unavailable' || status.locationEnabled === false) {
+        nativeLocationDisabledRef.current = true;
+        setLocationUnavailable(true);
+        return;
+      }
+
+      const latitude = Number(status.latitude);
+      const longitude = Number(status.longitude);
+      const accuracy = Number(status.accuracy);
+      if (
+        Number.isFinite(latitude) &&
+        Number.isFinite(longitude) &&
+        (!Number.isFinite(accuracy) || accuracy <= MAX_ACCEPTED_GPS_ACCURACY_METERS)
+      ) {
+        if (Number.isFinite(accuracy) && accuracy > 0) {
+          currentLocationAccuracyRef.current = accuracy;
+        }
+        nativeLocationDisabledRef.current = false;
+        locationBlockedOnEntryRef.current = false;
+        setLocationUnavailable(false);
+        const next: [number, number] = [longitude, latitude];
+        setCurrentLocation(next);
+        currentLocationRef.current = next;
+      }
+    });
+
+    const start = async () => {
+      if (!tourStarted) {
+        setLocationStatusChecked(true);
+        await stopNativeTourLocation();
+        return;
+      }
+
+      // Check Android's master location switch before requesting a GPS fix or
+      // starting the service. This makes an app reopened with GPS off show the
+      // actionable modal immediately instead of sitting on “Getting location”.
+      const initialStatus = await getNativeTourLocationStatus();
+      if (cancelled) return;
+      if (initialStatus) {
+        setLocationStatusChecked(true);
+      }
+      if (initialStatus?.locationEnabled === false) {
+        nativeLocationDisabledRef.current = true;
+        if (!currentLocationRef.current) {
+          locationBlockedOnEntryRef.current = true;
+        }
+        setLocationUnavailable(true);
+        return;
+      }
+
+      if (!(await requestLocationPermission(true)) || cancelled) {
+        if (!cancelled) {
+          setLocationStatusChecked(true);
+          if (!currentLocationRef.current) {
+            locationBlockedOnEntryRef.current = true;
+          }
+          setLocationUnavailable(true);
+        }
+        return;
+      }
+      setLocationStatusChecked(true);
+
+      await startNativeTourLocation();
+      if (cancelled) return;
+
+      const status = await getNativeTourLocationStatus();
+      if (cancelled || !status) return;
+      if (status.locationEnabled === false) {
+        nativeLocationDisabledRef.current = true;
+        if (!currentLocationRef.current) {
+          locationBlockedOnEntryRef.current = true;
+        }
+        setLocationUnavailable(true);
+        return;
+      }
+      nativeLocationDisabledRef.current = false;
+
+      // Never anchor a new/resumed tour to an old service fix left over from
+      // a previous process. Live service events will provide the fresh fix.
+      const age = Number(status.timestamp) > 0
+        ? Date.now() - Number(status.timestamp)
+        : Number.POSITIVE_INFINITY;
+      const latitude = Number(status.latitude);
+      const longitude = Number(status.longitude);
+      if (
+        age <= MAX_INITIAL_FIX_AGE_MS &&
+        Number.isFinite(latitude) &&
+        Number.isFinite(longitude)
+      ) {
+        const accuracy = Number(status.accuracy);
+        if (Number.isFinite(accuracy) && accuracy > 0) {
+          currentLocationAccuracyRef.current = accuracy;
+        }
+        const next: [number, number] = [longitude, latitude];
+        locationBlockedOnEntryRef.current = false;
+        setLocationUnavailable(false);
+        setCurrentLocation(next);
+        currentLocationRef.current = next;
+      }
+    };
+
+    start();
+
+    // Some Android vendor ROMs drop local broadcasts when their quick
+    // settings panel is open. Poll the native master-location state as a
+    // second guard so an active tour is paused even if that event was missed.
+    const locationStatePoll = setInterval(async () => {
+      if (cancelled || !tourStarted) return;
+      const status = await getNativeTourLocationStatus();
+      if (!cancelled && status?.locationEnabled === false) {
+        setLocationStatusChecked(true);
+        nativeLocationDisabledRef.current = true;
+        setLocationUnavailable(true);
+      } else if (!cancelled && status?.locationEnabled === true) {
+        const wasBlockedOnEntry = locationBlockedOnEntryRef.current;
+        setLocationStatusChecked(true);
+        nativeLocationDisabledRef.current = false;
+        if (wasBlockedOnEntry) {
+          locationBlockedOnEntryRef.current = false;
+          await startNativeTourLocation();
+          if (!cancelled) {
+            setLocationUnavailable(false);
+          }
+        }
+      }
+    }, 1_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(locationStatePoll);
+      subscription.remove();
+      // Do not stop an active native service merely because Android removed
+      // the React Activity from Recents. A deliberate pause/completion flips
+      // `tourStarted` to false, and the next effect run stops it explicitly.
+    };
+  }, [tourStarted]);
   const [tourOrigin, setTourOrigin] = useState<[number, number] | null>(null);
   const tourOriginRef = useRef<[number, number] | null>(null);
   useEffect(() => {
@@ -580,16 +775,12 @@ const MyTourStart = () => {
   const [cardPosition, setCardPosition] = useState({ x: 24, y: 260 });
   const [, setTourActionVisible] = useState(false);
   const [isPausedTour, setIsPausedTour] = useState(false);
+  const [isPausingTour, setIsPausingTour] = useState(false);
   const leavingRef = useRef(false);
   const locationPauseAlertRef = useRef(false);
   const locationUnavailableErrorsRef = useRef(0);
-
-  // Walking polyline cache keyed by `${fromStopId}->${toStopId}`.
-  const [legPolylines, setLegPolylines] = useState<Record<string, [number, number][]>>({});
-
-  // Active leg = last visited stop (or tour origin) → next pending stop.
-  type ActiveLeg = { key: string; from: [number, number]; to: [number, number]; toStopId: string } | null;
-  const [activeLeg, setActiveLeg] = useState<ActiveLeg>(null);
+  const pausedByLocationRef = useRef(false);
+  const locationPausePromiseRef = useRef<Promise<string | null> | null>(null);
 
   const [followMode, setFollowMode] = useState<'follow' | 'free'>('follow');
   const [zoomLevel, setZoomLevel] = useState(12.6);
@@ -612,8 +803,40 @@ const MyTourStart = () => {
   const pendingSaveInProgressRef = useRef(false);
   const introPlayedRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
-  const lastLiveRouteOriginRef = useRef<[number, number] | null>(null);
-  const lastLiveRouteStopsKeyRef = useRef<string>('');
+  const roadSegmentsRef = useRef<[number, number][][]>([]);
+  const airSegmentsRef = useRef<[number, number][][]>([]);
+  const renderedRouteStopsKeyRef = useRef('');
+  const latestRouteStopsKeyRef = useRef<string>('');
+  const routeRequestSequenceRef = useRef(0);
+  const routeRequestInFlightRef = useRef<{
+    id: number;
+    stopsKey: string;
+    kind: 'full' | 'active';
+  } | null>(null);
+  const lastRouteRequestAtRef = useRef(0);
+  const lastRouteRequestStopsKeyRef = useRef('');
+  const routeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const routeScreenMountedRef = useRef(true);
+
+  useEffect(() => {
+    roadSegmentsRef.current = roadSegments;
+  }, [roadSegments]);
+
+  useEffect(() => {
+    airSegmentsRef.current = airSegments;
+  }, [airSegments]);
+
+  useEffect(() => {
+    routeScreenMountedRef.current = true;
+    return () => {
+      routeScreenMountedRef.current = false;
+      routeRequestSequenceRef.current += 1;
+      if (routeRetryTimerRef.current) {
+        clearTimeout(routeRetryTimerRef.current);
+        routeRetryTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const fetchRoadSegment = useCallback(
     async (from: [number, number], to: [number, number]): Promise<[number, number][] | null> => {
@@ -625,39 +848,63 @@ const MyTourStart = () => {
       // Intra-city legs (< 50 km straight-line) avoid motorways — Lahore
       // tour stops shouldn't route via M2/M3 when normal city roads work.
       // Longer legs allow motorways because they're between cities.
-      const INTRACITY_THRESHOLD_METERS = 50_000;
-      const excludeMotorway = dist < INTRACITY_THRESHOLD_METERS;
+      const excludeMotorway = dist < INTRACITY_ROUTE_DISTANCE_METERS;
 
-      try {
-        const { data } = await axios.get<DirectionsResponse>(
-          // driving-traffic profile follows actual roads with live traffic awareness —
-          // prefers city streets over motorways for short urban legs
-          `https://api.mapbox.com/directions/v5/mapbox/driving/${from[0]},${from[1]};${to[0]},${to[1]}`,
-          {
-            params: {
-              access_token: Config.MAPBOX_TOKEN,
-              geometries: 'geojson',
-              overview: 'full',
-              steps: false,
-              ...(excludeMotorway ? { exclude: 'motorway' } : {}),
-            },
+      // Prefer city roads, but retry without the motorway exclusion if the
+      // constrained request has no route. Both attempts remain real by-road
+      // Mapbox routes; a straight-line visual fallback is never produced.
+      const attempts = excludeMotorway ? [true, false] : [false];
+      for (const shouldExcludeMotorway of attempts) {
+        try {
+          const { data } = await axios.get<DirectionsResponse>(
+            `https://api.mapbox.com/directions/v5/mapbox/driving/${from[0]},${from[1]};${to[0]},${to[1]}`,
+            {
+              params: {
+                access_token: Config.MAPBOX_TOKEN,
+                geometries: 'geojson',
+                overview: 'full',
+                steps: false,
+                ...(shouldExcludeMotorway ? { exclude: 'motorway' } : {}),
+              },
+              timeout: 6_000,
+            }
+          );
+
+          const routedCoordinates = data.routes?.[0]?.geometry?.coordinates;
+          if (routedCoordinates && routedCoordinates.length >= 2) {
+            // Mapbox snaps to the nearest road. Keep exact endpoints so the
+            // rendered route meets the live marker and destination pin.
+            return [from, ...(routedCoordinates as [number, number][]), to];
           }
-        );
-
-        const routedCoordinates = data.routes?.[0]?.geometry?.coordinates;
-        if (routedCoordinates && routedCoordinates.length >= 2) {
-          // Mapbox snaps the route to the nearest road, so the first/last
-          // coordinates aren't exactly `from`/`to`. Force the segment to begin
-          // at `from` and end at `to` so the line meets the pin tips precisely.
-          return [from, ...(routedCoordinates as [number, number][]), to];
+        } catch {
+          // Try the unconstrained road request below when available. The
+          // route owner schedules a quiet retry if every attempt fails.
         }
-        return null;
-      } catch (error) {
-        showError('Route Unavailable', 'Could not find a route between two stops.');
-        return null;
       }
+      return null;
     },
     []
+  );
+
+  const fetchRouteSegment = useCallback(
+    async (from: Coord, to: Coord): Promise<{ road: Coord[]; air: Coord[] }> => {
+      const distance = distanceMetersBetween(from, to);
+
+      // Mapbox driving cannot connect different continents (for example an
+      // iOS simulator in the USA to a Lahore tour). Avoid a guaranteed slow
+      // failure and show that long transfer as a flight leg immediately.
+      // Once the user reaches the destination region, all local legs remain
+      // normal road routes and 50km+ road legs may use motorways.
+      if (distance >= FLIGHT_ROUTE_DISTANCE_METERS) {
+        return { road: [], air: [from, to] };
+      }
+
+      const road = await fetchRoadSegment(from, to);
+      return road
+        ? { road, air: [] }
+        : { road: [], air: [] };
+    },
+    [fetchRoadSegment]
   );
 
   const buildRouteSegments = useCallback(
@@ -672,30 +919,28 @@ const MyTourStart = () => {
       const results = await Promise.all(
         lineStops.slice(0, -1).map(async (from, i) => {
           const to = lineStops[i + 1] as [number, number];
-          const pts = await fetchRoadSegment(from as [number, number], to);
-          return { pts };
+          return fetchRouteSegment(from as Coord, to);
         })
       );
 
-      const road: [number, number][][] = [];
-
-      for (const { pts } of results) {
-        if (!pts) {
-          continue;
-        }
-        // Keep every road leg separate so the current user-to-stop leg can
-        // be styled differently from future legs.
-        if (pts.length >= 2) road.push(pts);
-      }
+      // Preserve one array slot per requested leg. Dropping a failed first
+      // leg would incorrectly promote the second (future) leg to the active
+      // red route. Empty slots stay hidden and are retried by the owner.
+      const road: Coord[][] = results.map(({ road: segment }) =>
+        isRenderableRouteSegment(segment) ? segment : []
+      );
+      const air: Coord[][] = results.map(({ air: segment }) =>
+        isRenderableRouteSegment(segment) ? segment : []
+      );
 
       return {
-        // Never use [start, stop] as a visual fallback: that is a straight
-        // line and falsely suggests the user can travel through buildings.
+        // A straight line is used only for an explicit long-distance flight
+        // leg, never as a fallback for a failed local road request.
         road,
-        air: [] as [number, number][][],
+        air,
       };
     },
-    [fetchRoadSegment]
+    [fetchRouteSegment]
   );
 
   const routeId = route.params?.routeId;
@@ -1046,6 +1291,14 @@ const MyTourStart = () => {
 
   /** Places only — Mapbox optimizes driving order without pulling events forward. */
   const routePlaceStops = useMemo(() => placeStops, [placeStops]);
+  const shouldOptimizeFromLiveLocation = tourStarted || isPausedTour;
+  const optimizationPlaceStops = useMemo(
+    () =>
+      shouldOptimizeFromLiveLocation
+        ? routePlaceStops.filter((stop) => !isStopComplete(stop))
+        : routePlaceStops,
+    [isStopComplete, routePlaceStops, shouldOptimizeFromLiveLocation]
+  );
 
   useEffect(() => {
     if (!routeDetails || !user?.id) return;
@@ -1130,18 +1383,15 @@ const MyTourStart = () => {
     tourStops,
   ]);
 
-  // Prefer the locked-in tour origin so the optimized stop order stays
-  // identical across pause/resume and restarts. Fall back to currentLocation
-  // only while waiting for the origin to be set (Step 3 effect).
+  // Current GPS is authoritative for choosing the next unvisited stop.
   const orderingAnchor = useMemo<[number, number] | null>(
-    () => tourOrigin ?? currentLocation,
+    () => currentLocation ?? tourOrigin,
     [currentLocation, tourOrigin]
   );
 
-  // Anchor used specifically for optimization when we want to prefer the
-  // user's live GPS while the tour is active. This differs from
-  // `orderingAnchor` which prefers the locked tour origin for non-active
-  // scenarios.
+  // Re-evaluate from live GPS for an active/resumable tour. The API key below
+  // rounds GPS to ~100m, so normal location noise cannot reshuffle stops every
+  // second, while a meaningful move or completing a stop does optimize again.
   const optimizationAnchor = useMemo<[number, number] | null>(() => {
     if (tourStarted || isPausedTour) {
       return (
@@ -1154,8 +1404,14 @@ const MyTourStart = () => {
       );
     }
 
-    return tourOrigin ?? currentLocation;
+    return currentLocation ?? tourOrigin;
   }, [currentLocation, tourOrigin, tourStarted, isPausedTour, visitedStopsInVisitOrder]);
+
+  const currentOptimizationKey = useMemo(() => {
+    if (!optimizationAnchor || optimizationPlaceStops.length === 0) return '';
+    const ids = optimizationPlaceStops.map((stop) => stop.id).join(',');
+    return `${optimizationAnchor[0].toFixed(3)},${optimizationAnchor[1].toFixed(3)}|${ids}`;
+  }, [optimizationAnchor, optimizationPlaceStops]);
 
   // Cached "true" road-distance order from Mapbox Optimization API.
   // Keyed by stop ids in current set so we don't refetch needlessly.
@@ -1165,26 +1421,37 @@ const MyTourStart = () => {
   } | null>(null);
 
   useEffect(() => {
-    // If a saved tour order exists and the tour is not active/paused, don't
-    // re-run optimization. But if the tour is active or paused we should
-    // re-optimize anchored to the live position.
+    // A saved non-active tour keeps its stored order. Active/paused tours use
+    // the stable tour-origin/last-stop anchor calculated above.
     if (savedTourOrder && !tourStarted && !isPausedTour) {
       return;
     }
-    if (!optimizationAnchor || routePlaceStops.length < 2) {
+    if (!optimizationAnchor || optimizationPlaceStops.length < 2) {
       return;
     }
     if (!Config.MAPBOX_TOKEN) {
       return;
     }
 
-    const ids = routePlaceStops.map((s) => s.id).join(',');
-    const key = `${optimizationAnchor[0].toFixed(4)},${optimizationAnchor[1].toFixed(4)}|${ids}`;
+    const key = currentOptimizationKey;
     if (optimizedOrder?.key === key) {
       return;
     }
 
-    const coords = [optimizationAnchor, ...routePlaceStops.map((s) => s.coordinate)]
+    // Driving optimization has no valid result when the device and every
+    // stop are in disconnected regions/continents. The local nearest-order
+    // fallback below is immediate; route rendering handles the first transfer
+    // as a flight leg.
+    const nearestDistance = Math.min(
+      ...optimizationPlaceStops.map((stop) =>
+        distanceMetersBetween(optimizationAnchor, stop.coordinate)
+      )
+    );
+    if (nearestDistance >= FLIGHT_ROUTE_DISTANCE_METERS) {
+      return;
+    }
+
+    const coords = [optimizationAnchor, ...optimizationPlaceStops.map((s) => s.coordinate)]
       .map((c) => `${c[0]},${c[1]}`)
       .join(';');
 
@@ -1207,7 +1474,7 @@ const MyTourStart = () => {
           .map((wp, originalIndex) => ({ originalIndex, order: wp.waypoint_index }))
           .filter((entry) => entry.originalIndex > 0)
           .sort((a, b) => a.order - b.order)
-          .map((entry) => routePlaceStops[entry.originalIndex - 1].id);
+          .map((entry) => optimizationPlaceStops[entry.originalIndex - 1].id);
         setOptimizedOrder({ key, ids: orderedIds });
       })
       .catch(() => {
@@ -1217,55 +1484,77 @@ const MyTourStart = () => {
     return () => {
       cancelled = true;
     };
-  }, [routePlaceStops, optimizationAnchor, optimizedOrder, savedTourOrder, tourStarted, isPausedTour]);
+  }, [
+    currentOptimizationKey,
+    optimizationAnchor,
+    optimizationPlaceStops,
+    optimizedOrder?.key,
+    savedTourOrder,
+    tourStarted,
+    isPausedTour,
+  ]);
 
   const mapOptimizedPlaceStops = useMemo(() => {
-    if (savedTourOrder && savedTourOrder.length > 0) {
-      const byId = new Map(routePlaceStops.map((s) => [s.id, s]));
+    // Saved order is useful before a tour starts. During navigation, current
+    // GPS and only the unvisited stop set decide the next destination.
+    if (!shouldOptimizeFromLiveLocation && savedTourOrder && savedTourOrder.length > 0) {
+      const byId = new Map(optimizationPlaceStops.map((s) => [s.id, s]));
       const ordered = savedTourOrder
         .map((id) => byId.get(id))
         .filter((s): s is TourStop => Boolean(s));
-      const missing = routePlaceStops.filter((s) => !savedTourOrder.includes(s.id));
+      const missing = optimizationPlaceStops.filter((s) => !savedTourOrder.includes(s.id));
       return [...ordered, ...missing];
     }
 
     if (!optimizedOrder && !optimizationAnchor) {
-      return routePlaceStops;
+      return optimizationPlaceStops;
     }
 
     let ordered: TourStop[];
 
-    if (optimizedOrder) {
-      const byId = new Map(routePlaceStops.map((s) => [s.id, s]));
+    if (optimizedOrder?.key === currentOptimizationKey) {
+      const byId = new Map(optimizationPlaceStops.map((s) => [s.id, s]));
       ordered = optimizedOrder.ids
         .map((id) => byId.get(id))
         .filter((s): s is TourStop => Boolean(s));
-      const missing = routePlaceStops.filter((s) => !optimizedOrder.ids.includes(s.id));
+      const missing = optimizationPlaceStops.filter((s) => !optimizedOrder.ids.includes(s.id));
       if (missing.length > 0) {
         ordered = [...ordered, ...orderStopsByNearest(missing, optimizationAnchor)];
       }
     } else {
-      ordered = orderStopsByNearest(routePlaceStops, optimizationAnchor);
+      ordered = orderStopsByNearest(optimizationPlaceStops, optimizationAnchor);
     }
 
     return ordered;
-  }, [routePlaceStops, optimizedOrder, orderingAnchor, savedTourOrder]);
+  }, [
+    currentOptimizationKey,
+    optimizationAnchor,
+    optimizationPlaceStops,
+    optimizedOrder,
+    savedTourOrder,
+    shouldOptimizeFromLiveLocation,
+  ]);
 
   const orderedNavigableStops = useMemo(() => {
     if (!tourStarted && !isPausedTour) {
       return mapOptimizedPlaceStops;
     }
 
-    // Always use current location first when live rerouting.
-    // If GPS is available, the next route should be based on the user's real position,
-    // not the coordinate of the last visited stop.
+    // With no timed events, the optimized/persisted order is authoritative.
+    // The user's live coordinate changes the road to that next stop, but must
+    // not randomly activate a different destination while they are moving.
+    if (allTodayEventStops.length === 0) {
+      return mapOptimizedPlaceStops.filter((stop) => !isStopComplete(stop));
+    }
+
     const anchor =
-      currentLocation ||
       visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1]?.coordinate ||
+      tourOrigin ||
+      currentLocation ||
       optimizationAnchor;
 
-    // Recalculate route order when the tour is active or paused so the next stop
-    // honors current GPS instead of the original completed-location anchor.
+    // Timed events still need scheduling, but use a stable leg anchor rather
+    // than every raw GPS point.
     return scheduleStopsWithEventTiming(
       [...mapOptimizedPlaceStops, ...allTodayEventStops],
       isStopComplete,
@@ -1278,7 +1567,8 @@ const MyTourStart = () => {
     isPausedTour,
     isStopComplete,
     mapOptimizedPlaceStops,
-    orderingAnchor,
+    optimizationAnchor,
+    tourOrigin,
     tourStarted,
     visitedStopsInVisitOrder,
   ]);
@@ -1715,42 +2005,6 @@ const MyTourStart = () => {
     );
   }, [isStopComplete, nearestPendingStop, selectedStop]);
 
-  useEffect(() => {
-    if (!nearestPendingStop) {
-      setActiveLeg(null);
-      return;
-    }
-    const lastVisited = visitedStopsInVisitOrder[visitedStopsInVisitOrder.length - 1];
-    const fromCoord: [number, number] | null =
-      currentLocation || lastVisited?.coordinate || tourOrigin;
-    if (!fromCoord) {
-      setActiveLeg(null);
-      return;
-    }
-    const fromId = lastVisited?.id || 'origin';
-    setActiveLeg({
-      key: `${fromId}->${nearestPendingStop.id}`,
-      from: fromCoord,
-      to: nearestPendingStop.coordinate,
-      toStopId: nearestPendingStop.id,
-    });
-  }, [visitedStopsInVisitOrder, nearestPendingStop, tourOrigin, currentLocation]);
-
-  const fetchedLegKeysRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!activeLeg) return;
-    if (fetchedLegKeysRef.current.has(activeLeg.key)) return;
-    fetchedLegKeysRef.current.add(activeLeg.key);
-    let cancelled = false;
-    fetchRoadSegment(activeLeg.from, activeLeg.to).then((pts) => {
-      if (cancelled || !pts) return;
-      setLegPolylines((prev) => ({ ...prev, [activeLeg.key]: pts }));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLeg, fetchRoadSegment]);
-
   // Continuous GPS tracking — runs while the screen is mounted.
   useEffect(() => {
     let cancelled = false;
@@ -1777,11 +2031,23 @@ const MyTourStart = () => {
             return;
           }
 
+          // Android can deliver one final queued watcher callback immediately
+          // after its master location switch is disabled. Never restore that
+          // stale point over the GPS-off state detected by the native module.
+          if (nativeLocationDisabledRef.current) {
+            return;
+          }
+
           const next: [number, number] = [
             position.coords.longitude,
             position.coords.latitude,
           ];
+          if (Number.isFinite(accuracy) && accuracy > 0) {
+            currentLocationAccuracyRef.current = accuracy;
+          }
+          locationBlockedOnEntryRef.current = false;
           setCurrentLocation(next);
+          currentLocationRef.current = next;
           locationUnavailableErrorsRef.current = 0;
           setLocationUnavailable(false);
 
@@ -1951,12 +2217,43 @@ const MyTourStart = () => {
     cameraRef.current.fitBounds(ne, sw, [170, 36, 180, 36], 900);
   }, [airSegments, completedAirSegments, completedRoadSegments, mapReady, nearestPendingStop, orderedPlaceStops, roadSegments]);
 
+  const pendingNavigableStops = useMemo(
+    () =>
+      (tourStarted || hasVisitedProgress) && orderedRemainingStops.length > 0
+        ? orderedRemainingStops
+        : orderedPlaceStops,
+    [hasVisitedProgress, orderedPlaceStops, orderedRemainingStops, tourStarted]
+  );
+
+  const pendingRouteStopsKey = useMemo(
+    () => pendingNavigableStops.map((stop) => stop.id).join(','),
+    [pendingNavigableStops]
+  );
+
   useEffect(() => {
     const hasCompletedTour = orderedPlaceStops.length > 0 && orderedRemainingStops.length === 0;
+    latestRouteStopsKeyRef.current = pendingRouteStopsKey;
 
     if (hasCompletedTour) {
+      routeRequestSequenceRef.current += 1;
+      routeRequestInFlightRef.current = null;
+      roadSegmentsRef.current = [];
+      airSegmentsRef.current = [];
+      renderedRouteStopsKeyRef.current = '';
       setRoadSegments([]);
       setAirSegments([]);
+      setRenderedRouteStopsKey('');
+      return;
+    }
+
+    // Keep the last valid Mapbox road geometry visible while GPS is disabled.
+    // Once location returns this effect reruns with a fresh origin and swaps
+    // in the updated by-road route.
+    if (
+      locationUnavailable ||
+      pausedByLocationRef.current ||
+      locationBlockedOnEntryRef.current
+    ) {
       return;
     }
 
@@ -1964,78 +2261,296 @@ const MyTourStart = () => {
     // install Android may still be resolving the first GPS fix; waiting here
     // prevents the route from being anchored to a stale/default location.
     if ((tourStarted || hasVisitedProgress) && !currentLocation) {
-      setRoadSegments([]);
-      setAirSegments([]);
       return;
     }
-
-    // Route line connects today's events and locations in optimized order.
-    const navigablePlaceStops =
-      (tourStarted || hasVisitedProgress) && orderedRemainingStops.length > 0
-        ? orderedRemainingStops
-        : orderedPlaceStops;
 
     const routeStartCoordinate =
       ((tourStarted || hasVisitedProgress) ? routeAnchor : currentLocation) || null;
 
     const lineStops = [
       ...(routeStartCoordinate ? [routeStartCoordinate] : []),
-      ...navigablePlaceStops.map((stop) => stop.coordinate),
+      ...pendingNavigableStops.map((stop) => stop.coordinate),
     ];
 
     if (lineStops.length < 2) {
+      routeRequestSequenceRef.current += 1;
+      routeRequestInFlightRef.current = null;
+      roadSegmentsRef.current = [];
+      airSegmentsRef.current = [];
+      renderedRouteStopsKeyRef.current = '';
       setRoadSegments([]);
       setAirSegments([]);
+      setRenderedRouteStopsKey('');
       return;
     }
 
-    // Do not render a provisional straight line. Until Mapbox returns actual
-    // driving geometry, keep the route empty and show the existing loading
-    // pill so the map never presents an inaccurate route.
-    setRoadSegments([]);
-    setAirSegments([]);
+    const isNavigatedRoute = tourStarted || hasVisitedProgress;
+    const expectedLegCount = lineStops.length - 1;
+    const currentRoadSegments = roadSegmentsRef.current;
+    const currentAirSegments = airSegmentsRef.current;
+    const routeMatchesCurrentStops =
+      renderedRouteStopsKeyRef.current === pendingRouteStopsKey;
+    const hasCompleteRoute =
+      routeMatchesCurrentStops &&
+      currentRoadSegments.length === expectedLegCount &&
+      Array.from({ length: expectedLegCount }, (_, index) =>
+        isRenderableRouteSegment(currentRoadSegments[index]) ||
+        isRenderableRouteSegment(currentAirSegments[index])
+      ).every(Boolean);
 
-    const liveStopsKey = navigablePlaceStops.map((stop) => stop.id).join(',');
-    const isLiveRoute = tourStarted || hasVisitedProgress;
+    // Progress along the selected road is rendered locally for every GPS
+    // update. Only ask Mapbox for a new active leg when GPS has genuinely
+    // moved away from that road, so the UI is immediate without flooding the
+    // Directions API while the user follows the suggested route.
+    const activeRoadSegment =
+      routeMatchesCurrentStops && isRenderableRouteSegment(currentRoadSegments[0])
+        ? currentRoadSegments[0]
+        : null;
+    const offRouteDistance =
+      tourStarted && currentLocation && activeRoadSegment
+        ? distanceMetersBetween(
+          currentLocation,
+          projectPointOnPolyline(currentLocation, activeRoadSegment).point
+        )
+        : 0;
+    const accuracyAwareRerouteDistance = Math.min(
+      MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS,
+      Math.max(
+        MIN_OFF_ROUTE_REROUTE_DISTANCE_METERS,
+        currentLocationAccuracyRef.current * 1.25
+      )
+    );
+    const needsOffRouteRefresh =
+      tourStarted &&
+      Boolean(activeRoadSegment) &&
+      offRouteDistance >= accuracyAwareRerouteDistance;
+
+    if (hasCompleteRoute && !needsOffRouteRefresh) {
+      return;
+    }
+
+    const inFlight = routeRequestInFlightRef.current;
     if (
-      isLiveRoute &&
-      routeStartCoordinate &&
-      lastLiveRouteOriginRef.current &&
-      lastLiveRouteStopsKeyRef.current === liveStopsKey &&
-      distanceMetersBetween(lastLiveRouteOriginRef.current, routeStartCoordinate) <
-        LIVE_ROUTE_REFRESH_DISTANCE_METERS
+      inFlight?.stopsKey === pendingRouteStopsKey &&
+      !(
+        needsOffRouteRefresh &&
+        inFlight.kind === 'full' &&
+        Boolean(activeRoadSegment)
+      )
     ) {
       return;
     }
 
-    if (isLiveRoute && routeStartCoordinate) {
-      lastLiveRouteOriginRef.current = routeStartCoordinate;
-      lastLiveRouteStopsKeyRef.current = liveStopsKey;
+    const now = Date.now();
+    const elapsedSinceRequest = now - lastRouteRequestAtRef.current;
+    if (
+      lastRouteRequestStopsKeyRef.current === pendingRouteStopsKey &&
+      elapsedSinceRequest < LIVE_ROUTE_REFRESH_MIN_INTERVAL_MS
+    ) {
+      if (!routeRetryTimerRef.current) {
+        routeRetryTimerRef.current = setTimeout(() => {
+          routeRetryTimerRef.current = null;
+          if (routeScreenMountedRef.current) {
+            setRouteRetryNonce((value) => value + 1);
+          }
+        }, LIVE_ROUTE_REFRESH_MIN_INTERVAL_MS - elapsedSinceRequest);
+      }
+      return;
     }
 
-    let isMounted = true;
+    if (routeRetryTimerRef.current) {
+      clearTimeout(routeRetryTimerRef.current);
+      routeRetryTimerRef.current = null;
+    }
+
+    const requestId = routeRequestSequenceRef.current + 1;
+    routeRequestSequenceRef.current = requestId;
+    routeRequestInFlightRef.current = {
+      id: requestId,
+      stopsKey: pendingRouteStopsKey,
+      kind:
+        needsOffRouteRefresh && Boolean(activeRoadSegment)
+          ? 'active'
+          : 'full',
+    };
+    lastRouteRequestAtRef.current = now;
+    lastRouteRequestStopsKeyRef.current = pendingRouteStopsKey;
+    const scheduleRetry = (delay = ROUTE_RETRY_DELAY_MS) => {
+      if (routeRetryTimerRef.current) {
+        clearTimeout(routeRetryTimerRef.current);
+      }
+      routeRetryTimerRef.current = setTimeout(() => {
+        routeRetryTimerRef.current = null;
+        if (routeScreenMountedRef.current) {
+          setRouteRetryNonce((value) => value + 1);
+        }
+      }, delay);
+    };
+
+    const requestIsCurrent = () =>
+      routeScreenMountedRef.current &&
+      routeRequestSequenceRef.current === requestId &&
+      latestRouteStopsKeyRef.current === pendingRouteStopsKey;
+
+    const commitRoute = (
+      nextRoad: [number, number][][],
+      nextAir: [number, number][][] = []
+    ) => {
+      if (!requestIsCurrent()) return false;
+
+      const hasActiveRoad = isRenderableRouteSegment(nextRoad[0]);
+      const hasActiveAir = isRenderableRouteSegment(nextAir[0]);
+      const hasAnyRoad = nextRoad.some(isRenderableRouteSegment);
+      const hasAnyAir = nextAir.some(isRenderableRouteSegment);
+      const usableRoute = isNavigatedRoute
+        ? hasActiveRoad || hasActiveAir
+        : hasAnyRoad || hasAnyAir;
+      if (!usableRoute) return false;
+
+      // Commit geometry and its stop-key atomically. Rendering checks this
+      // key, so an old route can never be shown as the route to a newly
+      // active stop after completion/reopen.
+      roadSegmentsRef.current = nextRoad;
+      airSegmentsRef.current = nextAir;
+      renderedRouteStopsKeyRef.current = pendingRouteStopsKey;
+      setRoadSegments(nextRoad);
+      setAirSegments(nextAir);
+      setRenderedRouteStopsKey(pendingRouteStopsKey);
+      setRouteGeometryVersion((value) => value + 1);
+      return true;
+    };
 
     const fetchRoadRoute = async () => {
       try {
-        if (!isMounted) return;
-        const next = await buildRouteSegments(lineStops as [number, number][]);
-        if (!isMounted) return;
-        setRoadSegments(next.road);
-        setAirSegments(next.air);
+        let nextRoad: [number, number][][];
+        let nextAir: [number, number][][] = [];
+
+        // When only the live origin has changed, refresh just the user-to-next
+        // stop leg. Future stop-to-stop legs are still valid and remain on
+        // screen while this request is in flight.
+        if (
+          needsOffRouteRefresh &&
+          isNavigatedRoute &&
+          Boolean(activeRoadSegment) &&
+          routeStartCoordinate &&
+          pendingNavigableStops[0]
+        ) {
+          const activeLeg = await fetchRouteSegment(
+            routeStartCoordinate,
+            pendingNavigableStops[0].coordinate
+          );
+          if (
+            !isRenderableRouteSegment(activeLeg.road) &&
+            !isRenderableRouteSegment(activeLeg.air)
+          ) {
+            scheduleRetry();
+            return;
+          }
+          nextRoad = [activeLeg.road, ...currentRoadSegments.slice(1)];
+          nextAir = [activeLeg.air, ...currentAirSegments.slice(1)];
+        } else if (isNavigatedRoute) {
+          // Start all road calls together, but do not make the active route
+          // wait for every future leg. As soon as user -> next stop resolves,
+          // render it and let the remaining legs finish in the background.
+          const segmentRequests = lineStops.slice(0, -1).map((from, index) =>
+            fetchRouteSegment(
+              from as [number, number],
+              lineStops[index + 1] as [number, number]
+            )
+          );
+          const activeLeg = await segmentRequests[0];
+          const hasActiveSegment =
+            isRenderableRouteSegment(activeLeg.road) ||
+            isRenderableRouteSegment(activeLeg.air);
+          if (!hasActiveSegment || !requestIsCurrent()) {
+            if (requestIsCurrent()) scheduleRetry();
+            return;
+          }
+
+          const provisionalFutureRoad = Array.from(
+            { length: Math.max(0, expectedLegCount - 1) },
+            (_, index) =>
+              routeMatchesCurrentStops
+                ? currentRoadSegments[index + 1] || []
+                : []
+          );
+          const provisionalFutureAir = Array.from(
+            { length: Math.max(0, expectedLegCount - 1) },
+            (_, index) =>
+              routeMatchesCurrentStops
+                ? currentAirSegments[index + 1] || []
+                : []
+          );
+          commitRoute(
+            [activeLeg.road, ...provisionalFutureRoad],
+            [activeLeg.air, ...provisionalFutureAir]
+          );
+
+          if (expectedLegCount === 1) {
+            return;
+          }
+
+          const futureSegments = await Promise.all(segmentRequests.slice(1));
+          nextRoad = [
+            activeLeg.road,
+            ...futureSegments.map((segment) =>
+              isRenderableRouteSegment(segment.road) ? segment.road : []
+            ),
+          ];
+          nextAir = [
+            activeLeg.air,
+            ...futureSegments.map((segment) =>
+              isRenderableRouteSegment(segment.air) ? segment.air : []
+            ),
+          ];
+        } else {
+          const next = await buildRouteSegments(lineStops as [number, number][]);
+          nextRoad = next.road;
+          nextAir = next.air;
+        }
+
+        if (!commitRoute(nextRoad, nextAir)) {
+          if (!requestIsCurrent()) return;
+          scheduleRetry();
+          return;
+        }
+
+        const routeIsComplete =
+          nextRoad.length === expectedLegCount &&
+          Array.from({ length: expectedLegCount }, (_, index) =>
+            isRenderableRouteSegment(nextRoad[index]) ||
+            isRenderableRouteSegment(nextAir[index])
+          ).every(Boolean);
+        if (!routeIsComplete) {
+          scheduleRetry();
+        }
       } catch {
-        if (isMounted) {
-          setRoadSegments([]);
-          setAirSegments([]);
+        // Never erase the last valid road geometry on a transient Mapbox or
+        // network failure. Retry quietly; the existing route stays usable.
+        scheduleRetry();
+      } finally {
+        if (routeRequestInFlightRef.current?.id === requestId) {
+          routeRequestInFlightRef.current = null;
         }
       }
     };
 
     fetchRoadRoute();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [buildRouteSegments, currentLocation, hasVisitedProgress, orderedPlaceStops, orderedRemainingStops, routeAnchor, tourStarted]);
+  }, [
+    buildRouteSegments,
+    currentLocation,
+    fetchRouteSegment,
+    hasVisitedProgress,
+    locationUnavailable,
+    orderedPlaceStops,
+    orderedRemainingStops.length,
+    pendingNavigableStops,
+    pendingRouteStopsKey,
+    routeAnchor,
+    routeGeometryVersion,
+    routeRetryNonce,
+    tourStarted,
+  ]);
 
   useEffect(() => {
     const completedStops = [
@@ -2169,42 +2684,94 @@ const MyTourStart = () => {
     orderedPlaceStops,
   ]);
 
-  const pendingRouteFeatures = useMemo(() =>
-    [...roadSegments, ...airSegments]
-      .filter((seg) => seg.length >= 2)
-      .map((seg) => ({
-        type: 'Feature' as const,
-        properties: {},
-        geometry: { type: 'LineString' as const, coordinates: seg },
-      })),
-    [roadSegments, airSegments]
-  );
+  const routeGeometryMatchesCurrentStops =
+    renderedRouteStopsKey === pendingRouteStopsKey;
+
+  const makeRouteFeature = useCallback((segment: [number, number][]) => ({
+    type: 'Feature' as const,
+    properties: {},
+    geometry: { type: 'LineString' as const, coordinates: segment },
+  }), []);
 
   const activeRouteLine = useMemo<FeatureCollection<LineString>>(
-    () => ({
-      type: 'FeatureCollection',
-      features: (tourStarted || hasVisitedProgress) && pendingRouteFeatures.length > 0
-        ? [pendingRouteFeatures[0]]
-        : [],
-    }),
-    [hasVisitedProgress, pendingRouteFeatures, tourStarted]
+    () => {
+      if (
+        !routeGeometryMatchesCurrentStops ||
+        !(tourStarted || hasVisitedProgress)
+      ) {
+        return { type: 'FeatureCollection', features: [] };
+      }
+
+      const activeSegment = isRenderableRouteSegment(roadSegments[0])
+        ? roadSegments[0]
+        : isRenderableRouteSegment(airSegments[0])
+          ? airSegments[0]
+          : null;
+      if (!activeSegment) {
+        return { type: 'FeatureCollection', features: [] };
+      }
+
+      let remaining: Coord[] = activeSegment;
+      if (currentLocation) {
+        const projection = projectPointOnPolyline(currentLocation, remaining);
+        // A malformed/incomplete leg must not take the whole screen down.
+        // `splitPolylineAt` normally always returns both arrays, but the
+        // fallback also protects releases receiving stale cached geometry.
+        const split = splitPolylineAt(remaining, projection);
+        remaining = Array.isArray(split?.remaining) ? split.remaining : [];
+      }
+
+      return {
+        type: 'FeatureCollection',
+        features: remaining.length >= 2 ? [makeRouteFeature(remaining)] : [],
+      };
+    },
+    [
+      currentLocation,
+      airSegments,
+      hasVisitedProgress,
+      makeRouteFeature,
+      roadSegments,
+      routeGeometryMatchesCurrentStops,
+      tourStarted,
+    ]
   );
 
   const routeLine = useMemo<FeatureCollection<LineString>>(
     () => ({
       type: 'FeatureCollection',
-      features: (tourStarted || hasVisitedProgress)
-        ? pendingRouteFeatures.slice(1)
-        : pendingRouteFeatures,
+      features: routeGeometryMatchesCurrentStops
+        ? [
+          ...(
+            (tourStarted || hasVisitedProgress)
+              ? roadSegments.slice(1)
+              : roadSegments
+          ),
+          ...(
+            (tourStarted || hasVisitedProgress)
+              ? airSegments.slice(1)
+              : airSegments
+          ),
+        ]
+          .filter(isRenderableRouteSegment)
+          .map(makeRouteFeature)
+        : [],
     }),
-    [hasVisitedProgress, pendingRouteFeatures, tourStarted]
+    [
+      airSegments,
+      hasVisitedProgress,
+      makeRouteFeature,
+      roadSegments,
+      routeGeometryMatchesCurrentStops,
+      tourStarted,
+    ]
   );
 
   const completedRouteLine = useMemo<FeatureCollection<LineString>>(
     () => ({
       type: 'FeatureCollection',
       features: [...completedRoadSegments, ...completedAirSegments]
-        .filter((seg) => seg.length >= 2)
+        .filter(isRenderableRouteSegment)
         .map((seg) => ({
           type: 'Feature' as const,
           properties: {},
@@ -2218,7 +2785,7 @@ const MyTourStart = () => {
     () => ({
       type: 'FeatureCollection',
       features: [...completedApproachRoadSegments, ...completedApproachAirSegments]
-        .filter((seg) => seg.length >= 2)
+        .filter(isRenderableRouteSegment)
         .map((seg) => ({
           type: 'Feature' as const,
           properties: {},
@@ -2227,18 +2794,30 @@ const MyTourStart = () => {
     }),
     [completedApproachAirSegments, completedApproachRoadSegments]
   );
-  const activeLegPolyline = useMemo<Coord[] | null>(() => {
-    if (!activeLeg) return null;
-    return legPolylines[activeLeg.key] || null;
-  }, [activeLeg, legPolylines]);
-
-  const activeLegCompletedShape = useMemo<FeatureCollection<LineString>>(() => {
-    if (!activeLegPolyline || !currentLocation) {
+  const activeRouteCompletedShape = useMemo<FeatureCollection<LineString>>(() => {
+    const activePolyline: Coord[] | null =
+      !routeGeometryMatchesCurrentStops
+        ? null
+        : isRenderableRouteSegment(roadSegments[0])
+          ? roadSegments[0]
+          : isRenderableRouteSegment(airSegments[0])
+            ? airSegments[0]
+            : null;
+    if (!activePolyline || !currentLocation) {
       return { type: 'FeatureCollection', features: [] };
     }
-    const projection = projectPointOnPolyline(currentLocation, activeLegPolyline);
-    const { completed } = splitPolylineAt(activeLegPolyline, projection);
-    if (completed.length < 2) {
+    const projection = projectPointOnPolyline(currentLocation, activePolyline);
+    const split = splitPolylineAt(activePolyline, projection);
+    const completed = Array.isArray(split?.completed) ? split.completed : [];
+    const markerGap = distanceMetersBetween(currentLocation, projection.point);
+    // The gray line represents progress already travelled, so its endpoint
+    // must follow the live marker immediately even while a new by-road red
+    // route is being fetched after a deviation.
+    const completedToLiveMarker: Coord[] =
+      markerGap > 0.75
+        ? [...completed, currentLocation]
+        : completed;
+    if (completedToLiveMarker.length < 2) {
       return { type: 'FeatureCollection', features: [] };
     }
     return {
@@ -2246,10 +2825,10 @@ const MyTourStart = () => {
       features: [{
         type: 'Feature',
         properties: {},
-        geometry: { type: 'LineString', coordinates: completed },
+        geometry: { type: 'LineString', coordinates: completedToLiveMarker },
       }],
     };
-  }, [activeLegPolyline, currentLocation]);
+  }, [airSegments, currentLocation, roadSegments, routeGeometryMatchesCurrentStops]);
 
   // Stop name labels (native SymbolLayer — renders at every zoom level reliably)
   const unvisitedStopLabels = useMemo<FeatureCollection<Point>>(() => ({
@@ -2310,11 +2889,17 @@ const MyTourStart = () => {
   );
 
   const routeDistanceKm = useMemo(() => {
+    const visibleRoadSegments = routeGeometryMatchesCurrentStops
+      ? roadSegments
+      : [];
+    const visibleAirSegments = routeGeometryMatchesCurrentStops
+      ? airSegments
+      : [];
     const allCoords: [number, number][] = [
       ...completedRoadSegments.flat(),
       ...completedAirSegments.flat(),
-      ...roadSegments.flat(),
-      ...airSegments.flat(),
+      ...visibleRoadSegments.flat(),
+      ...visibleAirSegments.flat(),
     ];
     if (allCoords.length < 2) return 0;
     const meters = allCoords
@@ -2322,7 +2907,13 @@ const MyTourStart = () => {
       .reduce((sum: number, coord: [number, number], i: number) =>
         sum + distanceMetersBetween(allCoords[i], coord), 0);
     return meters / 1000;
-  }, [airSegments, completedAirSegments, completedRoadSegments, roadSegments]);
+  }, [
+    airSegments,
+    completedAirSegments,
+    completedRoadSegments,
+    roadSegments,
+    routeGeometryMatchesCurrentStops,
+  ]);
 
   const currentMarkerNeedsStandalonePin = useMemo(
     () => Boolean(currentLocation),
@@ -2536,10 +3127,10 @@ const MyTourStart = () => {
       setCompletedAirSegments([]);
       setCompletedApproachRoadSegments([]);
       setCompletedApproachAirSegments([]);
-      setLegPolylines({});
-      if (fetchedLegKeysRef.current) {
-        fetchedLegKeysRef.current.clear();
-      }
+      roadSegmentsRef.current = [];
+      airSegmentsRef.current = [];
+      renderedRouteStopsKeyRef.current = '';
+      setRenderedRouteStopsKey('');
       setSavedTourOrder(null);
 
       pendingEditSaveRef.current = true;
@@ -2680,7 +3271,7 @@ const MyTourStart = () => {
       optimizedOrder,
     ]
   );
-  const pauseTourState = useCallback(async () => {
+  const pauseTourState = useCallback(async (showPausedToast = true) => {
     if (leavingRef.current || isCompletedTour) {
       return tourId || null;
     }
@@ -2691,7 +3282,9 @@ const MyTourStart = () => {
     setSelectedStop(null);
     setSelectedEvent(null);
     const savedId = await persistTourIfNeeded(placeProgress, startedAt, 'paused').catch(() => null);
-    showInfo('Tour Paused', 'You can resume this tour anytime.');
+    if (showPausedToast) {
+      showInfo('Tour Paused', 'You can resume this tour anytime.');
+    }
     // `persistTourIfNeeded` may create the document during this call. Use the
     // ref as the authoritative ID so the screen we navigate back to updates
     // the exact paused card instead of leaving a stale/duplicate route.
@@ -2707,26 +3300,114 @@ const MyTourStart = () => {
 
     locationPauseAlertRef.current = true;
     setCurrentLocation(null);
-    setRoadSegments([]);
-    setAirSegments([]);
-    pauseTourState().finally(() => {
-      CustomAlert.alert(
-        'Tour Paused',
-        'Location is turned off. Turn on device location before starting or resuming this tour.',
-        [{ text: 'OK', onPress: () => { locationPauseAlertRef.current = false; } }],
-      );
-    });
+
+    // A process restored directly into an already-active tour has not yet had
+    // a live fix in this session. Keep that tour suspended in place so Open
+    // Settings -> location ON can continue it and rebuild the road route.
+    if (locationBlockedOnEntryRef.current) {
+      showLocationRequiredAlert();
+      return;
+    }
+
+    // Pause/persist in the background, but show the actionable settings modal
+    // immediately. Waiting for Firestore here made the screen appear stuck.
+    pausedByLocationRef.current = true;
+    locationPausePromiseRef.current = pauseTourState(false);
+    showLocationRequiredAlert();
   }, [locationUnavailable, pauseTourState, tourStarted]);
 
   useEffect(() => {
+    // Allow the warning to be shown again if this mounted screen is later
+    // resumed successfully and location is disabled a second time.
+    if (!locationUnavailable) {
+      locationPauseAlertRef.current = false;
+    }
+  }, [locationUnavailable]);
+
+  useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState !== 'active' || !tourStarted || locationPauseAlertRef.current) return;
+      if (nextState !== 'active' || (!tourStarted && !pausedByLocationRef.current)) return;
 
       let cancelled = false;
+      const resumeLocationPausedTour = async () => {
+        if (!pausedByLocationRef.current) return;
+        await locationPausePromiseRef.current;
+        if (cancelled) return;
+
+        leavingRef.current = false;
+        pausedByLocationRef.current = false;
+        locationPausePromiseRef.current = null;
+        setIsPausedTour(false);
+        setTourStarted(true);
+        persistTourIfNeeded(placeProgress, startedAt, 'active', true).catch(() => null);
+      };
+
       const verifyLocationService = async () => {
-        if (!(await requestLocationPermission()) || cancelled) return;
+        if (!(await requestLocationPermission()) || cancelled) {
+          if (!cancelled) {
+            setLocationStatusChecked(true);
+            setLocationUnavailable(true);
+            locationPauseAlertRef.current = true;
+            showLocationRequiredAlert();
+          }
+          return;
+        }
+
+        // A JS GPS watcher can be suspended while the screen is locked. Read
+        // the fix written by the native foreground service first so the map
+        // and the active route recover immediately on unlock.
+        const nativeStatus = await getNativeTourLocationStatus();
+        if (cancelled) return;
+        if (nativeStatus?.locationEnabled === false) {
+          nativeLocationDisabledRef.current = true;
+          setLocationUnavailable(true);
+          // The Open Settings action dismisses the modal before Android comes
+          // back to the app. If location is still off, present it again.
+          locationPauseAlertRef.current = true;
+          showLocationRequiredAlert();
+          return;
+        }
+        if (nativeStatus?.locationEnabled === true) {
+          nativeLocationDisabledRef.current = false;
+          locationBlockedOnEntryRef.current = false;
+          setLocationStatusChecked(true);
+          setLocationUnavailable(false);
+          await startNativeTourLocation();
+
+          // A running tour is paused while its required GPS service is off.
+          // Returning from Location Settings with GPS enabled resumes only
+          // that automatic pause; a user-initiated pause stays paused.
+          await resumeLocationPausedTour();
+        }
+        const nativeAge = Number(nativeStatus?.timestamp) > 0
+          ? Date.now() - Number(nativeStatus?.timestamp)
+          : Number.POSITIVE_INFINITY;
+        const nativeLatitude = Number(nativeStatus?.latitude);
+        const nativeLongitude = Number(nativeStatus?.longitude);
+        if (
+          nativeStatus &&
+          nativeAge <= MAX_INITIAL_FIX_AGE_MS &&
+          Number.isFinite(nativeLatitude) &&
+          Number.isFinite(nativeLongitude)
+        ) {
+          const nativeAccuracy = Number(nativeStatus.accuracy);
+          if (Number.isFinite(nativeAccuracy) && nativeAccuracy > 0) {
+            currentLocationAccuracyRef.current = nativeAccuracy;
+          }
+          const next: [number, number] = [nativeLongitude, nativeLatitude];
+          setLocationUnavailable(false);
+          setCurrentLocation(next);
+          currentLocationRef.current = next;
+          return;
+        }
+
         try {
-          await getCurrentPositionAsync(4000);
+          const next = await getCurrentPositionAsync(6000);
+          if (cancelled) return;
+          setCurrentLocation(next);
+          currentLocationRef.current = next;
+          setLocationUnavailable(false);
+          await resumeLocationPausedTour();
         } catch {
           // A resume-time timeout is also common while Android reacquires a
           // cold GPS fix. The watcher is the debounced source of truth for
@@ -2739,7 +3420,7 @@ const MyTourStart = () => {
     });
 
     return () => subscription.remove();
-  }, [pauseTourState, tourStarted]);
+  }, [persistTourIfNeeded, placeProgress, startedAt, tourStarted]);
 
   // Expose tour-active state to the TabNavigator so it can intercept any
   // tab press while a tour is running. Reading route.params from the
@@ -2867,6 +3548,7 @@ const MyTourStart = () => {
       if (!(await requestLocationPermission())) return;
       const pos = await getPos();
       setCurrentLocation(pos);
+      currentLocationRef.current = pos;
       if (zoom) {
         cameraRef.current?.setCamera({
           centerCoordinate: pos,
@@ -2963,18 +3645,25 @@ const MyTourStart = () => {
   };
 
   const handlePauseTour = async () => {
-    if (isCompletedTour) {
+    if (isCompletedTour || isPausingTour) {
       return;
     }
-    const savedId = await pauseTourState();
-    navigation.navigate('MyTour', {
-      tourUpdate: {
-        tourId: savedId || tourId || undefined,
-        routeId: routeId,
-        status: 'paused',
-        updatedAt: new Date().toISOString(),
-      },
-    });
+    setIsPausingTour(true);
+    try {
+      const savedId = await pauseTourState();
+      navigation.navigate('MyTour', {
+        tourUpdate: {
+          tourId: savedId || tourId || undefined,
+          routeId: routeId,
+          status: 'paused',
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    } finally {
+      if (routeScreenMountedRef.current) {
+        setIsPausingTour(false);
+      }
+    }
   };
 
 
@@ -3138,6 +3827,8 @@ const MyTourStart = () => {
         if (computedStatus === 'completed') {
           setRoadSegments([]);
           setAirSegments([]);
+          roadSegmentsRef.current = [];
+          airSegmentsRef.current = [];
           setTourStarted(false);
           setTourActionVisible(false);
           setIsCompletedTour(true);
@@ -3320,6 +4011,8 @@ const MyTourStart = () => {
       if (allDone) {
         setRoadSegments([]);
         setAirSegments([]);
+        roadSegmentsRef.current = [];
+        airSegmentsRef.current = [];
         setTourStarted(false);
         setTourActionVisible(false);
         setIsCompletedTour(true);
@@ -3439,7 +4132,11 @@ const MyTourStart = () => {
               )}
 
               {routeLine.features.length > 0 && (
-                <Mapbox.ShapeSource id="tourRouteLine" shape={routeLine}>
+                <Mapbox.ShapeSource
+                  key={`future-route-${routeGeometryVersion}`}
+                  id="tourRouteLine"
+                  shape={routeLine}
+                >
                   <Mapbox.LineLayer id="tourRouteLineLayer" style={
                     (tourStarted || hasVisitedProgress)
                       ? futureRouteLineLayerStyle
@@ -3450,7 +4147,7 @@ const MyTourStart = () => {
 
               {activeRouteLine.features.length > 0 && (
                 <Mapbox.ShapeSource
-                  key={`active-${orderedRemainingStops[0]?.id || 'none'}-${roadSegments[0]?.length || 0}`}
+                  key={`active-route-${routeGeometryVersion}`}
                   id="activePendingRouteLine"
                   shape={activeRouteLine}
                 >
@@ -3461,8 +4158,8 @@ const MyTourStart = () => {
                 </Mapbox.ShapeSource>
               )}
 
-              <Mapbox.ShapeSource id="activeLegCompletedLine" shape={activeLegCompletedShape}>
-                <Mapbox.LineLayer id="activeLegCompletedLineLayer" style={completedRouteLineLayerStyle} />
+              <Mapbox.ShapeSource id="activeRouteCompletedLine" shape={activeRouteCompletedShape}>
+                <Mapbox.LineLayer id="activeRouteCompletedLineLayer" style={completedRouteLineLayerStyle} />
               </Mapbox.ShapeSource>
 
               {distanceLabels.features.length > 0 && (
@@ -3635,7 +4332,7 @@ const MyTourStart = () => {
           )}
         </View>
 
-        {tourStarted && !currentLocation ? (
+        {tourStarted && locationStatusChecked && !currentLocation && !locationUnavailable ? (
           <View style={styles.locationLoadingOverlay} pointerEvents="none">
             <ActivityIndicator size="small" color={COLORS.BUTTON_COLOR} />
             <Text style={styles.locationLoadingText}>Getting your current location…</Text>
@@ -3825,12 +4522,25 @@ const MyTourStart = () => {
         ) : (
           <View style={styles.rowButtons}>
             <TouchableOpacity
-              style={styles.startTourBtn}
+              style={[
+                styles.startTourBtn,
+                isPausingTour && styles.startTourBtnLoading,
+              ]}
               onPress={handlePauseTour}
+              disabled={isPausingTour}
             >
-              <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
-                Pause Tour
-              </Text>
+              {isPausingTour ? (
+                <View style={styles.pauseLoadingContent}>
+                  <ActivityIndicator size="small" color={COLORS.WHITE} />
+                  <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
+                    Pausing...
+                  </Text>
+                </View>
+              ) : (
+                <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
+                  Pause Tour
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
         )}
@@ -4405,6 +5115,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.BUTTON_COLOR,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  startTourBtnLoading: {
+    opacity: 0.8,
+  },
+  pauseLoadingContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
   },
   startTourBtnStarted: {
     opacity: 0.95,
