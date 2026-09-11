@@ -5,17 +5,19 @@ export type AlertButton = {
   text: string;
   onPress?: () => void | Promise<void>;
   style?: 'cancel' | 'destructive' | 'default';
+  dismissOnPress?: boolean;
 };
 
 export type AlertConfig = {
   title: string;
   message: string;
   buttons: AlertButton[];
+  dismissible?: boolean;
 };
 
 type AlertContextType = {
   alert: AlertConfig | null;
-  showAlert: (title: string, message: string, buttons: AlertButton[]) => void;
+  showAlert: (title: string, message: string, buttons: AlertButton[], options?: { dismissible?: boolean }) => void;
   hideAlert: () => void;
 };
 
@@ -24,8 +26,8 @@ const AlertContext = createContext<AlertContextType | undefined>(undefined);
 export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [alert, setAlert] = useState<AlertConfig | null>(null);
 
-  const showAlert = (title: string, message: string, buttons: AlertButton[]) => {
-    setAlert({ title, message, buttons });
+  const showAlert = (title: string, message: string, buttons: AlertButton[], options?: { dismissible?: boolean }) => {
+    setAlert({ title, message, buttons, dismissible: options?.dismissible });
   };
 
   const hideAlert = () => {
@@ -34,7 +36,7 @@ export const AlertProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // Connect the utility function to the context
   useEffect(() => {
-    setShowAlertFunction(showAlert);
+    setShowAlertFunction(showAlert, hideAlert);
   }, []);
 
   return (

@@ -62,6 +62,8 @@ import { useFavorites } from '../../context/FavoritesContext';
 import { getCurrentPosition, requestLocationPermission } from '../../utils/location';
 import { getNativeTourLocationStatus } from '../../utils/nativeTourLocation';
 import { showLocationRequiredAlert } from '../../utils/locationRequiredAlert';
+import { checkInternetConnection } from '../../utils/networkStatus';
+import { showInternetRequiredAlert } from '../../utils/internetRequiredAlert';
 
 type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'MyTour'>;
 
@@ -195,7 +197,6 @@ const MyTour = () => {
     const [pendingRecommendations, setPendingRecommendations] = useState<RecommendedRoute[]>([]);
     const pendingRecommendationsRef = useRef<RecommendedRoute[]>([]);
     const tourSuggestionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
     const tagNames = useMemo(() => tags.map((tag) => tag.name), [tags]);
     const selectedTagIds = useMemo(
         () => tags.filter((tag) => selectedPrefs.includes(tag.name)).map((tag) => tag.id),
@@ -702,6 +703,14 @@ const MyTour = () => {
 
     const handleStartTour = async (tour: RouteCardState) => {
         if (tour.status !== 'completed') {
+            if (!(await checkInternetConnection())) {
+                // Starting/resuming has not changed tour state yet, so the
+                // user may cancel this prompt. A fresh native connectivity
+                // check runs again on every Start/Resume tap.
+                showInternetRequiredAlert({ blocking: false });
+                return;
+            }
+
             const permitted = await requestLocationPermission(true);
             let locationReady = permitted;
 

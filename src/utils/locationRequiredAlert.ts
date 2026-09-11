@@ -18,7 +18,17 @@ export const openDeviceLocationSettings = async (): Promise<void> => {
 /**
  * Keep the start/resume gate and the active-tour GPS-off warning identical.
  */
-export const showLocationRequiredAlert = (): void => {
+export const showLocationRequiredAlert = (options?: { blocking?: boolean }): void => {
+  if (options?.blocking) {
+    CustomAlert.alert(
+      'Location Required',
+      'Turn on device location in Settings to continue this active tour.',
+      [{ text: 'Open Settings', onPress: openDeviceLocationSettings, dismissOnPress: false }],
+      { dismissible: false },
+    );
+    return;
+  }
+
   CustomAlert.alert(
     'Location Required',
     'Turn on device location and allow location permission before starting or resuming this tour.',

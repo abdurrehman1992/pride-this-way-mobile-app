@@ -67,7 +67,7 @@ import {
   splitPolylineAt,
   type Coord,
 } from '../../utils/routeProgress';
-import { checkInternetConnection } from '../../utils/networkStatus';
+import { checkInternetConnection, useInternetConnectivity } from '../../utils/networkStatus';
 import { requestLocationPermission } from '../../utils/location';
 import {
   getNativeTourLocationStatus,
@@ -76,6 +76,7 @@ import {
   subscribeToNativeTourLocation,
 } from '../../utils/nativeTourLocation';
 import { showLocationRequiredAlert } from '../../utils/locationRequiredAlert';
+import { showInternetRequiredAlert } from '../../utils/internetRequiredAlert';
 import { verifyPlaceImageMatch } from '../../services/aiService';
 import { initializeMapbox } from '../../services/mapboxConfig';
 import { useDispatch, useSelector } from 'react-redux';
@@ -776,8 +777,10 @@ const MyTourStart = () => {
   const [, setTourActionVisible] = useState(false);
   const [isPausedTour, setIsPausedTour] = useState(false);
   const [isPausingTour, setIsPausingTour] = useState(false);
+  const isOnline = useInternetConnectivity();
   const leavingRef = useRef(false);
   const locationPauseAlertRef = useRef(false);
+  const offlineAlertRef = useRef(false);
   const locationUnavailableErrorsRef = useRef(0);
   const pausedByLocationRef = useRef(false);
   const locationPausePromiseRef = useRef<Promise<string | null> | null>(null);
@@ -3296,7 +3299,7 @@ const MyTourStart = () => {
   // the app returns, pause safely, and prevent a route from continuing on a
   // stale position.
   useEffect(() => {
-    if (!locationUnavailable || !tourStarted || locationPauseAlertRef.current) return;
+    if (!locationUnavailable || !tourStarted || !isOnline || locationPauseAlertRef.current) return;
 
     locationPauseAlertRef.current = true;
     setCurrentLocation(null);
@@ -3305,7 +3308,7 @@ const MyTourStart = () => {
     // a live fix in this session. Keep that tour suspended in place so Open
     // Settings -> location ON can continue it and rebuild the road route.
     if (locationBlockedOnEntryRef.current) {
-      showLocationRequiredAlert();
+      showLocationRequiredAlert({ blocking: true });
       return;
     }
 
@@ -3313,16 +3316,36 @@ const MyTourStart = () => {
     // immediately. Waiting for Firestore here made the screen appear stuck.
     pausedByLocationRef.current = true;
     locationPausePromiseRef.current = pauseTourState(false);
-    showLocationRequiredAlert();
-  }, [locationUnavailable, pauseTourState, tourStarted]);
+    showLocationRequiredAlert({ blocking: true });
+  }, [isOnline, locationUnavailable, pauseTourState, tourStarted]);
+
+  useEffect(() => {
+    if (tourStarted && !isOnline) {
+      offlineAlertRef.current = true;
+      showInternetRequiredAlert();
+      return;
+    }
+
+    if (offlineAlertRef.current && isOnline) {
+      offlineAlertRef.current = false;
+      CustomAlert.dismiss();
+      if (tourStarted && locationUnavailable) {
+        locationPauseAlertRef.current = true;
+        showLocationRequiredAlert({ blocking: true });
+      }
+    }
+  }, [isOnline, locationUnavailable, tourStarted]);
 
   useEffect(() => {
     // Allow the warning to be shown again if this mounted screen is later
     // resumed successfully and location is disabled a second time.
     if (!locationUnavailable) {
+      if (locationPauseAlertRef.current && isOnline && !offlineAlertRef.current) {
+        CustomAlert.dismiss();
+      }
       locationPauseAlertRef.current = false;
     }
-  }, [locationUnavailable]);
+  }, [isOnline, locationUnavailable]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -3348,7 +3371,7 @@ const MyTourStart = () => {
             setLocationStatusChecked(true);
             setLocationUnavailable(true);
             locationPauseAlertRef.current = true;
-            showLocationRequiredAlert();
+            showLocationRequiredAlert({ blocking: true });
           }
           return;
         }
@@ -3364,7 +3387,7 @@ const MyTourStart = () => {
           // The Open Settings action dismisses the modal before Android comes
           // back to the app. If location is still off, present it again.
           locationPauseAlertRef.current = true;
-          showLocationRequiredAlert();
+          showLocationRequiredAlert({ blocking: true });
           return;
         }
         if (nativeStatus?.locationEnabled === true) {
@@ -3675,11 +3698,7 @@ const MyTourStart = () => {
 
     const isOnline = await checkInternetConnection();
     if (!isOnline) {
-      CustomAlert.alert(
-        'No Internet Connection',
-        'Please reconnect to the internet before verifying this event.',
-        [{ text: 'OK', style: 'cancel' }]
-      );
+      showInternetRequiredAlert();
       return false;
     }
 
@@ -3873,11 +3892,7 @@ const MyTourStart = () => {
 
     const isOnline = await checkInternetConnection();
     if (!isOnline) {
-      CustomAlert.alert(
-        'No Internet Connection',
-        'Please reconnect to the internet before verifying this location.',
-        [{ text: 'OK', style: 'cancel' }]
-      );
+      showInternetRequiredAlert();
       return false;
     }
 

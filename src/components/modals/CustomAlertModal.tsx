@@ -103,14 +103,17 @@ const CustomAlertModal: React.FC = () => {
             }
         } finally {
             setLoading(null);
-            hideAlert();
+            if (button.dismissOnPress !== false) {
+                hideAlert();
+            }
         }
     };
 
     const cancelButton = alert?.buttons.find((btn) => btn.style === 'cancel');
     const otherButtons = alert?.buttons.filter((btn) => btn.style !== 'cancel') || [];
     const tone = getAlertTone(alert?.title, alert?.buttons || []);
-    const showCloseButton = !!cancelButton;
+    const isDismissible = alert?.dismissible !== false;
+    const showCloseButton = !!cancelButton && isDismissible;
     const shouldShowCancelAsPrimary =
         !!cancelButton &&
         otherButtons.length === 0 &&
@@ -123,7 +126,7 @@ const CustomAlertModal: React.FC = () => {
             animationType="fade"
             presentationStyle="overFullScreen"
             statusBarTranslucent={true}
-            onRequestClose={hideAlert}
+            onRequestClose={isDismissible ? hideAlert : undefined}
         >
             <View style={styles.overlay}>
                 <Animated.View
@@ -164,7 +167,7 @@ const CustomAlertModal: React.FC = () => {
                         )}
 
                         <View style={styles.buttonContainer}>
-                            {cancelButton && (
+                            {cancelButton && isDismissible && (
                                 <TouchableOpacity
                                     style={[
                                         styles.actionButton,

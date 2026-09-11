@@ -1,21 +1,25 @@
 import { useEffect, useState } from 'react';
+import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
+
+NetInfo.configure({
+  reachabilityUrl: 'https://clients3.google.com/generate_204',
+  reachabilityTest: async (response) => response.status === 204,
+  reachabilityLongTimeout: 60_000,
+  reachabilityShortTimeout: 5_000,
+  reachabilityRequestTimeout: 5_000,
+  useNativeReachability: true,
+  shouldFetchWiFiSSID: false,
+});
+
+const hasInternet = (state: NetInfoState): boolean =>
+  state.isConnected === true && state.isInternetReachable !== false;
 
 export async function checkInternetConnection(): Promise<boolean> {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-    await fetch('https://www.google.com', {
-      method: 'HEAD',
-      mode: 'no-cors',
-      signal: controller.signal,
-      headers: {
-        'Cache-Control': 'no-cache',
-      },
-    });
-
-    clearTimeout(timeoutId);
-    return true;
+    // Refresh reads the native state at action time, so toggling data/Wi-Fi
+    // immediately before Start or Resume cannot reuse an old polling result.
+    const state = await NetInfo.refresh();
+    return hasInternet(state);
   } catch (_error) {
     return false;
   }
@@ -25,22 +29,15 @@ export function useInternetConnectivity() {
   const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
-    let isMounted = true;
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setIsOnline(hasInternet(state));
+    });
 
-    const syncStatus = async () => {
-      const nextState = await checkInternetConnection();
-      if (isMounted) {
-        setIsOnline(nextState);
-      }
-    };
+    NetInfo.refresh()
+      .then((state) => setIsOnline(hasInternet(state)))
+      .catch(() => setIsOnline(false));
 
-    syncStatus();
-    const interval = setInterval(syncStatus, 10000);
-
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
+    return unsubscribe;
   }, []);
 
   return isOnline;

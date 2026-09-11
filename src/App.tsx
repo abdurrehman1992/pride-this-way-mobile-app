@@ -9,28 +9,14 @@ import { toastConfig } from "./utils/toastConfig";
 import { FavoritesProvider } from "./context/FavoritesContext";
 import { AlertProvider } from "./context/AlertContext";
 import CustomAlertModal from "./components/modals/CustomAlertModal";
-import { useInternetConnectivity } from './utils/networkStatus';
-import { CustomAlert } from './utils/CustomAlert';
 import { initializeMapbox } from './services/mapboxConfig';
 
 const App = () => {
-  const isOnline = useInternetConnectivity();
-
   useEffect(() => {
     initializeMapbox().catch(() => {
       // Map screens render their fallback state if Mapbox cannot initialize.
     });
   }, []);
-
-  useEffect(() => {
-    if (!isOnline) {
-      CustomAlert.alert(
-        'No Internet Connection',
-        'Please connect to the internet to continue using AI-powered verification.',
-        [{ text: 'OK', style: 'cancel' }]
-      );
-    }
-  }, [isOnline]);
 
   return (
     <SafeAreaProvider>
