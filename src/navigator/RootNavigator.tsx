@@ -11,8 +11,14 @@ import {
   setAuthInitialized,
 } from "../Redux/slices/authSlice";
 import { subscribeToAuthState } from "../services/authService";
-import { getActiveTour } from "../services/myTourService";
-import { getNativeTourLocationStatus } from "../utils/nativeTourLocation";
+import {
+  getActiveTour,
+  pauseTourAfterTaskRemoval,
+} from "../services/myTourService";
+import {
+  clearNativeTourTaskRemoval,
+  getNativeTourLocationStatus,
+} from "../utils/nativeTourLocation";
 
 const RootNavigator: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
@@ -61,16 +67,41 @@ const RootNavigator: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const active = await Promise.race([
-          getActiveTour(userId),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+        const [active, initialLocationStatus] = await Promise.all([
+          Promise.race([
+            getActiveTour(userId),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+          ]),
+          getNativeTourLocationStatus(),
         ]);
+
+        if (initialLocationStatus?.taskRemovedWhileTracking) {
+          const interruptedTourId =
+            initialLocationStatus.taskRemovedTourId || active?.id;
+          if (interruptedTourId) {
+            // Keep the native marker until Firestore accepts the pause. If the
+            // app is launched offline, the pending write can finish later in
+            // this session; otherwise the next cold launch retries it.
+            const reconciliation = pauseTourAfterTaskRemoval(interruptedTourId)
+              .then(clearNativeTourTaskRemoval)
+              .catch(() => undefined);
+            await Promise.race([
+              reconciliation,
+              new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+            ]);
+          } else {
+            await clearNativeTourTaskRemoval();
+          }
+          if (!cancelled) {
+            // Do not restore an interrupted tour as active after a cold launch.
+            setInitialNavState(undefined);
+          }
+          return;
+        }
+
         // Read the switch immediately before constructing the restored route;
         // doing this after the Firestore lookup avoids passing a stale value if
         // the user toggles Location while the splash screen is visible.
-        const initialLocationStatus = active
-          ? await getNativeTourLocationStatus()
-          : null;
         if (cancelled) return;
         if (active) {
           setInitialNavState({

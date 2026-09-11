@@ -74,12 +74,56 @@ class TourLocationModule(
   }
 
   @ReactMethod
+  fun setActiveTourId(tourId: String?, promise: Promise) {
+    try {
+      reactContext
+        .getSharedPreferences(TourLocationService.PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .apply {
+          if (tourId.isNullOrBlank()) {
+            remove("activeTourId")
+          } else {
+            putString("activeTourId", tourId)
+          }
+        }
+        .apply()
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("TOUR_LOCATION_ID_FAILED", error)
+    }
+  }
+
+  @ReactMethod
+  fun clearTaskRemovalState(promise: Promise) {
+    try {
+      reactContext
+        .getSharedPreferences(TourLocationService.PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean("taskRemovedWhileTracking", false)
+        .remove("taskRemovedAt")
+        .remove("taskRemovedTourId")
+        .apply()
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("TOUR_LOCATION_CLEAR_TASK_REMOVAL_FAILED", error)
+    }
+  }
+
+  @ReactMethod
   fun getStatus(promise: Promise) {
     try {
       val prefs = reactContext.getSharedPreferences(TourLocationService.PREFS_NAME, Context.MODE_PRIVATE)
       val result = Arguments.createMap()
       result.putBoolean("tracking", prefs.getBoolean("tracking", false))
       result.putBoolean("locationEnabled", TourLocationService.isLocationEnabled(reactContext))
+      result.putBoolean(
+        "taskRemovedWhileTracking",
+        prefs.getBoolean("taskRemovedWhileTracking", false),
+      )
+      result.putDouble("taskRemovedAt", prefs.getLong("taskRemovedAt", 0L).toDouble())
+      prefs.getString("taskRemovedTourId", null)?.let {
+        result.putString("taskRemovedTourId", it)
+      }
       if (prefs.contains("latitude_e6") && prefs.contains("longitude_e6")) {
         result.putDouble("latitude", prefs.getLong("latitude_e6", 0L).toDouble() / 1_000_000.0)
         result.putDouble("longitude", prefs.getLong("longitude_e6", 0L).toDouble() / 1_000_000.0)

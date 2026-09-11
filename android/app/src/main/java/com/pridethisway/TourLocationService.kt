@@ -89,7 +89,7 @@ class TourLocationService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
-      stopTracking()
+      stopTracking(clearTaskRemovalState = true)
       stopSelf()
       return START_NOT_STICKY
     }
@@ -141,13 +141,18 @@ class TourLocationService : Service() {
     updatesRequested = false
   }
 
-  private fun stopTracking() {
+  private fun stopTracking(clearTaskRemovalState: Boolean) {
     handler.removeCallbacks(providerPoll)
     removeUpdates()
-    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-      .putBoolean("tracking", false)
-      .putBoolean("taskRemovedWhileTracking", false)
-      .apply()
+    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().apply {
+      putBoolean("tracking", false)
+      if (clearTaskRemovalState) {
+        putBoolean("taskRemovedWhileTracking", false)
+        remove("taskRemovedAt")
+        remove("taskRemovedTourId")
+        remove("activeTourId")
+      }
+    }.apply()
   }
 
   private fun hasLocationPermission(): Boolean =
@@ -175,6 +180,13 @@ class TourLocationService : Service() {
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(
       NotificationChannel(CHANNEL_ID, "Active tour location", NotificationManager.IMPORTANCE_LOW)
+    )
+    manager.createNotificationChannel(
+      NotificationChannel(
+        TASK_REMOVED_CHANNEL_ID,
+        "Tour status updates",
+        NotificationManager.IMPORTANCE_DEFAULT,
+      )
     )
   }
 
@@ -222,21 +234,80 @@ class TourLocationService : Service() {
   }
 
   override fun onDestroy() {
-    stopTracking()
+    // Keep the task-removal marker until the next launch has reconciled the
+    // tour. A normal explicit pause clears it before stopping the service.
+    stopTracking(clearTaskRemovalState = false)
     super.onDestroy()
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {
-    // Android does not let a regular app block or confirm a Recents swipe.
-    // Keep the explicitly visible foreground service alive instead, so an
-    // active tour does not lose its GPS fix/route when only its UI task is
-    // removed. The ongoing notification remains the user's native control
-    // and disclosure until they reopen the app and pause the tour.
-    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-      .putBoolean("tracking", true)
+    // This runs only when the Android task is actually removed from Recents;
+    // screen lock and a normal Home/background transition do not trigger it.
+    handler.removeCallbacks(providerPoll)
+    removeUpdates()
+
+    val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+    val activeTourId = prefs.getString("activeTourId", null)
+    prefs.edit()
+      .putBoolean("tracking", false)
       .putBoolean("taskRemovedWhileTracking", true)
+      .putLong("taskRemovedAt", System.currentTimeMillis())
+      .apply {
+        if (!activeTourId.isNullOrBlank()) {
+          putString("taskRemovedTourId", activeTourId)
+        }
+      }
       .apply()
+
+    showTaskRemovedNotification()
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } else {
+      @Suppress("DEPRECATION")
+      stopForeground(true)
+    }
+    stopSelf()
+
     super.onTaskRemoved(rootIntent)
+  }
+
+  private fun showTaskRemovedNotification() {
+    if (
+      Build.VERSION.SDK_INT >= 33 &&
+      ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+
+    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+    val contentIntent = launchIntent?.let {
+      PendingIntent.getActivity(
+        this,
+        1,
+        it,
+        PendingIntent.FLAG_UPDATE_CURRENT or
+          (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0),
+      )
+    }
+    val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      Notification.Builder(this, TASK_REMOVED_CHANNEL_ID)
+    } else {
+      @Suppress("DEPRECATION")
+      Notification.Builder(this)
+    }
+    val notification = builder
+      .setContentTitle("Tour paused")
+      .setContentText("Location tracking stopped because the app was removed. Tap to resume your tour.")
+      .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+      .setAutoCancel(true)
+      .setCategory(Notification.CATEGORY_STATUS)
+      .apply { contentIntent?.let(::setContentIntent) }
+      .build()
+
+    getSystemService(NotificationManager::class.java)
+      .notify(TASK_REMOVED_NOTIFICATION_ID, notification)
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -248,7 +319,9 @@ class TourLocationService : Service() {
     const val JS_EVENT = "TourLocationEvent"
     const val PREFS_NAME = "tour_location_state"
     private const val CHANNEL_ID = "active_tour_location"
+    private const val TASK_REMOVED_CHANNEL_ID = "tour_status_updates"
     private const val NOTIFICATION_ID = 4201
+    private const val TASK_REMOVED_NOTIFICATION_ID = 4202
 
     fun isLocationEnabled(context: Context): Boolean {
       val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false

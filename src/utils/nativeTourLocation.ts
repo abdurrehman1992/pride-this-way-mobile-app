@@ -8,19 +8,41 @@ type NativeLocationStatus = {
   longitude?: number;
   accuracy?: number;
   timestamp?: number;
+  taskRemovedWhileTracking?: boolean;
+  taskRemovedAt?: number;
+  taskRemovedTourId?: string;
 };
 
 const nativeModule = NativeModules.TourLocation;
 
 export const isNativeTourLocationAvailable = Platform.OS === 'android' && Boolean(nativeModule);
 
-export const startNativeTourLocation = async (): Promise<boolean> => {
+export const startNativeTourLocation = async (
+  tourId?: string | null,
+): Promise<boolean> => {
   if (!isNativeTourLocationAvailable) return false;
   try {
+    if (tourId && typeof nativeModule.setActiveTourId === 'function') {
+      await nativeModule.setActiveTourId(tourId);
+    }
     await nativeModule.startTracking();
     return true;
   } catch {
     return false;
+  }
+};
+
+export const clearNativeTourTaskRemoval = async (): Promise<void> => {
+  if (
+    !isNativeTourLocationAvailable ||
+    typeof nativeModule.clearTaskRemovalState !== 'function'
+  ) {
+    return;
+  }
+  try {
+    await nativeModule.clearTaskRemovalState();
+  } catch {
+    // Reconciliation is idempotent and can safely run again next launch.
   }
 };
 

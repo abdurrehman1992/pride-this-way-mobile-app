@@ -1629,6 +1629,21 @@ export const getActiveTour = async (userId?: string): Promise<SavedTour | null> 
   return tours[0];
 };
 
+/** Reconcile a tour interrupted by removing the Android app from Recents. */
+export const pauseTourAfterTaskRemoval = async (tourId?: string | null) => {
+  if (!tourId) return;
+  await firestore()
+    .collection(TOURS_COLLECTION)
+    .doc(tourId)
+    .set(
+      {
+        status: 'paused',
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true },
+    );
+};
+
 export const scheduleOtherActiveTours = async ({
   userId,
   excludeTourId,
