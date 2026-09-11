@@ -72,6 +72,7 @@ const TourSuggestion: React.FC = () => {
     const initialPlaces: FirebasePlace[] = primary?.places || [];
 
     const [places, setPlaces] = useState<FirebasePlace[]>(initialPlaces);
+    const [isTourExpanded, setIsTourExpanded] = useState(true);
     const [expandedLocations, setExpandedLocations] = useState<Record<string, boolean>>({});
     const totalPoints = useMemo(() => places.length * POINTS_PER_LOCATION, [places.length]);
 
@@ -557,7 +558,11 @@ const TourSuggestion: React.FC = () => {
                     <View style={styles.cardTop}>
                         <Image source={{ uri: previewImage }} style={styles.thumb} />
                         <View style={styles.cardInfo}>
-                            <View style={styles.cardHeaderRow}>
+                            <TouchableOpacity
+                                style={styles.cardHeaderRow}
+                                onPress={() => setIsTourExpanded((prev) => !prev)}
+                                activeOpacity={0.8}
+                            >
                                 <View style={styles.leftTitleRow}>
                                     <Text style={styles.tourTitle} numberOfLines={1}>{tourNameState}</Text>
                                     <TouchableOpacity onPress={() => setNameModalVisible(true)} hitSlop={8} style={styles.editIconWrap}>
@@ -565,9 +570,9 @@ const TourSuggestion: React.FC = () => {
                                     </TouchableOpacity>
                                 </View>
                                 <View style={styles.topIcons}>
-                                    <IconUp width={16} height={16} />
+                                    {isTourExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
                                 </View>
-                            </View>
+                            </TouchableOpacity>
                             <View style={styles.iconInfoRow}>
                                 <View style={styles.iconTextGroup}>
                                     <TourLocationIcon width={20} height={20} />
@@ -590,7 +595,7 @@ const TourSuggestion: React.FC = () => {
                             </View>
                         </View>
                     </View>
-                    <View style={styles.cardBottom}>
+                    {isTourExpanded && <View style={styles.cardBottom}>
                         <View style={styles.locationHeader}>
                             <Text style={styles.locationTitle}>Locations</Text>
                             <TouchableOpacity
@@ -747,7 +752,7 @@ const TourSuggestion: React.FC = () => {
                                 })}
                             </View>
                         )}
-                    </View>
+                    </View>}
                 </View>
             </ScrollView>
             <NameTourModal

@@ -199,27 +199,44 @@ const atmosphereStyle = {
 
 const normalizeText = (value?: string | null) => (value || '').trim().toLowerCase();
 
-const buildLocationLabel = (city?: string, country?: string) =>
-  [city, country].filter(Boolean).join(', ');
-
 const eventMatchesFilter = (event: FirebaseEvent, filterLabel: string) => {
   const normalizedFilter = normalizeText(filterLabel);
   if (!normalizedFilter) {
     return true;
   }
 
-  const haystack = [
-    event.city_name,
-    event.country,
-    buildLocationLabel(event.city_name, event.country),
-    event.address,
-    event.title,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+  // Mapbox suggestions may include a region between the city and country
+  // (for example, "Kansas City, Missouri, United States"), while events in
+  // Firestore commonly only store city_name and country. Matching the full
+  // label therefore incorrectly hides valid events for the selected city.
+  const locationParts = normalizedFilter
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const requestedCity = locationParts[0] || normalizedFilter;
+  const requestedCountry = locationParts.length > 1
+    ? locationParts[locationParts.length - 1]
+    : '';
+  const eventCity = normalizeText(event.city_name);
+  const eventCountry = normalizeText(event.country);
 
-  return haystack.includes(normalizedFilter);
+  const cityMatches = eventCity
+    ? eventCity === requestedCity ||
+      eventCity.includes(requestedCity) ||
+      requestedCity.includes(eventCity)
+    : normalizeText(event.address).includes(requestedCity);
+
+  if (!cityMatches) {
+    return false;
+  }
+
+  // If the event has no country, keep the city match usable. Otherwise use
+  // the selected country's last comma-separated part to avoid same-name city
+  // collisions across countries.
+  return !requestedCountry || !eventCountry ||
+    eventCountry === requestedCountry ||
+    eventCountry.includes(requestedCountry) ||
+    requestedCountry.includes(eventCountry);
 };
 
 const eventCoordinate = (event: FirebaseEvent): [number, number] => [
@@ -709,11 +726,8 @@ const Map = () => {
     [zoomLevel]
   );
 
-  const handleCloseSelectedEvent = useCallback(() => {
+  const restoreCityOverview = useCallback(() => {
     setSelectedEvent(null);
-  }, []);
-
-  const handleReturnToCityOverview = useCallback(() => {
     if (!selectedLocation) return;
 
     // Restore the same stable city-fit camera that was calculated when the
@@ -735,6 +749,14 @@ const Map = () => {
     });
     setZoomLevel(cityFit.zoom);
   }, [cityFit, focusLocation, selectedLocation]);
+
+  const handleCloseSelectedEvent = useCallback(() => {
+    // Closing the details should return to the same all-events camera view
+    // that was active before the marker was focused.
+    restoreCityOverview();
+  }, [restoreCityOverview]);
+
+  const handleReturnToCityOverview = restoreCityOverview;
 
 
   const handleZoom = useCallback((direction: 'in' | 'out') => {
