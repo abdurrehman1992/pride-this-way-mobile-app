@@ -247,6 +247,18 @@ const ScanVerifyModal: React.FC<Props> = ({
         return;
       }
       setStep("success");
+    } catch (error) {
+      // Technical failures (AI service, network, saving progress) are logged,
+      // never shown to the user as-is.
+      console.error('Photo verification failed:', error);
+      CustomAlert.alert(
+        'Something Went Wrong',
+        'We could not verify your photo right now. Please try again.',
+        [{ text: 'Try Again', style: 'cancel', onPress: () => {
+          setCapturedImage(null);
+          setStep('scan');
+        }}]
+      );
     } finally {
       setIsCapturing(false);
       confirmInFlightRef.current = false;

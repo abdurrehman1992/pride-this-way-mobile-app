@@ -12,6 +12,7 @@ type TabItem = {
     label: string
     value: string
     icon?: React.ReactNode
+    activeIcon?: React.ReactNode
 }
 type Props = {
     tabs: TabItem[]
@@ -39,7 +40,11 @@ const CustomTabs: React.FC<Props> = ({ tabs, activeTab, onChange }) => {
                             onPress={() => onChange(tab.value)}
                             activeOpacity={0.7}
                         >
-                            {tab.icon && <View style={styles.icon}>{tab.icon}</View>}
+                            {(isActive ? tab.activeIcon || tab.icon : tab.icon) && (
+                                <View style={styles.icon}>
+                                    {isActive ? tab.activeIcon || tab.icon : tab.icon}
+                                </View>
+                            )}
 
                             <Text
                                 style={[

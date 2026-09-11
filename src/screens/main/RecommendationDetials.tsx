@@ -24,8 +24,11 @@ import CustomButton from "../../components/common/CustomButton";
 
 import {
     DetailsBackIcon,
+    DetailsBackDarkIcon,
     DetailsFavoriteIcon,
+    DetailsFavoriteDarkIcon,
     DetailsShareIcon,
+    DetailsShareDarkIcon,
     DetailsFavoriteWhite,
     ForkIcon,
     StarIcon,
@@ -61,8 +64,14 @@ const RecommendationDetials = () => {
     const navigation = useNavigation();
 
     const item = route?.params?.item;
+    const headerImageCandidate = item?.imageUrl || item?.image;
+    const [headerImageLoaded, setHeaderImageLoaded] = useState(false);
     const [currentCoordinates, setCurrentCoordinates] = useState<{ latitude: number; longitude: number }>();
     const [now, setNow] = useState(() => new Date());
+
+    useEffect(() => {
+        setHeaderImageLoaded(false);
+    }, [headerImageCandidate]);
 
     useEffect(() => {
         let mounted = true;
@@ -129,8 +138,9 @@ const RecommendationDetials = () => {
         return itemData?.imageKeyword || itemData?.gallery?.[0] || itemData?.title || 'travel';
     };
 
-    const rawImageSource = imageUrl || image || FALLBACK_IMAGE;
+    const rawImageSource = headerImageCandidate || FALLBACK_IMAGE;
     const imageSource = sanitizeImageUrl(rawImageSource) || rawImageSource;
+    const useLightHeaderControls = Boolean(headerImageCandidate && headerImageLoaded);
 
     const safeHighlights: string[] = highlights.length ? highlights : ['Scenic views', 'Great local vibes'];
         const safeGallery: string[] = galleryFromOriginal.length
@@ -221,26 +231,38 @@ const RecommendationDetials = () => {
                 source={resolveImageSource(imageSource)}
                 style={styles.background}
                 imageStyle={styles.bgImage}
+                onLoad={() => setHeaderImageLoaded(true)}
+                onError={() => setHeaderImageLoaded(false)}
             >
                 <SafeAreaView style={styles.safeArea}>
 
                     {/* TOP BAR */}
                     <View style={styles.topBar}>
                         <TouchableOpacity style={{shadowColor: 'black', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }} onPress={() => navigation.goBack()}>
-                            <DetailsBackIcon height={43} width={43} />
+                            {useLightHeaderControls ? (
+                                <DetailsBackIcon height={43} width={43} />
+                            ) : (
+                                <DetailsBackDarkIcon height={43} width={43} />
+                            )}
                         </TouchableOpacity>
 
                         <View style={styles.rightIcons}>
                             <TouchableOpacity onPress={handleFavorite}>
                                 {favorite ? (
                                     <DetailsFavoriteIcon height={43} width={43} />
-                                ) : (
+                                ) : useLightHeaderControls ? (
                                     <DetailsFavoriteWhite height={43} width={43} />
+                                ) : (
+                                    <DetailsFavoriteDarkIcon height={43} width={43} />
                                 )}
                             </TouchableOpacity>
 
                             <TouchableOpacity onPress={handleShare}>
-                                <DetailsShareIcon height={43} width={43} />
+                                {useLightHeaderControls ? (
+                                    <DetailsShareIcon height={43} width={43} />
+                                ) : (
+                                    <DetailsShareDarkIcon height={43} width={43} />
+                                )}
                             </TouchableOpacity>
                         </View>
                     </View>

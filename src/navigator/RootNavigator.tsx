@@ -13,6 +13,7 @@ import {
 import { subscribeToAuthState } from "../services/authService";
 import { getActiveTour } from "../services/myTourService";
 import { getNativeTourLocationStatus } from "../utils/nativeTourLocation";
+import { useTourTrackingLifecycle } from "../hooks/useTourTrackingLifecycle";
 
 const RootNavigator: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
@@ -23,6 +24,8 @@ const RootNavigator: React.FC = () => {
     (state: RootState) => state.auth
   );
   const userId = user?.id;
+  // Wait for Firebase Auth: a persisted Redux user is not yet authenticated.
+  useTourTrackingLifecycle(initialized && isLoggedIn ? userId : undefined);
 
   useEffect(() => {
     const timer = setTimeout(() => {

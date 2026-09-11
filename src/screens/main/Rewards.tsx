@@ -204,8 +204,10 @@ const Rewards = () => {
                           <CreatedTourLocationIcon width={18} height={18} />
                           <Text style={styles.locationText}>{place.name}</Text>
                         </View>
-                        <Text style={styles.arrow}>{`---->`}</Text>
-                        <Text style={styles.pointsText}>+{place.points} Points</Text>
+                        <Text style={styles.arrow}>→</Text>
+                        <Text style={styles.pointsText} numberOfLines={1}>
+                          +{place.points} Points
+                        </Text>
                       </View>
                     ))}
 
@@ -250,6 +252,9 @@ const styles = StyleSheet.create({
   },
   arrow: {
     color: COLORS.CLEAR_ALL,
+    width: 28,
+    flexShrink: 0,
+    textAlign: 'center',
   },
   up: {
     marginTop: 16,
@@ -426,6 +431,8 @@ const styles = StyleSheet.create({
   },
 
   locationRow: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
@@ -433,11 +440,16 @@ const styles = StyleSheet.create({
   },
 
   locationText: {
+    flex: 1,
+    flexShrink: 1,
     fontSize: FONT_SIZE.TEXT,
     fontFamily: FONT_FAMILY.InterTight_Regular,
     color: COLORS.TEXT_PRIMARY,
   },
   pointsText: {
+    width: 82,
+    flexShrink: 0,
+    textAlign: 'right',
     color: COLORS.TEXT_GREEN,
     fontFamily: FONT_FAMILY.Poppins_Medium,
     fontSize: FONT_SIZE.CARD_TEXT,
@@ -450,9 +462,10 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
   },
   locationCont: {
+    width: '100%',
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 6,
   },
   breakDownTitle: {
     fontFamily: FONT_FAMILY.Poppins_Medium,

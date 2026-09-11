@@ -23,7 +23,16 @@ import EventDetailModal from '../../components/modals/EventDetailModal';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY } from '../../constants/fonts';
-import { CrossIcon, DropdownIcon, SearchIcon, BlueMapIcon, PodcastEvent, PrideEvent } from '../../constants/icons';
+import {
+  CrossIcon,
+  DropdownIcon,
+  SearchIcon,
+  BlueMapIcon,
+  PodcastEvent,
+  PrideEvent,
+  CalendarIcon,
+  CreatedTourLocationIcon,
+} from '../../constants/icons';
 import {
   fetchMapEvents,
   searchLocationSuggestions,
@@ -656,13 +665,20 @@ const Map = () => {
 
   const handleSearchTextChange = useCallback((text: string) => {
     setSearchText(text);
+    // Clearing the field should not discard the city currently shown on the
+    // map. It keeps the all-events overview (and its pin button) available.
+    // Entering a new query does start a new city search, so clear the old one.
+    if (!text.trim()) {
+      setSearchSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
     setSelectedLocation(null);
     setShowSuggestions(true);
   }, []);
 
   const handleClearSearch = useCallback(() => {
     setSearchText('');
-    setSelectedLocation(null);
     setSearchSuggestions([]);
     setShowSuggestions(false);
   }, []);
@@ -696,6 +712,29 @@ const Map = () => {
   const handleCloseSelectedEvent = useCallback(() => {
     setSelectedEvent(null);
   }, []);
+
+  const handleReturnToCityOverview = useCallback(() => {
+    if (!selectedLocation) return;
+
+    // Restore the same stable city-fit camera that was calculated when the
+    // location was selected, so all currently filtered events are visible
+    // again after focusing an individual marker.
+    setSelectedEvent(null);
+    if (!cityFit) {
+      focusLocation(selectedLocation);
+      return;
+    }
+
+    cameraRef.current?.setCamera({
+      centerCoordinate: cityFit.center,
+      zoomLevel: cityFit.zoom,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 900,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(cityFit.zoom);
+  }, [cityFit, focusLocation, selectedLocation]);
 
 
   const handleZoom = useCallback((direction: 'in' | 'out') => {
@@ -768,7 +807,7 @@ const Map = () => {
                 onFocus={() => setShowSuggestions(true)}
               />
             </View>
-            {searchText || selectedLocation ? (
+            {searchText ? (
               <TouchableOpacity
                 activeOpacity={0.85}
                 hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
@@ -777,7 +816,8 @@ const Map = () => {
                 <CrossIcon width={12} height={12} />
               </TouchableOpacity>
             ) : (
-              <DropdownIcon width={11} height={6} />
+              ""
+              // <DropdownIcon width={11} height={6} />
             )}
           </View>
 
@@ -789,11 +829,14 @@ const Map = () => {
                 showsVerticalScrollIndicator={false}
                 style={styles.suggestionsScroll}
               >
-                {searchSuggestions.map((suggestion) => (
+                {searchSuggestions.map((suggestion, index) => (
                   <TouchableOpacity
                     key={suggestion.id}
                     activeOpacity={0.85}
-                    style={styles.suggestionRow}
+                    style={[
+                      styles.suggestionRow,
+                      index === searchSuggestions.length - 1 && styles.suggestionRowLast,
+                    ]}
                     onPress={() => handleSuggestionPress(suggestion)}
                   >
                     <Text style={styles.suggestionTitle}>{suggestion.label}</Text>
@@ -814,18 +857,21 @@ const Map = () => {
               <Text style={[styles.dateInputText, !startDateFilter && styles.datePlaceholderText]}>
                 {startDateFilter || 'From date'}
               </Text>
-              {startDateFilter ? (
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    setStartDateFilter('');
-                  }}
-                >
-                  <CrossIcon width={12} height={12} />
-                </TouchableOpacity>
-              ) : null}
+              <View style={styles.dateFieldActions}>
+                <CalendarIcon width={22} height={22} />
+                {startDateFilter ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      setStartDateFilter('');
+                    }}
+                  >
+                    <CrossIcon width={12} height={12} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
           </TouchableOpacity>
           <TouchableOpacity
@@ -837,18 +883,21 @@ const Map = () => {
               <Text style={[styles.dateInputText, !endDateFilter && styles.datePlaceholderText]}>
                 {endDateFilter || 'To date'}
               </Text>
-              {endDateFilter ? (
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    setEndDateFilter('');
-                  }}
-                >
-                  <CrossIcon width={12} height={12} />
-                </TouchableOpacity>
-              ) : null}
+              <View style={styles.dateFieldActions}>
+                <CalendarIcon width={22} height={22} />
+                {endDateFilter ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      setEndDateFilter('');
+                    }}
+                  >
+                    <CrossIcon width={12} height={12} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
           </TouchableOpacity>
         </View>
@@ -968,6 +1017,17 @@ const Map = () => {
               </Mapbox.MapView>
 
               <View style={[styles.zoomControls]}>
+                {selectedLocation ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.cityOverviewButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Show all events in the selected city"
+                    onPress={handleReturnToCityOverview}
+                  >
+                    <CreatedTourLocationIcon width={28} height={28} />
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={[styles.zoomButton, styles.zoomButtonTop]}
@@ -994,7 +1054,7 @@ const Map = () => {
         </View>
       </View>
 
-      <View style={[styles.legendCard, { marginBottom: 5 }]}>
+      <View style={[styles.legendCard, { marginBottom: 5, }]}>
         <View style={styles.legendRow}>
           <PrideEvent width={24} height={24}/>
           <Text style={styles.legendText}>Purple markers show Pride events.</Text>
@@ -1217,6 +1277,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
+  dateFieldActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   datePlaceholderText: {
     color: '#66717B',
   },
@@ -1235,7 +1300,9 @@ const styles = StyleSheet.create({
   },
   suggestionsCard: {
     position: 'absolute',
-    top: 50,
+    // Account for the card's rounded edge/shadow so it clears the 52px
+    // search field without leaving a visible gap.
+    top: 53,
     left: 0,
     right: 0,
     borderRadius: 22,
@@ -1257,6 +1324,9 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     borderBottomWidth: 1,
     borderBottomColor: '#EFF3F7',
+  },
+  suggestionRowLast: {
+    borderBottomWidth: 0,
   },
   suggestionTitle: {
     color: COLORS.TEXT_PRIMARY,
@@ -1285,6 +1355,14 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
+  },
+  cityOverviewButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E6EDF3',
   },
   zoomButton: {
     width: 44,

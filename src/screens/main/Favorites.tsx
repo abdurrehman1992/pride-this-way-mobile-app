@@ -13,8 +13,12 @@ import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import {
     EventIcon,
+    EventTabIconActive,
     FavoriteScreenIcon,
-    MapIconMain,
+    PlaceTabIcon,
+    PlaceTabIconActive,
+    TourTabIcon,
+    TourTabIconActive,
 } from '../../constants/icons';
 import PlacesArroundCard from '../../components/Home/PlacesArroundCard';
 import CustomTabs from '../../components/common/CustomTabs';
@@ -42,16 +46,23 @@ const Favorites = () => {
     const [loading, setLoading] = useState(false);
 
     const tabs = [
-        { label: 'Places', value: 'Places' },
+        {
+            label: 'Places',
+            value: 'Places',
+            icon: <PlaceTabIcon width={16} height={16} />,
+            activeIcon: <PlaceTabIconActive width={16} height={16} />,
+        },
         {
             label: 'Tours',
             value: 'Tours',
-            icon: <MapIconMain width={16} height={16} />,
+            icon: <TourTabIcon width={16} height={16} />,
+            activeIcon: <TourTabIconActive width={16} height={16} />,
         },
         {
             label: 'Events',
             value: 'Events',
             icon: <EventIcon width={16} height={16} />,
+            activeIcon: <EventTabIconActive width={16} height={16} />,
         },
     ];
 

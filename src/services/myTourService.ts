@@ -1629,6 +1629,25 @@ export const getActiveTour = async (userId?: string): Promise<SavedTour | null> 
   return tours[0];
 };
 
+/** Live ids of the user's active tours, from server-confirmed snapshots only. */
+export const subscribeToActiveTourIds = (
+  userId: string,
+  onChange: (tourIds: string[]) => void
+) =>
+  firestore()
+    .collection(TOURS_COLLECTION)
+    .where('user_id', '==', userId)
+    .where('status', '==', 'active')
+    .onSnapshot(
+      (snapshot: FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>) => {
+        // A cache-only result can be empty or outdated (cold start, offline);
+        // acting on it could stop tracking of a tour that is still active.
+        if (snapshot.metadata.fromCache) return;
+        onChange(snapshot.docs.map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) => doc.id));
+      },
+      () => undefined
+    );
+
 export const scheduleOtherActiveTours = async ({
   userId,
   excludeTourId,

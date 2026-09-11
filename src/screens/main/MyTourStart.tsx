@@ -75,6 +75,11 @@ import {
   stopNativeTourLocation,
   subscribeToNativeTourLocation,
 } from '../../utils/nativeTourLocation';
+import {
+  onTourScreenUnmounted,
+  startTourTracking,
+  stopTourTracking,
+} from '../../services/tourTrackingService';
 import { showLocationRequiredAlert } from '../../utils/locationRequiredAlert';
 import { showInternetRequiredAlert } from '../../utils/internetRequiredAlert';
 import { verifyPlaceImageMatch } from '../../services/aiService';
@@ -778,6 +783,29 @@ const MyTourStart = () => {
   const [isPausedTour, setIsPausedTour] = useState(false);
   const [isPausingTour, setIsPausingTour] = useState(false);
   const isOnline = useInternetConnectivity();
+
+  // Firestore location upload for the running tour (tourTrackingService).
+  // tourId can still be null for a brand-new tour; the service then resolves
+  // it from the user's active tour. Leaving the screen does not stop it.
+  const trackingRequestedRef = useRef(false);
+  useEffect(() => {
+    if (!user?.id) return;
+    if (tourStarted) {
+      trackingRequestedRef.current = true;
+      startTourTracking({ userId: user.id, tourId });
+      return;
+    }
+    if (trackingRequestedRef.current) {
+      trackingRequestedRef.current = false;
+      stopTourTracking(isCompletedTour ? 'completed' : 'paused');
+    }
+  }, [isCompletedTour, tourId, tourStarted, user?.id]);
+  useEffect(() => () => {
+    if (trackingRequestedRef.current) {
+      onTourScreenUnmounted();
+    }
+  }, []);
+
   const leavingRef = useRef(false);
   const locationPauseAlertRef = useRef(false);
   const offlineAlertRef = useRef(false);
@@ -2309,13 +2337,25 @@ const MyTourStart = () => {
       routeMatchesCurrentStops && isRenderableRouteSegment(currentRoadSegments[0])
         ? currentRoadSegments[0]
         : null;
+    // A flight leg is a straight line from where GPS was when it was built
+    // (for example a stale first fix thousands of km away). Measure from its
+    // start so it is rebuilt from the live position once the user moves.
+    const activeAirSegment =
+      routeMatchesCurrentStops &&
+      !activeRoadSegment &&
+      isRenderableRouteSegment(currentAirSegments[0])
+        ? currentAirSegments[0]
+        : null;
+    const activeLegSegment = activeRoadSegment || activeAirSegment;
     const offRouteDistance =
       tourStarted && currentLocation && activeRoadSegment
         ? distanceMetersBetween(
           currentLocation,
           projectPointOnPolyline(currentLocation, activeRoadSegment).point
         )
-        : 0;
+        : tourStarted && currentLocation && activeAirSegment
+          ? distanceMetersBetween(currentLocation, activeAirSegment[0])
+          : 0;
     const accuracyAwareRerouteDistance = Math.min(
       MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS,
       Math.max(
@@ -2325,7 +2365,7 @@ const MyTourStart = () => {
     );
     const needsOffRouteRefresh =
       tourStarted &&
-      Boolean(activeRoadSegment) &&
+      Boolean(activeLegSegment) &&
       offRouteDistance >= accuracyAwareRerouteDistance;
 
     if (hasCompleteRoute && !needsOffRouteRefresh) {
@@ -2338,7 +2378,7 @@ const MyTourStart = () => {
       !(
         needsOffRouteRefresh &&
         inFlight.kind === 'full' &&
-        Boolean(activeRoadSegment)
+        Boolean(activeLegSegment)
       )
     ) {
       return;
@@ -2372,7 +2412,7 @@ const MyTourStart = () => {
       id: requestId,
       stopsKey: pendingRouteStopsKey,
       kind:
-        needsOffRouteRefresh && Boolean(activeRoadSegment)
+        needsOffRouteRefresh && Boolean(activeLegSegment)
           ? 'active'
           : 'full',
     };
@@ -2434,7 +2474,7 @@ const MyTourStart = () => {
         if (
           needsOffRouteRefresh &&
           isNavigatedRoute &&
-          Boolean(activeRoadSegment) &&
+          Boolean(activeLegSegment) &&
           routeStartCoordinate &&
           pendingNavigableStops[0]
         ) {

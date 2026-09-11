@@ -2,6 +2,9 @@ import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import firestore, {
   FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
+import { stopNativeTourLocation } from '../utils/nativeTourLocation';
+import { unregisterPushToken } from './pushNotificationService';
+import { stopTourTrackingForSignOut } from './tourTrackingService';
 
 const USERS_COLLECTION = 'users';
 const DEFAULT_PROFILE_IMAGE =
@@ -282,6 +285,14 @@ export const changeCurrentUserPassword = async ({
 };
 
 export const logoutUser = async () => {
+  const userId = auth().currentUser?.uid;
+  // Stop tour tracking and tracking alerts while the session can still write
+  // the final state.
+  await stopTourTrackingForSignOut();
+  await stopNativeTourLocation();
+  if (userId) {
+    await unregisterPushToken(userId);
+  }
   await auth().signOut();
 };
 

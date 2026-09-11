@@ -313,34 +313,38 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
               />
             </View>
             {hasFilters && (
-              <View style={styles.filterRow}>
-                {selectedLocation && (
-                  <View style={styles.chip}>
-                    <Text style={styles.chipText}>{selectedLocation}</Text>
-                    <TouchableOpacity onPress={() => {
-                      setSelectedLocation(null);
-                    }}>
-                      <Text style={styles.remove}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
+              <View style={styles.filterSection}>
+                <View style={styles.filterHeader}>
+                  <Text style={styles.filterTitle}>Selected City & Preferences</Text>
+                  <TouchableOpacity onPress={resetFilters}>
+                    <Text style={styles.reset}>Reset</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.filterRow}>
+                  {selectedLocation && (
+                    <View style={styles.chip}>
+                      <Text style={styles.chipText}>{selectedLocation}</Text>
+                      <TouchableOpacity onPress={() => {
+                        setSelectedLocation(null);
+                      }}>
+                        <Text style={styles.remove}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
 
-                {selectedPrefs.map(item => (
-                  <View key={item} style={styles.chip}>
-                    <Text style={styles.chipText}>{item}</Text>
-                    <TouchableOpacity
-                      onPress={() =>
-                        setSelectedPrefs(prev => prev.filter(i => i !== item))
-                      }
-                    >
-                      <Text style={styles.remove}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-
-                <TouchableOpacity onPress={resetFilters}>
-                  <Text style={styles.reset}>Reset</Text>
-                </TouchableOpacity>
+                  {selectedPrefs.map(item => (
+                    <View key={item} style={styles.chip}>
+                      <Text style={styles.chipText}>{item}</Text>
+                      <TouchableOpacity
+                        onPress={() =>
+                          setSelectedPrefs(prev => prev.filter(i => i !== item))
+                        }
+                      >
+                        <Text style={styles.remove}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
               </View>
             )}
 
@@ -537,12 +541,25 @@ const styles = StyleSheet.create({
   search: {
     marginHorizontal: 24,
   },
+  filterSection: {
+    marginHorizontal: 24,
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  filterTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: FONT_SIZE.TEXT,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
   filterRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginHorizontal: 24,
-    marginTop: 6,
-    marginBottom: 8,
     alignItems: 'center',
     gap: 8,
   },
@@ -571,7 +588,6 @@ const styles = StyleSheet.create({
   },
 
   reset: {
-    marginLeft: 10,
     color: COLORS.CLEAR_ALL,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },

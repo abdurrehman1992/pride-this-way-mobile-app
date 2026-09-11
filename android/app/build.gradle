@@ -127,6 +127,9 @@ dependencies {
     implementation("com.facebook.react:react-android")
     implementation(platform("com.google.firebase:firebase-bom:34.13.0"))
     implementation("com.google.firebase:firebase-analytics")
+    // TourTrackingUploader writes tour locations from the native foreground
+    // service; the same SDK React Native Firebase already bundles.
+    implementation("com.google.firebase:firebase-firestore")
     // implementation "com.mapbox.maps:android:$RNMapboxMapsVersion"
 
     if (hermesEnabled.toBoolean()) {

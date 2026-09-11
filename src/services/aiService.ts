@@ -1226,6 +1226,11 @@ async function uriToBase64(uri: string): Promise<string> {
 // }
 
 
+// Shown for technical failures (AI service errors, bad responses, missing
+// configuration). The details are logged, never shown to the user.
+const PHOTO_VERIFICATION_ERROR_MESSAGE =
+  'Something went wrong while verifying your photo. Please try again.';
+
 export async function verifyPlaceImageMatch(
   place: {
     title?: string;
@@ -1329,9 +1334,10 @@ A large destination may extend far beyond its coordinate pin, so the user does n
     } else if (GEMINI_TOKEN) {
       headers.Authorization = `Bearer ${GEMINI_TOKEN}`;
     } else {
+      console.error('[aiService] Gemini credentials missing for place verification');
       return {
         matched: false,
-        reason: 'AI verification is unavailable because no Gemini API key is configured.',
+        reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
         confidence: 0,
       };
     }
@@ -1466,8 +1472,7 @@ Return matched=true only when the captured image provides reasonable visual evid
 
       return {
         matched: false,
-        reason: `AI verification failed: ${errText || 'Unable to verify this location right now.'
-          }`,
+        reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
         confidence: 0,
       };
     }
@@ -1484,8 +1489,7 @@ Return matched=true only when the captured image provides reasonable visual evid
     if (!rawText) {
       return {
         matched: false,
-        reason:
-          'AI verification did not return a result. Please try again with a clear photo.',
+        reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
         confidence: 0,
       };
     }
@@ -1536,8 +1540,7 @@ Return matched=true only when the captured image provides reasonable visual evid
 
     return {
       matched: false,
-      reason:
-        `AI verification could not compare this photo while ${verificationStage}. Please check your internet connection and try again.`,
+      reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
       confidence: 0,
     };
   }

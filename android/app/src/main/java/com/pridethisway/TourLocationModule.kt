@@ -5,17 +5,22 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
 class TourLocationModule(
   private val reactContext: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(reactContext) {
+
+  private val mainHandler = Handler(Looper.getMainLooper())
 
   private val receiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -91,6 +96,54 @@ class TourLocationModule(
       promise.reject("TOUR_LOCATION_STATUS_FAILED", error)
     }
   }
+
+  @ReactMethod
+  fun startTrackingSession(options: ReadableMap, promise: Promise) {
+    val tourId = options.stringOrNull("tourId")
+    val userId = options.stringOrNull("userId")
+    if (tourId.isNullOrBlank() || userId.isNullOrBlank()) {
+      promise.reject("TOUR_TRACKING_INVALID_SESSION", "tourId and userId are required")
+      return
+    }
+
+    val session = TourTrackingUploader.Session(
+      tourId = tourId,
+      userId = userId,
+      sampleIntervalMs = options.doubleOr("sampleIntervalMs", 15_000.0).toLong(),
+      sampleMinDistanceMeters = options.doubleOr("sampleMinDistanceMeters", 20.0).toFloat(),
+      heartbeatIntervalMs = options.doubleOr("heartbeatIntervalMs", 60_000.0).toLong(),
+      maxAccuracyMeters = options.doubleOr("maxAccuracyMeters", 100.0).toFloat(),
+      backgroundGpsIntervalMs = options.doubleOr("backgroundGpsIntervalMs", 10_000.0).toLong(),
+      backgroundGpsMinDistanceMeters = options.doubleOr("backgroundGpsMinDistanceMeters", 0.0).toFloat(),
+    )
+    // TourTrackingUploader is main-thread only (see its class comment).
+    mainHandler.post {
+      try {
+        TourTrackingUploader.startSession(reactContext.applicationContext, session)
+        promise.resolve(true)
+      } catch (error: Exception) {
+        promise.reject("TOUR_TRACKING_START_FAILED", error)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun stopTrackingSession(reason: String, promise: Promise) {
+    mainHandler.post {
+      try {
+        TourTrackingUploader.stopSession(reactContext.applicationContext, reason)
+        promise.resolve(true)
+      } catch (error: Exception) {
+        promise.reject("TOUR_TRACKING_STOP_FAILED", error)
+      }
+    }
+  }
+
+  private fun ReadableMap.stringOrNull(key: String): String? =
+    if (hasKey(key) && !isNull(key)) getString(key) else null
+
+  private fun ReadableMap.doubleOr(key: String, fallback: Double): Double =
+    if (hasKey(key) && !isNull(key)) getDouble(key) else fallback
 
   override fun onCatalystInstanceDestroy() {
     try {
