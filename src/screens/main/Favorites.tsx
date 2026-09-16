@@ -12,8 +12,6 @@ import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import {
-    EventIcon,
-    EventTabIconActive,
     FavoriteScreenIcon,
     PlaceTabIcon,
     PlaceTabIconActive,
@@ -27,12 +25,11 @@ import {
     fetchEventsByIds,
     fetchPlacesByIds,
     fetchToursByIds,
-    FirebaseEvent,
     FirebasePlace,
     SavedTour,
 } from '../../services/myTourService';
 
-type TabValue = 'Places' | 'Tours' | 'Events';
+type TabValue = 'Places' | 'Tours';
 
 type FavoriteTourItem = SavedTour & { coverImage?: string };
 
@@ -42,8 +39,7 @@ const Favorites = () => {
     const [activeTab, setActiveTab] = useState<TabValue>('Places');
     const [places, setPlaces] = useState<FirebasePlace[]>([]);
     const [tours, setTours] = useState<FavoriteTourItem[]>([]);
-    const [events, setEvents] = useState<FirebaseEvent[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
 
     const tabs = [
         {
@@ -57,12 +53,6 @@ const Favorites = () => {
             value: 'Tours',
             icon: <TourTabIcon width={16} height={16} />,
             activeIcon: <TourTabIconActive width={16} height={16} />,
-        },
-        {
-            label: 'Events',
-            value: 'Events',
-            icon: <EventIcon width={16} height={16} />,
-            activeIcon: <EventTabIconActive width={16} height={16} />,
         },
     ];
 
@@ -105,13 +95,11 @@ const Favorites = () => {
                         isActive: doc.isActive !== false,
                     } as any;
                     placesById.set(placeId, placeObj);
-                } catch (e) {
+                } catch {
                     // ignore malformed fallback doc
                 }
             });
             const toursById = new Map(toursData.map((t) => [t.id, t]));
-            const eventsById = new Map(eventsData.map((e) => [e.id, e]));
-
             const eventIdsFound = new Set(eventsData.map((e) => e.id));
             const miscategorizedPlaceIds = favoriteEvents.filter(
                 (id) => !eventIdsFound.has(id)
@@ -128,7 +116,9 @@ const Favorites = () => {
             const tourPlaceIds = Array.from(
                 new Set(
                     toursData.flatMap((tour) =>
-                        (tour.all_places || []).map((item) => item.place_id)
+                        (tour.all_places || [])
+                            .map((item) => item.place_id)
+                            .filter((placeId): placeId is string => Boolean(placeId))
                     )
                 )
             );
@@ -154,22 +144,21 @@ const Favorites = () => {
                     .map((tour) => {
                         const coverImage =
                             (tour.all_places || [])
-                                .map((item) => tourPlacesById.get(item.place_id)?.imageUrl)
+                                .map((item) =>
+                                    item.place_id
+                                        ? tourPlacesById.get(item.place_id)?.imageUrl
+                                        : undefined
+                                )
                                 .find((url): url is string => Boolean(url)) || '';
                         return { ...tour, coverImage };
                     })
-            );
-            setEvents(
-                favoriteEvents
-                    .map((id) => eventsById.get(id))
-                    .filter((e): e is FirebaseEvent => Boolean(e))
             );
         } catch (err) {
             console.warn('[Favorites] failed to load', err);
         } finally {
             setLoading(false);
         }
-    }, [favorites, favoriteTours, favoriteEvents]);
+    }, [favorites, favoriteTours, favoriteEvents, fallbackPlaceDocs]);
 
     useEffect(() => {
         loadAll();
@@ -181,7 +170,7 @@ const Favorites = () => {
         }, [loadAll])
     );
 
-    const totalCount = favorites.length + favoriteTours.length + favoriteEvents.length;
+    const totalCount = places.length + tours.length;
 
     const handlePlaceTap = (place: FirebasePlace) => {
         navigation.navigate('ForYou', {
@@ -253,37 +242,6 @@ const Favorites = () => {
         </TouchableOpacity>
     );
 
-    const renderEventItem = ({ item }: { item: FirebaseEvent }) => (
-        <TouchableOpacity
-            onPress={() => navigation.navigate('ForYou', {
-                screen: 'RecommendationDetials',
-                params: {
-                    item: {
-                        id: item.id,
-                        title: item.title,
-                        description: item.description || item.address || '',
-                        rating: String(item.rating || ''),
-                        image: item.coverImage || '',
-                        category: 'Event',
-                    },
-                },
-            })}
-            activeOpacity={0.9}
-            style={styles.itemWrapper}
-        >
-            <PlacesArroundCard
-                id={item.id}
-                title={item.title}
-                description={item.description || item.address || 'Event'}
-                rating={String(item.rating || '')}
-                image={item.coverImage || ''}
-                location={[item.city_name, item.country].filter(Boolean).join(', ')}
-                category="Event"
-                time={item.startTime}
-            />
-        </TouchableOpacity>
-    );
-
     const renderActiveTab = () => {
         if (loading) {
             return (
@@ -307,28 +265,14 @@ const Favorites = () => {
             );
         }
 
-        if (activeTab === 'Tours') {
-            if (tours.length === 0) {
-                return <EmptyMessage text="No favorite tours yet" />;
-            }
-            return (
-                <FlatList
-                    data={tours}
-                    keyExtractor={(item) => item.id}
-                    renderItem={renderTourItem}
-                    contentContainerStyle={styles.listContent}
-                />
-            );
-        }
-
-        if (events.length === 0) {
-            return <EmptyMessage text="No favorite events yet" />;
+        if (tours.length === 0) {
+            return <EmptyMessage text="No favorite tours yet" />;
         }
         return (
             <FlatList
-                data={events}
+                data={tours}
                 keyExtractor={(item) => item.id}
-                renderItem={renderEventItem}
+                renderItem={renderTourItem}
                 contentContainerStyle={styles.listContent}
             />
         );
@@ -337,12 +281,12 @@ const Favorites = () => {
     return (
         <View style={styles.container}>
             <TopHeader title="Favorites" />
-            {totalCount === 0 ? (
+            {!loading && totalCount === 0 ? (
                 <View style={styles.content}>
                     <FavoriteScreenIcon width={127.71} height={179} />
                     <Text style={styles.title}>Oops! No Favorites Yet</Text>
                     <Text style={styles.desc}>
-                        Discover amazing places and events and add them here!
+                        Discover amazing places and tours and add them here!
                     </Text>
                     <TouchableOpacity
                         style={styles.btnContainer}

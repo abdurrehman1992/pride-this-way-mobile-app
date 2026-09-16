@@ -2,6 +2,10 @@ import firestore, {
   FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
 import { sumVisitedPointsFromItems } from '../utils/rewardPoints';
+import {
+  createCanonicalTagResolver,
+  matchesSelectedCity,
+} from '../utils/recommendationMatching';
 import { searchPlaceSuggestions } from './mapboxSearch';
 
 type Coordinates = {
@@ -778,14 +782,14 @@ export const fetchUpcomingEventSuggestions = async ({
   const cutoff = new Date(now);
   cutoff.setMonth(cutoff.getMonth() + 3);
 
-  const normalizedLocation = normalizeText(locationLabel);
+  const [snapshot, tags] = await Promise.all([
+    firestore().collection(EVENTS_COLLECTION).get(),
+    fetchTourTags().catch(() => []),
+  ]);
+  const canonicalTag = createCanonicalTagResolver(tags);
   const requestedTagIds = new Set(
-    (tagIds || []).map((tagId) => normalizeTagId(tagId)).filter(Boolean)
+    (tagIds || []).map(canonicalTag).filter(Boolean)
   );
-
-  const snapshot = await firestore()
-    .collection(EVENTS_COLLECTION)
-    .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
 
   return snapshot.docs
     .map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
@@ -808,21 +812,20 @@ export const fetchUpcomingEventSuggestions = async ({
       );
     })
     .filter((event: FirebaseEvent) => {
-      if (!normalizedLocation) {
-        return true;
-      }
-
-      return locationMatches(locationLabel, event.city_name, event.country);
+      return matchesSelectedCity(locationLabel, event.city_name);
     })
     .map((event: FirebaseEvent) => ({
       event,
       matchingTags: (event.tag_ids || []).reduce(
         (count: number, tagId: string) => {
-          return requestedTagIds.has(normalizeTagId(tagId)) ? count + 1 : count;
+          return requestedTagIds.has(canonicalTag(tagId)) ? count + 1 : count;
         },
         0
       ),
     }))
+    .filter(({ matchingTags }) =>
+      requestedTagIds.size === 0 || matchingTags > 0
+    )
     .sort((a, b) => {
       if (b.matchingTags !== a.matchingTags) {
         return b.matchingTags - a.matchingTags;
@@ -886,17 +889,7 @@ export const fetchRecommendedRoutes = async ({
   // Routes created by different data flows may store either the tag document
   // id or the tag name. Resolve both forms to one canonical key before
   // counting matches.
-  const tagAliases = new Map<string, string>();
-  tags.forEach((tag) => {
-    const canonicalId = normalizeText(tag.id);
-    if (!canonicalId) return;
-    tagAliases.set(canonicalId, canonicalId);
-    tagAliases.set(normalizeText(tag.name), canonicalId);
-  });
-  const canonicalTag = (value?: string | null) => {
-    const normalized = normalizeText(value);
-    return normalized ? tagAliases.get(normalized) || normalized : '';
-  };
+  const canonicalTag = createCanonicalTagResolver(tags);
 
   const normalizedSelectedTagIds = Array.from(
     new Set(selectedTagIds.map(canonicalTag).filter(Boolean))

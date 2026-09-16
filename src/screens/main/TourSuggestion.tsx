@@ -59,7 +59,9 @@ const TourSuggestion: React.FC = () => {
         tourName?: string;
         cityLabel?: string;
         recommendations?: RecommendedRoute[];
+        selectedTagIds?: string[];
         addedPlaceId?: string;
+        addedPlaceIds?: string[];
         timestamp?: number;
     } | undefined;
 
@@ -256,7 +258,7 @@ const TourSuggestion: React.FC = () => {
                 cityLabel || [primary.route.city_name, primary.route.country].filter(Boolean).join(', ');
             const results = await fetchUpcomingEventSuggestions({
                 locationLabel,
-                tagIds: primary.route.tag_ids || [],
+                tagIds: params?.selectedTagIds || primary.route.tag_ids || [],
                 limit: 20,
             });
             setSuggestedEvents(results);
@@ -268,7 +270,7 @@ const TourSuggestion: React.FC = () => {
         } finally {
             setLoadingEvents(false);
         }
-    }, [cityLabel, primary]);
+    }, [cityLabel, params?.selectedTagIds, primary]);
 
     useEffect(() => {
         loadEventSuggestions();
@@ -376,19 +378,32 @@ const TourSuggestion: React.FC = () => {
     };
 
     useEffect(() => {
-        const addedPlaceId = params?.addedPlaceId;
-        if (!addedPlaceId) return;
+        const addedPlaceIds = params?.addedPlaceIds?.length
+            ? params.addedPlaceIds
+            : params?.addedPlaceId
+                ? [params.addedPlaceId]
+                : [];
+        if (addedPlaceIds.length === 0) return;
 
-        fetchPlacesByIds([addedPlaceId]).then((fetchedPlaces) => {
-            const addedPlace = fetchedPlaces[0];
-            if (!addedPlace) return;
+        fetchPlacesByIds(addedPlaceIds).then((fetchedPlaces) => {
+            const fetchedById = new Map(fetchedPlaces.map((place) => [place.id, place]));
+            const orderedAddedPlaces = addedPlaceIds
+                .map((placeId) => fetchedById.get(placeId))
+                .filter((place): place is FirebasePlace => Boolean(place));
+            if (orderedAddedPlaces.length === 0) return;
+
             setPlaces((prev) => {
-                if (prev.some((place) => place.id === addedPlace.id)) return prev;
-                return [...prev, addedPlace];
+                const currentIds = new Set(prev.map((place) => place.id));
+                const newPlaces = orderedAddedPlaces.filter((place) => !currentIds.has(place.id));
+                return newPlaces.length > 0 ? [...prev, ...newPlaces] : prev;
             });
         });
-        navigation.setParams({ addedPlaceId: undefined, timestamp: undefined });
-    }, [navigation, params?.addedPlaceId, params?.timestamp]);
+        navigation.setParams({
+            addedPlaceId: undefined,
+            addedPlaceIds: undefined,
+            timestamp: undefined,
+        });
+    }, [navigation, params?.addedPlaceId, params?.addedPlaceIds, params?.timestamp]);
 
     const toggleLocationDetails = (placeId: string) => {
         setExpandedLocations((prev) => ({

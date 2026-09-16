@@ -12,8 +12,10 @@ export type MyTourStackParamList = {
     tourName: string;
     cityLabel: string;
     recommendations: any[];
+    selectedTagIds?: string[];
     hasUnsavedChanges?: boolean;
     addedPlaceId?: string;
+    addedPlaceIds?: string[];
     timestamp?: number;
   };
   AddLocations: {

@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -50,10 +51,47 @@ const AddLocations = () => {
   const [searchText, setSearchText] = useState('');
   const [places, setPlaces] = useState<FirebasePlace[]>([]);
   const [loading, setLoading] = useState(false);
-  const selectedPlaceIds = useMemo(
+  const [pendingPlaceIds, setPendingPlaceIds] = useState<string[]>([]);
+  const isMultiSelect = fromScreen === 'TourSuggestion';
+  const existingPlaceIdSet = useMemo(
     () => new Set([...existingPlaceIds, ...extraPlaceIds]),
     [existingPlaceIds, extraPlaceIds]
   );
+  const pendingPlaceIdSet = useMemo(
+    () => new Set(pendingPlaceIds),
+    [pendingPlaceIds]
+  );
+
+  const togglePendingPlace = (placeId: string) => {
+    setPendingPlaceIds((current) =>
+      current.includes(placeId)
+        ? current.filter((id) => id !== placeId)
+        : [...current, placeId]
+    );
+  };
+
+  const addSelectedLocations = () => {
+    if (pendingPlaceIds.length === 0) return;
+
+    const selectedIds = [...pendingPlaceIds];
+    const addedCount = selectedIds.length;
+    navigation.goBack();
+
+    setTimeout(() => {
+      navigation.navigate({
+        name: 'TourSuggestion',
+        params: {
+          addedPlaceIds: selectedIds,
+          timestamp: Date.now(),
+        },
+        merge: true,
+      });
+      showSuccess(
+        addedCount === 1 ? 'Location added' : 'Locations added',
+        `${addedCount} ${addedCount === 1 ? 'location has' : 'locations have'} been added to your tour.`
+      );
+    }, 100);
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -78,7 +116,7 @@ const AddLocations = () => {
   }, [cityLabel]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingView}
@@ -99,6 +137,11 @@ const AddLocations = () => {
             ) : null}
 
             <Text style={styles.title}>{title}</Text>
+            {isMultiSelect ? (
+              <Text style={styles.selectionHint}>
+                Select as many locations as you want, then add them together.
+              </Text>
+            ) : null}
           </View>
 
           {loading ? (
@@ -112,11 +155,13 @@ const AddLocations = () => {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.listContainer}
+              style={styles.list}
               renderItem={({ item }) => {
-                const isAlreadyAdded = selectedPlaceIds.has(item.id);
+                const isAlreadyAdded = existingPlaceIdSet.has(item.id);
+                const isPending = pendingPlaceIdSet.has(item.id);
 
                 return (
-                  <View style={isAlreadyAdded ? styles.selectedCard : undefined}>
+                  <View style={isAlreadyAdded || isPending ? styles.selectedCard : undefined}>
                     <PlacesArroundCard
                       id={item.id}
                       title={item.name}
@@ -134,6 +179,11 @@ const AddLocations = () => {
                           return;
                         }
 
+                        if (isMultiSelect) {
+                          togglePendingPlace(item.id);
+                          return;
+                        }
+
                         showSuccess(
                           'Location added',
                           `${item.name} has been added to your tour.`
@@ -141,18 +191,6 @@ const AddLocations = () => {
                         navigation.goBack();
 
                         setTimeout(() => {
-                          if (fromScreen === 'TourSuggestion') {
-                            navigation.navigate({
-                              name: 'TourSuggestion',
-                              params: {
-                                addedPlaceId: item.id,
-                                timestamp: Date.now(),
-                              },
-                              merge: true,
-                            });
-                            return;
-                          }
-
                           if (fromScreen === 'MyTourStart') {
                             navigation.navigate('MyTourStart', {
                               routeId,
@@ -176,9 +214,11 @@ const AddLocations = () => {
                         }, 100);
                       }}
                     />
-                    {isAlreadyAdded ? (
+                    {isAlreadyAdded || isPending ? (
                       <View style={styles.selectedBadge} pointerEvents="none">
-                        <Text style={styles.selectedBadgeText}>Already added</Text>
+                        <Text style={styles.selectedBadgeText}>
+                          {isAlreadyAdded ? 'Already added' : 'Selected'}
+                        </Text>
                       </View>
                     ) : null}
                   </View>
@@ -191,6 +231,29 @@ const AddLocations = () => {
               }
             />
           )}
+
+          {isMultiSelect ? (
+            <View style={styles.selectionFooter}>
+              <Text style={styles.selectionCount}>
+                {pendingPlaceIds.length} selected
+              </Text>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                disabled={pendingPlaceIds.length === 0}
+                onPress={addSelectedLocations}
+                style={[
+                  styles.addSelectedButton,
+                  pendingPlaceIds.length === 0 && styles.addSelectedButtonDisabled,
+                ]}
+              >
+                <Text style={styles.addSelectedButtonText}>
+                  {pendingPlaceIds.length === 1
+                    ? 'Add 1 Location'
+                    : `Add ${pendingPlaceIds.length} Locations`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -214,6 +277,9 @@ const styles = StyleSheet.create({
   },
   searchSection: {
     marginTop: 10,
+  },
+  list: {
+    flex: 1,
   },
   filterIcon: {
     width: 20,
@@ -242,6 +308,12 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.LARGE_TEXT,
     fontFamily: FONT_FAMILY.Poppins_SemiBold,
   },
+  selectionHint: {
+    color: COLORS.TEXT_SECONDARY,
+    fontSize: FONT_SIZE.CARD_TEXT,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    marginTop: 4,
+  },
   listContainer: {
     paddingTop: 16,
     paddingBottom: 10,
@@ -265,6 +337,33 @@ const styles = StyleSheet.create({
     color: COLORS.WHITE,
     fontSize: FONT_SIZE.PILL_TEXT,
     fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  selectionFooter: {
+    backgroundColor: COLORS.SCREENS_BG,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  selectionCount: {
+    color: COLORS.TEXT_SECONDARY,
+    fontSize: FONT_SIZE.CARD_TEXT,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  addSelectedButton: {
+    alignItems: 'center',
+    backgroundColor: COLORS.BUTTON_COLOR,
+    borderRadius: 12,
+    height: 50,
+    justifyContent: 'center',
+  },
+  addSelectedButtonDisabled: {
+    backgroundColor: COLORS.BUTTON_DISABLED,
+  },
+  addSelectedButtonText: {
+    color: COLORS.WHITE,
+    fontSize: FONT_SIZE.TEXT,
+    fontFamily: FONT_FAMILY.Poppins_SemiBold,
   },
   loaderWrap: {
     flex: 1,
