@@ -1039,7 +1039,41 @@ function bytesToBase64(bytes: Uint8Array): string {
   return base64;
 }
 
-async function uriToBase64(uri: string): Promise<string> {
+type ImageEncodingOptions = {
+  maxDimension?: number;
+  quality?: number;
+};
+
+async function encodeImageToBase64(
+  image: any,
+  { maxDimension, quality = 85 }: ImageEncodingOptions,
+): Promise<string> {
+  let encodedImage = image;
+  try {
+    const largestSide = Math.max(image.width, image.height);
+    if (maxDimension && largestSide > maxDimension) {
+      const scale = maxDimension / largestSide;
+      encodedImage = await image.resizeAsync(
+        Math.max(1, Math.round(image.width * scale)),
+        Math.max(1, Math.round(image.height * scale)),
+      );
+    }
+    const encoded = await encodedImage.toEncodedImageDataAsync('jpg', quality);
+    return bytesToBase64(new Uint8Array(encoded.buffer));
+  } finally {
+    if (encodedImage !== image && typeof encodedImage.dispose === 'function') {
+      encodedImage.dispose();
+    }
+    if (typeof image.dispose === 'function') {
+      image.dispose();
+    }
+  }
+}
+
+async function uriToBase64(
+  uri: string,
+  { maxDimension, quality = 85 }: ImageEncodingOptions = {},
+): Promise<string> {
   const dataUriMatch = uri.match(/^data:[^;,]+;base64,(.+)$/i);
   if (dataUriMatch) {
     return dataUriMatch[1];
@@ -1051,19 +1085,39 @@ async function uriToBase64(uri: string): Promise<string> {
   if (/^(?:file:\/\/|content:\/\/)/i.test(uri) || uri.startsWith('/')) {
     const filePath = uri.replace(/^file:\/\//i, '');
     const image = await loadImage({ filePath });
-    const encoded = await image.toEncodedImageDataAsync('jpg', 85);
-    return bytesToBase64(new Uint8Array(encoded.buffer));
+    return encodeImageToBase64(image, { maxDimension, quality });
   }
 
   if (!/^https?:\/\//i.test(uri) && !/^data:/i.test(uri)) {
     throw new Error(`Unsupported captured image URI: ${uri.slice(0, 80)}`);
   }
 
+  // Use the native image loader first so remote reference photos are resized
+  // before being added to Gemini's request. Some hosts/loaders cannot decode
+  // a URL natively, in which case the original fetch fallback stays intact.
+  if (maxDimension) {
+    try {
+      const image = await loadImage({ url: uri });
+      return encodeImageToBase64(image, { maxDimension, quality });
+    } catch {
+      // Fall back to direct download below.
+    }
+  }
+
   console.log('[aiService] Downloading remote image for verification:', {
     scheme: uri.split(':')[0],
     host: uri.startsWith('http') ? new URL(uri).host : undefined,
   });
-  const response = await fetch(uri);
+  const remoteImageController = maxDimension ? new AbortController() : null;
+  const remoteImageTimeout = remoteImageController
+    ? setTimeout(() => remoteImageController.abort(), 7_000)
+    : null;
+  let response: Response;
+  try {
+    response = await fetch(uri, remoteImageController ? { signal: remoteImageController.signal } : undefined);
+  } finally {
+    if (remoteImageTimeout) clearTimeout(remoteImageTimeout);
+  }
   if (!response.ok) {
     throw new Error(`Image download failed with HTTP ${response.status}`);
   }
@@ -1230,6 +1284,9 @@ async function uriToBase64(uri: string): Promise<string> {
 // configuration). The details are logged, never shown to the user.
 const PHOTO_VERIFICATION_ERROR_MESSAGE =
   'Something went wrong while verifying your photo. Please try again.';
+const GEMINI_VERIFICATION_TIMEOUT_MS = 75_000;
+const GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION = 1280;
+const GEMINI_VERIFICATION_JPEG_QUALITY = 72;
 
 export async function verifyPlaceImageMatch(
   place: {
@@ -1317,9 +1374,16 @@ A large destination may extend far beyond its coordinate pin, so the user does n
     : 'image/jpeg';
 
   let verificationStage = `preparing captured image (${localImageUri.split(':')[0] || 'local'})`;
+  let didRequestTimeout = false;
 
   try {
-    const base64 = await uriToBase64(localImageUri);
+    // Gemini does not need a 4K camera image to identify a landmark. A
+    // bounded JPEG keeps mobile uploads small and avoids aborting a free-tier
+    // request before Gemini has time to respond.
+    const base64 = await uriToBase64(localImageUri, {
+      maxDimension: GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION,
+      quality: GEMINI_VERIFICATION_JPEG_QUALITY,
+    });
 
     const defaultEndpoint =
       `${GEMINI_BASE_V1BETA}/models/${GEMINI_DEFAULT_MODEL}:generateContent`;
@@ -1395,7 +1459,10 @@ Return matched=true only when the captured image provides reasonable visual evid
     verificationStage = 'loading destination reference image';
     if (place.imageUrl) {
       try {
-        const referenceBase64 = await uriToBase64(place.imageUrl);
+        const referenceBase64 = await uriToBase64(place.imageUrl, {
+          maxDimension: 896,
+          quality: 68,
+        });
 
         if (referenceBase64) {
           parts.push({
@@ -1439,7 +1506,10 @@ Return matched=true only when the captured image provides reasonable visual evid
     });
 
     const requestController = new AbortController();
-    const requestTimeoutId = setTimeout(() => requestController.abort(), 30000);
+    const requestTimeoutId = setTimeout(() => {
+      didRequestTimeout = true;
+      requestController.abort();
+    }, GEMINI_VERIFICATION_TIMEOUT_MS);
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -1533,14 +1603,26 @@ Return matched=true only when the captured image provides reasonable visual evid
       confidence,
     };
   } catch (error) {
-    console.error(
-      `[aiService] place verification error while ${verificationStage}:`,
-      error,
-    );
+    const wasAborted =
+      error instanceof Error && /abort/i.test(error.message);
+    // A timeout is a recoverable free-tier/network condition. Keep it out of
+    // the red RN error overlay and give the user an actionable retry message.
+    if (wasAborted) {
+      console.warn(
+        `[aiService] Gemini verification ${didRequestTimeout ? 'timed out' : 'was cancelled'} while ${verificationStage}.`,
+      );
+    } else {
+      console.error(
+        `[aiService] place verification error while ${verificationStage}:`,
+        error,
+      );
+    }
 
     return {
       matched: false,
-      reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
+      reason: wasAborted
+        ? 'Verification took too long. Please check your internet connection and try again.'
+        : PHOTO_VERIFICATION_ERROR_MESSAGE,
       confidence: 0,
     };
   }

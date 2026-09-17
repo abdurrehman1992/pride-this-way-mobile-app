@@ -33,6 +33,7 @@ class TourLocationModule(
         payload.putDouble("latitude", intent.getDoubleExtra("latitude", 0.0))
         payload.putDouble("longitude", intent.getDoubleExtra("longitude", 0.0))
         payload.putDouble("accuracy", intent.getDoubleExtra("accuracy", 0.0))
+        payload.putDouble("speed", intent.getDoubleExtra("speed", -1.0))
         payload.putDouble("timestamp", intent.getLongExtra("timestamp", 0L).toDouble())
       }
 
@@ -89,6 +90,7 @@ class TourLocationModule(
         result.putDouble("latitude", prefs.getLong("latitude_e6", 0L).toDouble() / 1_000_000.0)
         result.putDouble("longitude", prefs.getLong("longitude_e6", 0L).toDouble() / 1_000_000.0)
         result.putDouble("accuracy", prefs.getFloat("accuracy", 0f).toDouble())
+        result.putDouble("speed", prefs.getFloat("speed", -1f).toDouble())
         result.putDouble("timestamp", prefs.getLong("timestamp", 0L).toDouble())
       }
       promise.resolve(result)

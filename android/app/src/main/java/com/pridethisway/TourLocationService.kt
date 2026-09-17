@@ -56,6 +56,7 @@ class TourLocationService : Service() {
         .putLong("latitude_e6", (location.latitude * 1_000_000.0).toLong())
         .putLong("longitude_e6", (location.longitude * 1_000_000.0).toLong())
         .putFloat("accuracy", location.accuracy)
+        .putFloat("speed", if (location.hasSpeed()) location.speed else -1f)
         .putLong("timestamp", now)
         .apply()
 
@@ -225,6 +226,7 @@ class TourLocationService : Service() {
       intent.putExtra("latitude", location.latitude)
         .putExtra("longitude", location.longitude)
         .putExtra("accuracy", location.accuracy.toDouble())
+        .putExtra("speed", if (location.hasSpeed()) location.speed.toDouble() else -1.0)
     }
     sendBroadcast(intent)
   }

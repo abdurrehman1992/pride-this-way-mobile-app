@@ -7,6 +7,7 @@ type NativeLocationStatus = {
   latitude?: number;
   longitude?: number;
   accuracy?: number;
+  speed?: number;
   timestamp?: number;
 };
 

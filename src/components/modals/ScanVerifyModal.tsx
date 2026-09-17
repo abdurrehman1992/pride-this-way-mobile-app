@@ -19,6 +19,15 @@ import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 import { CrossIcon } from "../../constants/icons";
 import { CameraIcon, DoneModalIcon } from "../../constants/images";
 import { CustomAlert } from "../../utils/CustomAlert";
+
+const NIGHT_START_HOUR = 18;
+const NIGHT_END_HOUR = 6;
+
+const isLocalNightTime = (date = new Date()) => {
+  const hour = date.getHours();
+  return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR;
+};
+
 type Props = {
   visible: boolean;
   title?: string;
@@ -43,6 +52,8 @@ const ScanVerifyModal: React.FC<Props> = ({
   const [capturedImage, setCapturedImage] = useState<{ uri: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [torchEnabled, setTorchEnabled] = useState(false);
+  const [cameraPreviewReady, setCameraPreviewReady] = useState(false);
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const cameraRef = useRef<any>(null);
@@ -124,10 +135,31 @@ const ScanVerifyModal: React.FC<Props> = ({
   }, [device, hasPermission, step, visible]);
   useEffect(() => {
     if (!visible) {
+      setTorchEnabled(false);
+      setCameraPreviewReady(false);
       setCapturedImage(null);
       setStep("scan");
     }
   }, [visible]);
+
+  useEffect(() => {
+    if (step !== "scan") {
+      setTorchEnabled(false);
+      setCameraPreviewReady(false);
+    }
+  }, [step]);
+
+  useEffect(() => {
+    const shouldEnableNightTorch = Boolean(
+      visible &&
+      step === "scan" &&
+      hasPermission &&
+      cameraPreviewReady &&
+      device?.hasTorch &&
+      isLocalNightTime()
+    );
+    setTorchEnabled(shouldEnableNightTorch);
+  }, [cameraPreviewReady, device?.hasTorch, hasPermission, step, visible]);
 
   useEffect(() => {
     if (visible && step === "scan") {
@@ -151,7 +183,7 @@ const ScanVerifyModal: React.FC<Props> = ({
   }, [scanAnim, step, visible]);
 
   const handleScanPress = async () => {
-    if (!cameraRef.current) {
+    if (!cameraRef.current || !cameraPreviewReady) {
       console.error("Camera ref is not available");
       return;
     }
@@ -190,6 +222,7 @@ const ScanVerifyModal: React.FC<Props> = ({
           scheme: uri.split(':')[0],
           pathPreview: uri.slice(0, 120),
         });
+        setTorchEnabled(false);
         setCapturedImage({ uri });
         setStep("confirm");
         return;
@@ -199,6 +232,7 @@ const ScanVerifyModal: React.FC<Props> = ({
         try {
           const uri = await imageToDataUri(photo);
           // console.log("Resolved snapshot URI:", uri);
+          setTorchEnabled(false);
           setCapturedImage({ uri });
           setStep("confirm");
           return;
@@ -209,6 +243,7 @@ const ScanVerifyModal: React.FC<Props> = ({
 
       if (typeof photo === "string") {
         const uri = photo.startsWith("file://") || photo.startsWith("content://") ? photo : `file://${photo}`;
+        setTorchEnabled(false);
         setCapturedImage({ uri });
         setStep("confirm");
         return;
@@ -270,7 +305,13 @@ const ScanVerifyModal: React.FC<Props> = ({
   };
 
   const handleBackToTour = () => {
+    setTorchEnabled(false);
     setStep("scan");
+    onClose();
+  };
+
+  const handleClose = () => {
+    setTorchEnabled(false);
     onClose();
   };
 
@@ -281,7 +322,7 @@ const ScanVerifyModal: React.FC<Props> = ({
       animationType="fade"
       presentationStyle="overFullScreen"
       statusBarTranslucent={true}
-      onRequestClose={onClose}
+      onRequestClose={handleClose}
     >
       <View style={styles.overlay}>
         {step === "scan" && (
@@ -296,7 +337,7 @@ const ScanVerifyModal: React.FC<Props> = ({
                 style={styles.image}
               /> */}
             </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+            <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
               <CrossIcon width={12.43} height={12.43} />
             </TouchableOpacity>
             <Text style={styles.title}>Scan to Verify Your Visit</Text>
@@ -312,6 +353,14 @@ const ScanVerifyModal: React.FC<Props> = ({
                       style={StyleSheet.absoluteFill}
                       device={device}
                       isActive={visible && step === "scan"}
+                      // Some Android devices incorrectly advertise low-light
+                      // boost. It throws during native camera configuration,
+                      // so night capture intentionally uses the flash only.
+                      // Do not send a torch command until the preview itself
+                      // is active; CameraX cancels commands before that point.
+                      torchMode={cameraPreviewReady && torchEnabled ? "on" : undefined}
+                      onPreviewStarted={() => setCameraPreviewReady(true)}
+                      onPreviewStopped={() => setCameraPreviewReady(false)}
                       // @ts-ignore: enable photo capture on Vision Camera
                       photo={true}
                     />
@@ -337,7 +386,7 @@ const ScanVerifyModal: React.FC<Props> = ({
             </View>
 
             <View style={styles.buttonRow}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={handleClose}>
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.scanBtn} onPress={handleScanPress}>

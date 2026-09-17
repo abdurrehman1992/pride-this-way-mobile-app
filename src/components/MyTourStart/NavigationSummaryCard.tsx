@@ -65,7 +65,7 @@ const NavigationSummaryCard: React.FC<Props> = ({
               <Text style={styles.distanceValue}>{formatDistance(remainingDistanceMeters)}</Text>
             </View>
           </View>
-          <Text style={styles.arrival}>Estimated arrival · {formatArrivalTime(arrivalTime)}</Text>
+          <Text style={styles.arrival}>Estimated Completion · {formatArrivalTime(arrivalTime)}</Text>
         </>
       ) : (
         <View style={styles.loadingRow}>
