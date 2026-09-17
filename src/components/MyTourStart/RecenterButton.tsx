@@ -1,5 +1,6 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React from 'react';
-import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { COLORS } from '../../constants/colors';
 
@@ -16,7 +17,7 @@ const RecenterButton: React.FC<Props> = ({
   onLongPress,
   bottomOffset = 178,
 }) => (
-  <TouchableOpacity
+  <ActionTouchable
     accessibilityRole="button"
     accessibilityLabel="Re-center map on current location"
     activeOpacity={0.85}
@@ -36,7 +37,7 @@ const RecenterButton: React.FC<Props> = ({
         <View style={[styles.targetDot, active && styles.activeTargetColor]} />
       </View>
     </View>
-  </TouchableOpacity>
+  </ActionTouchable>
 );
 
 export default React.memo(RecenterButton);

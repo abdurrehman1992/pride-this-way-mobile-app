@@ -7,8 +7,7 @@ import {
     ScrollView,
     TouchableOpacity,
     Keyboard,
-    StatusBar,
-} from "react-native";
+    } from "react-native";
 
 import { COLORS } from "../../constants/colors";
 import { FONT_SIZE, FONT_FAMILY } from "../../constants/fonts";
@@ -131,11 +130,6 @@ const Login: React.FC = () => {
 
     return (
         <>
-            <StatusBar
-                translucent
-                backgroundColor="transparent"
-                barStyle="light-content"
-            />
             <ImageBackground style={styles.container}
                 source={AuthBackGroundImage}
             >

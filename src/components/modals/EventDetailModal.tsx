@@ -1,10 +1,10 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useEffect, useState } from 'react';
 import {
   Modal,
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Image,
   ScrollView,
   ImageBackground,
@@ -98,12 +98,12 @@ const EventDetailModal: React.FC<Props> = ({
               >
                 <View style={styles.headerRow}>
                   <View />
-                  <TouchableOpacity
+                  <ActionTouchable
                     style={[styles.closeButton, isCompact && styles.closeButtonCompact]}
                     onPress={onClose}
                   >
                     <RoundedCross width={28} height={32} />
-                  </TouchableOpacity>
+                  </ActionTouchable>
                 </View>
               </ImageBackground>
             ) : null}
@@ -114,13 +114,13 @@ const EventDetailModal: React.FC<Props> = ({
               <View style={styles.headerRow}>
                 <View />
 
-                <TouchableOpacity
+                <ActionTouchable
                   activeOpacity={0.8}
                   onPress={onClose}
                   style={styles.closeBtn}
                 >
                   <CrossIcon width={16} height={16} />
-                </TouchableOpacity>
+                </ActionTouchable>
               </View> :
               null
             }
@@ -164,7 +164,7 @@ const EventDetailModal: React.FC<Props> = ({
             </Text>
 
             {canExpandDescription ? (
-              <TouchableOpacity
+              <ActionTouchable
                 activeOpacity={0.75}
                 onPress={() => setIsDescriptionExpanded((expanded) => !expanded)}
                 style={styles.readMoreButton}
@@ -172,7 +172,7 @@ const EventDetailModal: React.FC<Props> = ({
                 <Text style={styles.readMoreText}>
                   {isDescriptionExpanded ? 'Show less' : 'Read more'}
                 </Text>
-              </TouchableOpacity>
+              </ActionTouchable>
             ) : null}
 
             {statusMessage ? (
@@ -188,26 +188,26 @@ const EventDetailModal: React.FC<Props> = ({
             ) : null}
 
             {primaryActionLabel && onPrimaryAction ? (
-              <TouchableOpacity
+              <ActionTouchable
                 style={[styles.primaryBtn, primaryDisabled && styles.primaryBtnDisabled]}
                 onPress={onPrimaryAction}
                 disabled={primaryDisabled}
                 activeOpacity={0.85}
               >
                 <Text style={styles.primaryBtnText}>{primaryActionLabel}</Text>
-              </TouchableOpacity>
+              </ActionTouchable>
             ) : null}
 
             {secondaryActionLabel && onSecondaryAction ? (
-              <TouchableOpacity style={styles.secondaryBtn} onPress={onSecondaryAction} activeOpacity={0.85}>
+              <ActionTouchable style={styles.secondaryBtn} onPress={onSecondaryAction} activeOpacity={0.85}>
                 <Text style={styles.secondaryBtnText}>{secondaryActionLabel}</Text>
-              </TouchableOpacity>
+              </ActionTouchable>
             ) : null}
 
             {onRemoveFromTour ? (
-              <TouchableOpacity style={styles.removeBtn} onPress={onRemoveFromTour} activeOpacity={0.85}>
+              <ActionTouchable style={styles.removeBtn} onPress={onRemoveFromTour} activeOpacity={0.85}>
                 <Text style={styles.removeBtnText}>Remove from tour</Text>
-              </TouchableOpacity>
+              </ActionTouchable>
             ) : null}
           </ScrollView>
         </View>

@@ -1,9 +1,9 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Modal,
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
   Image,
   Animated,
@@ -337,9 +337,9 @@ const ScanVerifyModal: React.FC<Props> = ({
                 style={styles.image}
               /> */}
             </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
+            <ActionTouchable style={styles.closeBtn} onPress={handleClose}>
               <CrossIcon width={12.43} height={12.43} />
-            </TouchableOpacity>
+            </ActionTouchable>
             <Text style={styles.title}>Scan to Verify Your Visit</Text>
             <Text style={styles.description}>
               Scan a specific landmark or image to verify your visit to {title || "this location"}.
@@ -386,12 +386,12 @@ const ScanVerifyModal: React.FC<Props> = ({
             </View>
 
             <View style={styles.buttonRow}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={handleClose}>
+              <ActionTouchable style={styles.cancelBtn} onPress={handleClose}>
                 <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.scanBtn} onPress={handleScanPress}>
+              </ActionTouchable>
+              <ActionTouchable style={styles.scanBtn} onPress={handleScanPress}>
                 <Text style={styles.scanText}>Scan</Text>
-              </TouchableOpacity>
+              </ActionTouchable>
             </View>
           </View>
         )}
@@ -410,7 +410,7 @@ const ScanVerifyModal: React.FC<Props> = ({
                 />
               </View>
             )}
-            <TouchableOpacity
+            <ActionTouchable
               style={styles.closeBtn}
               onPress={() => {
                 setCapturedImage(null);
@@ -418,24 +418,22 @@ const ScanVerifyModal: React.FC<Props> = ({
               }}
             >
               <CrossIcon width={12.43} height={12.43} />
-            </TouchableOpacity>
+            </ActionTouchable>
             <Text style={styles.title}>Confirm Scan</Text>
             <Text style={styles.description}>
               Is this the correct scan? Review the image above and confirm to proceed.
             </Text>
             <View style={styles.buttonRow}>
-              <TouchableOpacity
+              <ActionTouchable
                 style={styles.cancelBtn}
                 onPress={handleConfirmNo}
                 disabled={isCapturing}
               >
                 <Text style={styles.cancelText}>Retake</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
+              </ActionTouchable>
+              <ActionTouchable
                 style={[styles.scanBtn, isCapturing && styles.disabledBtn]}
-                onPress={() => {
-                  handleConfirmYes().catch(() => {});
-                }}
+                onPress={handleConfirmYes}
                 disabled={isCapturing}
               >
                 {isCapturing ? (
@@ -443,7 +441,7 @@ const ScanVerifyModal: React.FC<Props> = ({
                 ) : (
                   <Text style={styles.scanText}>Confirm</Text>
                 )}
-              </TouchableOpacity>
+              </ActionTouchable>
             </View>
           </View>
         )}
@@ -456,16 +454,16 @@ const ScanVerifyModal: React.FC<Props> = ({
                 resizeMode="contain"
               />
             </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={handleBackToTour}>
+            <ActionTouchable style={styles.closeBtn} onPress={handleBackToTour}>
               <CrossIcon width={12.43} height={12.43} />
-            </TouchableOpacity>
+            </ActionTouchable>
             <Text style={styles.title}>Visit Confirmed!</Text>
             <Text style={styles.description}>
               You earned +{successPoints} points for this location! Keep exploring to unlock more rewards and badges.
             </Text>
-            <TouchableOpacity style={styles.fullWidthBtn} onPress={handleBackToTour}>
+            <ActionTouchable style={styles.fullWidthBtn} onPress={handleBackToTour}>
               <Text style={styles.scanText}>Back to Tour</Text>
-            </TouchableOpacity>
+            </ActionTouchable>
           </View>
         )}
       </View>

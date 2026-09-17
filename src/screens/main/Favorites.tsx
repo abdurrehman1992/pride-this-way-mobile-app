@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import TourCardHeader, { tourCardStyles } from '../../components/MyTour/TourCardHeader';
+import React, { useCallback, useState } from 'react';
 import {
     View,
     Text,
@@ -31,15 +32,16 @@ import {
 
 type TabValue = 'Places' | 'Tours';
 
-type FavoriteTourItem = SavedTour & { coverImage?: string };
+type FavoriteTourItem = SavedTour & { coverImage?: string; places: FirebasePlace[] };
 
 const Favorites = () => {
-    const { favorites, favoriteTours, favoriteEvents, fallbackPlaceDocs } = useFavorites();
+    const { favorites, favoriteTours, favoriteEvents, fallbackPlaceDocs, removeFromFavorites, isFavorite } = useFavorites();
     const navigation = useNavigation<any>();
     const [activeTab, setActiveTab] = useState<TabValue>('Places');
     const [places, setPlaces] = useState<FirebasePlace[]>([]);
     const [tours, setTours] = useState<FavoriteTourItem[]>([]);
     const [loading, setLoading] = useState(true);
+    const [expandedTours, setExpandedTours] = useState<Record<string, boolean>>({});
 
     const tabs = [
         {
@@ -150,7 +152,9 @@ const Favorites = () => {
                                         : undefined
                                 )
                                 .find((url): url is string => Boolean(url)) || '';
-                        return { ...tour, coverImage };
+                        return { ...tour, coverImage, places: (tour.all_places || [])
+                            .map((entry) => tourPlacesById.get(entry.place_id || ''))
+                            .filter((place): place is FirebasePlace => Boolean(place)) };
                     })
             );
         } catch (err) {
@@ -159,10 +163,6 @@ const Favorites = () => {
             setLoading(false);
         }
     }, [favorites, favoriteTours, favoriteEvents, fallbackPlaceDocs]);
-
-    useEffect(() => {
-        loadAll();
-    }, [loadAll]);
 
     useFocusEffect(
         useCallback(() => {
@@ -173,41 +173,25 @@ const Favorites = () => {
     const totalCount = places.length + tours.length;
 
     const handlePlaceTap = (place: FirebasePlace) => {
-        navigation.navigate('ForYou', {
-            screen: 'RecommendationDetials',
-            params: {
-                item: {
-                    id: place.id,
-                    title: place.name,
-                    description: place.description || place.address || '',
-                    rating: String(place.rating || ''),
-                    image: place.imageUrl || '',
-                    category: 'Food',
-                },
-            },
-        });
-    };
-
-    const handleTourTap = (tour: SavedTour) => {
-        navigation.navigate('MyTours', {
-            screen: 'MyTourStart',
-            params: {
-                routeId: tour.route_id,
-                tourId: tour.id,
-                tourName: tour.title,
-                cityLabel: [tour.city_name, tour.country].filter(Boolean).join(', '),
+        navigation.navigate('RecommendationDetials', {
+            item: {
+                id: place.id,
+                title: place.name,
+                description: place.description || place.address || '',
+                rating: String(place.rating || ''),
+                image: place.imageUrl || '',
+                category: 'Food',
             },
         });
     };
 
     const renderPlaceItem = ({ item }: { item: FirebasePlace }) => (
-        <TouchableOpacity
-            onPress={() => handlePlaceTap(item)}
-            activeOpacity={0.9}
-            style={styles.itemWrapper}
-        >
+        <View style={styles.itemWrapper}>
             <PlacesArroundCard
                 id={item.id}
+                onPress={() => handlePlaceTap(item)}
+                showFullText
+                hideDivider
                 title={item.name}
                 description={item.description || item.address || 'Location'}
                 rating={String(item.rating || 0)}
@@ -217,33 +201,45 @@ const Favorites = () => {
                 hideTime
                 category="Place"
             />
-        </TouchableOpacity>
+        </View>
     );
 
-    const renderTourItem = ({ item }: { item: FavoriteTourItem }) => (
-        <TouchableOpacity
-            onPress={() => handleTourTap(item)}
-            activeOpacity={0.9}
-            style={styles.itemWrapper}
-        >
-            <PlacesArroundCard
-                id={item.id}
-                title={item.title || 'My Tour'}
-                description={[item.city_name, item.country].filter(Boolean).join(', ') || 'Tour'}
-                image={item.coverImage || ''}
-                location={[item.city_name, item.country].filter(Boolean).join(', ')}
-                category="Route"
-                // For favorite tours hide rating, time and bottom location/underline
-                hideRating
-                hideTime
-                hideLocation
-                hideDivider
-            />
-        </TouchableOpacity>
-    );
+    const renderTourItem = ({ item }: { item: FavoriteTourItem }) => {
+        const expanded = Boolean(expandedTours[item.id]);
+        const statusColor = item.status === 'paused' ? '#F59E0B'
+            : item.status === 'active' || item.status === 'completed' ? COLORS.TEXT_GREEN
+            : COLORS.BUTTON_COLOR;
+        return (
+            <View style={styles.tourItemWrapper}>
+                <View style={tourCardStyles.tourCard}>
+                    <TourCardHeader
+                        title={item.title || 'My Tour'}
+                        previewImage={item.coverImage || ''}
+                        locationCount={(item.all_places || []).filter((entry) => Boolean(entry.place_id)).length}
+                        badge={{ label: (item.status || 'saved').charAt(0).toUpperCase() + (item.status || 'saved').slice(1), color: statusColor }}
+                        favorite={isFavorite(item.id)}
+                        expanded={expanded}
+                        onFavorite={() => removeFromFavorites(item.id, 'Route')}
+                        onToggle={() => setExpandedTours((current) => ({ ...current, [item.id]: !current[item.id] }))}
+                    />
+                    {expanded && (
+                        <View style={styles.tourLocations}>
+                            <Text style={styles.tourLocationsTitle}>Locations</Text>
+                            {item.places.length ? item.places.map((place) => (
+                                <TouchableOpacity key={place.id} onPress={() => handlePlaceTap(place)} style={styles.tourLocation}>
+                                    <Text style={styles.tourPlaceName}>{place.name}</Text>
+                                    <Text style={styles.tourPlaceDescription}>{place.description || place.address}</Text>
+                                </TouchableOpacity>
+                            )) : <Text style={styles.tourPlaceDescription}>No locations available.</Text>}
+                        </View>
+                    )}
+                </View>
+            </View>
+        );
+    };
 
     const renderActiveTab = () => {
-        if (loading) {
+        if (loading && totalCount === 0) {
             return (
                 <View style={styles.content}>
                     <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
@@ -372,6 +368,24 @@ const styles = StyleSheet.create({
     itemWrapper: {
         marginBottom: 16,
         marginHorizontal: 24,
+    },
+    tourItemWrapper: { marginHorizontal: 24 },
+    tourLocations: {
+        marginHorizontal: 16, marginBottom: 16, paddingHorizontal: 12,
+        paddingVertical: 18, borderRadius: 12, backgroundColor: '#95D8EA20',
+    },
+    tourLocationsTitle: {
+        fontSize: FONT_SIZE.TEXT, fontFamily: FONT_FAMILY.Poppins_SemiBold,
+        color: COLORS.TEXT_PRIMARY, marginBottom: 10,
+    },
+    tourLocation: { paddingVertical: 6 },
+    tourPlaceName: {
+        fontSize: FONT_SIZE.SMALL_TEXT, fontFamily: FONT_FAMILY.InterTight_Medium,
+        color: COLORS.TEXT_PRIMARY,
+    },
+    tourPlaceDescription: {
+        fontSize: FONT_SIZE.CARD_TEXT, fontFamily: FONT_FAMILY.InterTight_Regular,
+        color: COLORS.TEXT_SECONDARY, marginTop: 4,
     },
     favoritesContent: {
         flex: 1,

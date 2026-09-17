@@ -1,3 +1,5 @@
+import ActionTouchable from '../../components/common/ActionTouchable';
+import { canAddTourLocation } from '../../utils/tourLocationValidation';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -7,7 +9,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -70,8 +71,9 @@ const AddLocations = () => {
     );
   };
 
-  const addSelectedLocations = () => {
+  const addSelectedLocations = async () => {
     if (pendingPlaceIds.length === 0) return;
+    if (!(await canAddTourLocation())) return;
 
     const selectedIds = [...pendingPlaceIds];
     const addedCount = selectedIds.length;
@@ -94,17 +96,26 @@ const AddLocations = () => {
   };
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
 
-    const timeout = setTimeout(() => {
-      // Add Locations is always scoped to the city selected for this tour.
-      // Do not expose the global/all-places mode here.
-      fetchPlacesForLocation(cityLabel, searchText, { cityOnly: true })
-        .then(setPlaces)
-        .finally(() => setLoading(false));
+    const timeout = setTimeout(async () => {
+      try {
+        if (!(await canAddTourLocation()) || cancelled) return;
+        // Keep recommendations scoped to the selected tour city.
+        const result = await fetchPlacesForLocation(cityLabel, searchText, { cityOnly: true });
+        if (!cancelled) setPlaces(result);
+      } catch {
+        if (!cancelled) showInfo('Unable to load locations', 'Please check your internet connection and try again.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }, 300);
 
-    return () => clearTimeout(timeout);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
   }, [cityLabel, searchText]);
 
   const title = useMemo(() => {
@@ -170,7 +181,8 @@ const AddLocations = () => {
                       image={item.imageUrl || 'https://picsum.photos/200'}
                       location={[item.city_name, item.country].filter(Boolean).join(', ')}
                       category="Place"
-                      onPress={() => {
+                      onPress={async () => {
+                        if (!(await canAddTourLocation())) return;
                         if (isAlreadyAdded) {
                           showInfo(
                             'Location already added',
@@ -237,7 +249,7 @@ const AddLocations = () => {
               <Text style={styles.selectionCount}>
                 {pendingPlaceIds.length} selected
               </Text>
-              <TouchableOpacity
+              <ActionTouchable
                 activeOpacity={0.85}
                 disabled={pendingPlaceIds.length === 0}
                 onPress={addSelectedLocations}
@@ -251,7 +263,7 @@ const AddLocations = () => {
                     ? 'Add 1 Location'
                     : `Add ${pendingPlaceIds.length} Locations`}
                 </Text>
-              </TouchableOpacity>
+              </ActionTouchable>
             </View>
           ) : null}
         </View>

@@ -1,9 +1,11 @@
+import { toastConfig } from '../../utils/toastConfig';
+import { checkInternetConnection } from '../../utils/networkStatus';
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
     Modal,
     View,
     Text,
-    TouchableOpacity,
     TextInput,
     StyleSheet,
     ScrollView,
@@ -106,6 +108,29 @@ const LocationModal: React.FC<Props> = ({
     const [internalSearch, setInternalSearch] = useState("");
     const [selected, setSelected] = useState("");
     const [loadingLocation, setLoadingLocation] = useState(false);
+    const [locationToast, setLocationToast] = useState<{
+        title: string; message: string;
+    } | null>(null);
+
+    useEffect(() => {
+        if (!visible) {
+            setLocationToast(null);
+            return;
+        }
+        if (!locationToast) return;
+        const timer = setTimeout(() => setLocationToast(null), 3500);
+        return () => clearTimeout(timer);
+    }, [visible, locationToast]);
+
+    const showLocationToast = (toastTitle: string, message: string) => {
+        setLocationToast({ title: toastTitle, message });
+    };
+
+    const requireLocationInternet = async () => {
+        if (await checkInternetConnection()) return true;
+        showLocationToast('No internet connection', 'Your internet is off. Please connect and try again.');
+        return false;
+    };
     const [isKeyboardVisible, setKeyboardVisible] = useState(false);
     const [aiCities, setAiCities] = useState<string[]>([]);
     const [aiLoading, setAiLoading] = useState(false);
@@ -285,6 +310,7 @@ const LocationModal: React.FC<Props> = ({
     };
 
     const getCurrentLocation = async () => {
+        if (!(await requireLocationInternet())) return;
         const hasPermission = await requestLocationPermission();
         if (!hasPermission) {
             CustomAlert.alert(
@@ -312,10 +338,19 @@ const LocationModal: React.FC<Props> = ({
                 });
             }
 
+            if (!(await requireLocationInternet())) return;
             const addr = await getAddressFromCoords(
                 pos.coords.latitude,
                 pos.coords.longitude
             );
+            // Connectivity can disappear while GPS or reverse geocoding is running.
+            if (!(await requireLocationInternet())) return;
+            // The shared geocoder falls back to coordinates. This location
+            // picker accepts an address only; leave its selection untouched.
+            if (/^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/.test(addr)) {
+                showLocationToast('Location unavailable', 'Unable to find your address. Please try again.');
+                return;
+            }
             const normalizedAddress = normalizeLocationString(addr);
 
             if (onSearchChange) {
@@ -326,8 +361,8 @@ const LocationModal: React.FC<Props> = ({
             setSelected(normalizedAddress);
             // console.log("Current location :", normalizedAddress)
         } catch {
-            // console.log("LOCATION ERROR:", error);
-            CustomAlert.alert("Error", "Unable to fetch location");
+            if (!(await requireLocationInternet())) return;
+            showLocationToast('Location unavailable', 'Unable to fetch your location. Please try again.');
         } finally {
             setLoadingLocation(false);
         }
@@ -341,7 +376,7 @@ const LocationModal: React.FC<Props> = ({
             animationType="fade"
             onRequestClose={closeWithAnimation}
         >
-            {Platform.OS === 'android' ? (
+            {visible && Platform.OS === 'android' ? (
                 <StatusBar
                     translucent
                     backgroundColor="transparent"
@@ -357,7 +392,7 @@ const LocationModal: React.FC<Props> = ({
                 style={styles.overlay}
             >
 
-                <TouchableOpacity
+                <ActionTouchable
                     activeOpacity={1}
                     style={StyleSheet.absoluteFill}
                     onPress={closeWithAnimation}
@@ -374,9 +409,9 @@ const LocationModal: React.FC<Props> = ({
                     ]}
                 >
                     <View {...panResponder.panHandlers} style={styles.dragHandle}>
-                        <TouchableOpacity onPress={closeWithAnimation}>
+                        <ActionTouchable onPress={closeWithAnimation}>
                             <ModalCloseIcon width={38} height={12} />
-                        </TouchableOpacity>
+                        </ActionTouchable>
                     </View>
 
                     <Text style={[styles.title, isKeyboardVisible && styles.titleKeyboard]}>
@@ -399,7 +434,7 @@ const LocationModal: React.FC<Props> = ({
                             placeholder="Search location..."
                         />
                         {!!search && (
-                            <TouchableOpacity
+                            <ActionTouchable
                                 activeOpacity={0.7}
                                 onPress={() => {
                                     if (onSearchChange) {
@@ -414,10 +449,10 @@ const LocationModal: React.FC<Props> = ({
                                 <View style={styles.clearButton}>
                                     <Text style={styles.clearText}>✕</Text>
                                 </View>
-                            </TouchableOpacity>
+                            </ActionTouchable>
                         )}
                     </View>
-                    <TouchableOpacity
+                    <ActionTouchable
                         style={styles.currentLocation}
                         onPress={getCurrentLocation}
                         disabled={loadingLocation}
@@ -431,7 +466,7 @@ const LocationModal: React.FC<Props> = ({
                         <Text style={styles.secondaryText}>
                             Use My Current Location
                         </Text>
-                    </TouchableOpacity>
+                    </ActionTouchable>
 
                     <ScrollView
                         style={styles.locationList}
@@ -451,7 +486,7 @@ const LocationModal: React.FC<Props> = ({
                         ) : filteredLocations.length > 0 && !selected ? ( // Added "&& !selected" here
                             <>
                                 {filteredLocations.map((item, i) => (
-                                    <TouchableOpacity
+                                    <ActionTouchable
                                         key={i}
                                         style={styles.locationItem}
                                         onPress={() => handleSelect(item)}
@@ -464,7 +499,7 @@ const LocationModal: React.FC<Props> = ({
                                         >
                                             {item}
                                         </Text>
-                                    </TouchableOpacity>
+                                    </ActionTouchable>
                                 ))}
                             </>
                         ) : (
@@ -479,7 +514,7 @@ const LocationModal: React.FC<Props> = ({
                         )}
                     </ScrollView>
 
-                    <TouchableOpacity
+                    <ActionTouchable
                         style={[
                             styles.primaryBtnFull,
                             (!selected || !selected.trim()) && styles.primaryBtnDisabled,
@@ -495,13 +530,23 @@ const LocationModal: React.FC<Props> = ({
                                 return;
                             }
 
-                            onNext(value);
+                            return onNext(value);
                         }}
                     >
                         <Text style={styles.primaryText}>Next</Text>
-                    </TouchableOpacity>
+                    </ActionTouchable>
 
                 </Animated.View>
+                {visible && locationToast && (
+                    <View
+                        pointerEvents="none"
+                        accessibilityRole="alert"
+                        accessibilityLiveRegion="polite"
+                        style={styles.locationToast}
+                    >
+                        {toastConfig.info({ text1: locationToast.title, text2: locationToast.message })}
+                    </View>
+                )}
             </KeyboardAvoidingView>
         </Modal>
     );
@@ -509,6 +554,15 @@ const LocationModal: React.FC<Props> = ({
 
 export default LocationModal;
 const styles = StyleSheet.create({
+    // Render inside the native modal, above its elevated bottom sheet.
+    locationToast: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 100,
+        zIndex: 1000,
+        elevation: 30,
+    },
     overlay: {
         flex: 1,
         width: "100%",

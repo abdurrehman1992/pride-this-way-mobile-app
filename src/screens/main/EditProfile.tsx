@@ -1,17 +1,16 @@
+import ActionTouchable from "../../components/common/ActionTouchable";
 import React, { useEffect, useMemo, useState } from "react";
 import {
     View,
     Text,
     StyleSheet,
     Image,
-    TouchableOpacity,
     ScrollView,
     KeyboardAvoidingView,
     Platform,
     ActivityIndicator,
     Keyboard,
-    StatusBar,
-} from "react-native";
+    } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import ForgeTopHeader from "../../components/common/ForgeTopHeader";
@@ -150,11 +149,6 @@ const EditProfile = () => {
 
     return (
         <>
-            <StatusBar
-                translucent
-                backgroundColor="transparent"
-                barStyle="light-content"
-            />
             <SafeAreaView style={styles.container} edges={["top"]}>
                 <KeyboardAvoidingView
                     style={styles.keyboardAvoidingView}
@@ -172,7 +166,7 @@ const EditProfile = () => {
 
                         {/* PROFILE IMAGE */}
                         <View style={styles.profileSection}>
-                            <TouchableOpacity
+                            <ActionTouchable
                                 onPress={handlePickImage}
                                 activeOpacity={0.8}
                                 disabled={uploadingImage}
@@ -197,7 +191,7 @@ const EditProfile = () => {
                                         style={styles.iconOverlay}
                                     />
                                 )}
-                            </TouchableOpacity>
+                            </ActionTouchable>
 
                             <Text style={styles.changeText}>
                                 {uploadingImage
@@ -235,20 +229,13 @@ const EditProfile = () => {
                         </View>
 
                         {/* BUTTON */}
-                        {loading ? (
-                            <ActivityIndicator
-                                size="large"
-                                color={COLORS.BUTTON_COLOR}
-                                style={styles.loader}
-                            />
-                        ) : (
-                            <CustomButton
-                                title="Update Profile"
-                                Icon={SinupIcon}
-                                onPress={handleUpdateProfile}
-                                disabled={!isFormValid || uploadingImage}
-                            />
-                        )}
+                        <CustomButton
+                            loading={loading}
+                            title="Update Profile"
+                            Icon={SinupIcon}
+                            onPress={handleUpdateProfile}
+                            disabled={!isFormValid || uploadingImage}
+                        />
                     </ScrollView>
                 </KeyboardAvoidingView>
             </SafeAreaView>

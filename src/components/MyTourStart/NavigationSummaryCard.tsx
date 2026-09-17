@@ -1,5 +1,6 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY } from '../../constants/fonts';
@@ -85,7 +86,7 @@ const NavigationSummaryCard: React.FC<Props> = ({
         </View>
       </View>
     </View>
-    <TouchableOpacity
+    <ActionTouchable
       accessibilityRole="button"
       accessibilityLabel="Pause tour"
       activeOpacity={0.85}
@@ -101,7 +102,7 @@ const NavigationSummaryCard: React.FC<Props> = ({
       ) : (
         <Text style={styles.pauseText}>Pause Tour</Text>
       )}
-    </TouchableOpacity>
+    </ActionTouchable>
   </View>
 );
 

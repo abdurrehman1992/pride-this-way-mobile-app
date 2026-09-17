@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { StatusBar } from "react-native";
 import { Provider } from "react-redux";
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { store, persistor } from "./Redux/store";
@@ -20,6 +21,7 @@ const App = () => {
 
   return (
     <SafeAreaProvider>
+      <StatusBar hidden={false} translucent backgroundColor="transparent" barStyle="light-content" />
       <Provider store={store}>
         <PersistGate loading={null} persistor={persistor}>
           <FavoritesProvider>

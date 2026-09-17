@@ -5,7 +5,6 @@ import {
     ScrollView,
     KeyboardAvoidingView,
     Platform,
-    ActivityIndicator,
     Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -196,20 +195,13 @@ const ChangePassword = ({ navigation }: any) => {
                             />
                         </View>
                     </View>
-                    {loading ? (
-                        <ActivityIndicator
-                            size="large"
-                            color={COLORS.BUTTON_COLOR}
-                            style={styles.loader}
-                        />
-                    ) : (
-                        <CustomButton
-                            title="Update Password"
-                            Icon={SinupIcon}
-                            onPress={handleChangePassword}
-                            disabled={!isFormValid}
-                        />
-                    )}
+                    <CustomButton
+                        loading={loading}
+                        title="Update Password"
+                        Icon={SinupIcon}
+                        onPress={handleChangePassword}
+                        disabled={!isFormValid}
+                    />
                 </ScrollView>
             </KeyboardAvoidingView>
         </SafeAreaView>

@@ -1,3 +1,4 @@
+import ActionTouchable from "../../components/common/ActionTouchable";
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   Animated,
@@ -5,7 +6,6 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   ActivityIndicator,
   Dimensions,
   ImageBackground,
@@ -5035,7 +5035,7 @@ const MyTourStart = () => {
                     coordinate={[...stop.coordinate]}
                     anchor={{ x: 0.5, y: 1 }}
                   >
-                    <TouchableOpacity
+                    <ActionTouchable
                       activeOpacity={0.8}
                       onPress={() => handleMarkerPress(stop)}
                       style={styles.markerTapArea}
@@ -5047,7 +5047,7 @@ const MyTourStart = () => {
                       ) : (
                         <BlueMapIcon width={35} height={46} />
                       )}
-                    </TouchableOpacity>
+                    </ActionTouchable>
                   </Mapbox.MarkerView>
                 );
               })}
@@ -5063,7 +5063,7 @@ const MyTourStart = () => {
                       coordinate={[...stop.coordinate]}
                       anchor={{ x: 0.5, y: 1 }}
                     >
-                      <TouchableOpacity
+                      <ActionTouchable
                         activeOpacity={0.8}
                         accessibilityRole="button"
                         accessibilityLabel={`Show event ${stop.title}`}
@@ -5092,7 +5092,7 @@ const MyTourStart = () => {
                             <EventMarkerIcon event={stop.event!} size={28} />
                           </View>
                         )}
-                      </TouchableOpacity>
+                      </ActionTouchable>
                     </Mapbox.MarkerView>
                   );
                 })
@@ -5106,7 +5106,7 @@ const MyTourStart = () => {
                     coordinate={[...stop.coordinate]}
                     anchor={{ x: 0.5, y: 1 }}
                   >
-                    <TouchableOpacity
+                    <ActionTouchable
                       activeOpacity={0.8}
                       accessibilityRole="button"
                       accessibilityLabel={`Show passed event ${stop.title}`}
@@ -5116,7 +5116,7 @@ const MyTourStart = () => {
                       <View style={styles.eventMarkerExpired}>
                         <EventMarkerIcon event={stop.event!} size={26} />
                       </View>
-                    </TouchableOpacity>
+                    </ActionTouchable>
                   </Mapbox.MarkerView>
                 ))
                 : null}
@@ -5129,7 +5129,7 @@ const MyTourStart = () => {
                     coordinate={[...stop.coordinate]}
                     anchor={{ x: 0.5, y: 1 }}
                   >
-                    <TouchableOpacity
+                    <ActionTouchable
                       activeOpacity={0.8}
                       accessibilityRole="button"
                       accessibilityLabel={`Show completed event ${stop.title}`}
@@ -5139,7 +5139,7 @@ const MyTourStart = () => {
                       <View style={styles.eventMarkerCompleted}>
                         <EventMarkerIcon event={stop.event!} size={26} />
                       </View>
-                    </TouchableOpacity>
+                    </ActionTouchable>
                   </Mapbox.MarkerView>
                 ))
                 : null}
@@ -5231,7 +5231,7 @@ const MyTourStart = () => {
         ) : null}
 
         {!tourStarted ? (
-          <TouchableOpacity
+          <ActionTouchable
             activeOpacity={0.85}
             style={styles.currentLocationBtn}
             onPress={() => handleCurrentLocation()}
@@ -5239,11 +5239,11 @@ const MyTourStart = () => {
             <View style={styles.currentLocationOuter}>
               <View style={styles.currentLocationInner} />
             </View>
-          </TouchableOpacity>
+          </ActionTouchable>
         ) : null}
 
         {selectedStop && (
-          <TouchableOpacity
+          <ActionTouchable
             activeOpacity={1}
             onPress={() => { }}
             style={[
@@ -5262,7 +5262,7 @@ const MyTourStart = () => {
                   <WhiteFork width={10} height={10} />
                   <Text style={styles.pillText}>Location</Text>
                 </View>
-                <TouchableOpacity
+                <ActionTouchable
                   onPress={() =>
                     selectedStop.place && handleStopFavorite(selectedStop.place)
                   }
@@ -5273,7 +5273,7 @@ const MyTourStart = () => {
                   ) : (
                     <WhiteHeart width={16} height={16} />
                   )}
-                </TouchableOpacity>
+                </ActionTouchable>
               </ImageBackground>
             </View>
 
@@ -5284,11 +5284,11 @@ const MyTourStart = () => {
               >
                 {selectedStop.place?.description || selectedStop.place?.address || 'Favorite place'}
               </Text>
-              <TouchableOpacity onPress={() => setExpanded(!expanded)}>
+              <ActionTouchable onPress={() => setExpanded(!expanded)}>
                 <Text style={styles.readMore}>
                   {expanded ? "Show Less" : "Read More"}
                 </Text>
-              </TouchableOpacity>
+              </ActionTouchable>
             </View>
 
             <View style={styles.divider} />
@@ -5310,7 +5310,7 @@ const MyTourStart = () => {
 
             {!isCompletedTour ? (
               <View style={styles.bottomRow}>
-                <TouchableOpacity
+                <ActionTouchable
                   style={[
                     styles.confirmBtn,
                     (!selectedStopIsNearestPending ||
@@ -5341,14 +5341,14 @@ const MyTourStart = () => {
                         ? 'Confirm Visit'
                         : 'Nearest Stop Only'}
                   </Text>
-                </TouchableOpacity>
+                </ActionTouchable>
 
-                <TouchableOpacity
+                <ActionTouchable
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   onPress={() => handleDeleteStop(selectedStop.id)}
                 >
                   <DeleteWhiteIcon width={24} height={24} />
-                </TouchableOpacity>
+                </ActionTouchable>
               </View>
             ) : null}
             {!isCompletedTour && !placeProgress[selectedStop.id]?.visited && !selectedStopIsNearestPending ? (
@@ -5356,23 +5356,23 @@ const MyTourStart = () => {
                 Confirm {nearestPendingStop?.title || 'the nearest location'} first to unlock this stop.
               </Text>
             ) : null}
-          </TouchableOpacity>
+          </ActionTouchable>
         )}
 
         {isCompletedTour ? (
           <View style={styles.rowButtons}>
-            <TouchableOpacity
+            <ActionTouchable
               style={[styles.startTourBtn, styles.startTourBtnStarted]}
               disabled
             >
               <Text style={[styles.btnText, { color: COLORS.WHITE }]}>
                 Tour Completed
               </Text>
-            </TouchableOpacity>
+            </ActionTouchable>
           </View>
         ) : !tourStarted ? (
           <View style={styles.rowButtons}>
-            <TouchableOpacity
+            <ActionTouchable
               style={[
                 styles.startTourBtn,
                 isPausingTour && styles.startTourBtnLoading,
@@ -5392,7 +5392,7 @@ const MyTourStart = () => {
                   Pause Tour
                 </Text>
               )}
-            </TouchableOpacity>
+            </ActionTouchable>
           </View>
         ) : null}
 
@@ -5540,7 +5540,7 @@ const MyTourStart = () => {
 
         {tourCompletedVisible ? (
           <View style={styles.completionOverlay}>
-            <TouchableOpacity
+            <ActionTouchable
               activeOpacity={1}
               style={styles.completionBackdrop}
               onPress={() => setTourCompletedVisible(false)}
@@ -5554,13 +5554,13 @@ const MyTourStart = () => {
                 adventure?
               </Text>
               <View style={styles.completionActions}>
-                <TouchableOpacity
+                <ActionTouchable
                   style={styles.completionCancelBtn}
                   onPress={() => setTourCompletedVisible(false)}
                 >
                   <Text style={styles.completionCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
+                </ActionTouchable>
+                <ActionTouchable
                   style={styles.completionPrimaryBtn}
                   onPress={() => {
                     setTourCompletedVisible(false);
@@ -5575,7 +5575,7 @@ const MyTourStart = () => {
                   }}
                 >
                   <Text style={styles.completionPrimaryText}>Back To My Tour</Text>
-                </TouchableOpacity>
+                </ActionTouchable>
               </View>
             </View>
           </View>

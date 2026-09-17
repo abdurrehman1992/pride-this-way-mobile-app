@@ -1,11 +1,11 @@
+import TourCardHeader, { tourCardStyles } from "../../components/MyTour/TourCardHeader";
+import ActionTouchable from "../../components/common/ActionTouchable";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     View,
     Text,
-    TouchableOpacity,
     StyleSheet,
     ScrollView,
-    Image,
     ActivityIndicator,
     RefreshControl,
 } from 'react-native';
@@ -15,15 +15,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     CreatedTourLocationIcon,
     DownArrow,
-    EarnedPointIcon,
-    HeartIcon,
-    IconDelete,
     IconPlus,
     IconUp,
     MapIconMain,
-    RedHeartIcon,
     TourDateIcon,
-    TourLocationIcon,
     PrideEvent,
     PodcastEvent,
 } from '../../constants/icons';
@@ -794,7 +789,7 @@ const MyTour = () => {
 
         if (!userId || tour.status === 'completed') return;
 
-        (async () => {
+        return (async () => {
             try {
                 const existingSavedTour = tour.tourId
                     ? await fetchUserTourById(tour.tourId)
@@ -890,7 +885,7 @@ const MyTour = () => {
 
                         if (!userId || !tour.tourId) return;
 
-                        (async () => {
+                        return (async () => {
                             try {
                                 const existingSavedTour = await fetchUserTourById(tour.tourId!);
                                 if (!existingSavedTour) return;
@@ -1108,107 +1103,20 @@ const MyTour = () => {
         const badge = getTourStatusBadge(tour);
 
         return (
-            <View key={tour.cardId} style={styles.tourCard}>
-                <View style={styles.cardTop}>
-                    <Image source={{ uri: previewImage }} style={styles.imagePlaceholder} />
-                    <View style={styles.cardInfo}>
-                        <View style={styles.cardHeaderRow}>
-                            <Text style={styles.tourTitle}>{tour.displayName}</Text>
-
-                            <View style={styles.iconRow}>
-                                <TouchableOpacity
-                                    style={styles.topIcons}
-                                    onPress={() => deleteTour(tour)}
-                                >
-                                    <IconDelete width={15} height={15} />
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                    style={styles.topIcons}
-                                    onPress={() => toggleTour(tour.cardId)}
-                                >
-                                    {tour.isOpen ? (
-                                        <IconUp width={16} height={16} />
-                                    ) : (
-                                        <DownArrow width={16} height={16} />
-                                    )}
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-
-                        <View style={styles.iconInfoRow}>
-                            <View style={styles.iconTextGroup}>
-                                <TourLocationIcon width={20} height={20} />
-                                <Text style={styles.textInfo}>
-                                    Visit {locations.length} Locations
-                                </Text>
-                            </View>
-                            {badge ? (
-                                <View
-                                    style={[
-                                        styles.statusBadge,
-                                        {
-                                            backgroundColor: badge.color + '20',
-                                            borderColor: badge.color,
-                                        },
-                                    ]}
-                                >
-                                    <Text style={[styles.statusBadgeText, { color: badge.color }]}>
-                                        {badge.label}
-                                    </Text>
-                                </View>
-                            ) : null}
-                        </View>
-
-                        <View style={styles.iconInfoRow}>
-                            <View style={styles.iconTextGroup}>
-                                <EarnedPointIcon width={20} height={20} />
-                                <Text style={styles.textInfo}>
-                                    Earn{' '}
-                                    <Text style={styles.textGreen}>+{locations.length * 15}</Text>{' '}
-                                    Points
-                                </Text>
-                            </View>
-
-                        </View>
-
-                        <View style={styles.cardActionRow}>
-                            <View style={styles.cardMetaActions}>
-                                <TouchableOpacity
-                                    style={styles.cardFavoriteBtn}
-                                    onPress={() => handleToggleFavorite(tour)}
-                                >
-                                    {isFavorite(tour.tourId || tour.route.id) ? (
-                                        <RedHeartIcon width={14} height={12} />
-                                    ) : (
-                                        <HeartIcon width={14} height={12} />
-                                    )}
-                                </TouchableOpacity>
-                                {/* {badge ? (
-                                    <View
-                                        style={[
-                                            styles.statusBadge,
-                                            {
-                                                backgroundColor: badge.color + '20',
-                                                borderColor: badge.color,
-                                            },
-                                        ]}
-                                    >
-                                        <Text style={[styles.statusBadgeText, { color: badge.color }]}>
-                                            {badge.label}
-                                        </Text>
-                                    </View>
-                                ) : null} */}
-                            </View>
-                            <TouchableOpacity
-                                style={styles.cardStartBtn}
-                                onPress={() => handleStartTour(tour)}
-                            >
-                                <Text style={styles.cardStartBtnText}>{getStartBtnLabel(tour)}</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
+            <View key={tour.cardId} style={tourCardStyles.tourCard}>
+                <TourCardHeader
+                    title={tour.displayName}
+                    previewImage={previewImage}
+                    locationCount={locations.length}
+                    badge={badge}
+                    favorite={isFavorite(tour.tourId || tour.route.id)}
+                    expanded={tour.isOpen}
+                    openLabel={getStartBtnLabel(tour)}
+                    onOpen={() => handleStartTour(tour)}
+                    onFavorite={() => handleToggleFavorite(tour)}
+                    onToggle={() => toggleTour(tour.cardId)}
+                    onDelete={() => deleteTour(tour)}
+                />
 
                 {tour.isOpen && (
                     <View style={styles.cardBottom}>
@@ -1216,7 +1124,7 @@ const MyTour = () => {
                             <Text style={styles.locationTitle}>Locations</Text>
 
                             {tour.status !== 'completed' ? (
-                                <TouchableOpacity
+                                <ActionTouchable
                                     style={styles.addLocBtn}
                                     onPress={() =>
                                         navigation.navigate('AddLocations', {
@@ -1229,7 +1137,7 @@ const MyTour = () => {
                                 >
                                     <IconPlus width={11} height={11} />
                                     <Text style={styles.addLocation}>Add Locations</Text>
-                                </TouchableOpacity>
+                                </ActionTouchable>
                             ) : null}
                         </View>
 
@@ -1246,7 +1154,7 @@ const MyTour = () => {
                                             <Text style={styles.locationText}>{loc.name}</Text>
                                         </View>
                                         {hasDetails ? (
-                                            <TouchableOpacity
+                                            <ActionTouchable
                                                 hitSlop={8}
                                                 style={styles.locationToggle}
                                                 onPress={() => toggleLocationDetails(detailKey)}
@@ -1256,7 +1164,7 @@ const MyTour = () => {
                                                 ) : (
                                                     <DownArrow width={16} height={16} />
                                                 )}
-                                            </TouchableOpacity>
+                                            </ActionTouchable>
                                         ) : null}
                                     </View>
                                     {isExpanded ? (
@@ -1316,7 +1224,7 @@ const MyTour = () => {
                                                     </Text>
                                                 </View>
                                                 {hasDetails ? (
-                                                    <TouchableOpacity
+                                                    <ActionTouchable
                                                         hitSlop={8}
                                                         style={styles.locationToggle}
                                                         onPress={() =>
@@ -1328,7 +1236,7 @@ const MyTour = () => {
                                                         ) : (
                                                             <DownArrow width={16} height={16} />
                                                         )}
-                                                    </TouchableOpacity>
+                                                    </ActionTouchable>
                                                 ) : null}
                                             </View>
                                             {isExpanded ? (
@@ -1367,12 +1275,12 @@ const MyTour = () => {
                         ) : null}
                         {tour.status === 'active' || tour.status === 'paused' ? (
                             <View style={styles.actionRow}>
-                                <TouchableOpacity
+                                <ActionTouchable
                                     style={styles.cardEndBtn}
                                     onPress={() => handleEndTour(tour)}
                                 >
                                     <Text style={styles.cardEndBtnText}>End Tour</Text>
-                                </TouchableOpacity>
+                                </ActionTouchable>
                             </View>
                         ) : null}
                     </View>
@@ -1418,7 +1326,7 @@ const MyTour = () => {
                             contentContainerStyle={styles.filterRow}
                         >
                             {TOUR_FILTERS.map((item) => (
-                                <TouchableOpacity
+                                <ActionTouchable
                                     key={item}
                                     style={[
                                         styles.filterChip,
@@ -1434,7 +1342,7 @@ const MyTour = () => {
                                     >
                                         {item}
                                     </Text>
-                                </TouchableOpacity>
+                                </ActionTouchable>
                             ))}
                         </ScrollView>
 
@@ -1445,7 +1353,7 @@ const MyTour = () => {
                         )}
                     </ScrollView>
 
-                    <TouchableOpacity
+                    <ActionTouchable
                         activeOpacity={0.85}
                         onPress={goToCreateTour}
                         style={[
@@ -1455,7 +1363,7 @@ const MyTour = () => {
                     >
                         <IconPlus width={12} height={12} />
                         <Text style={styles.fabText}>Create Tour</Text>
-                    </TouchableOpacity>
+                    </ActionTouchable>
                 </View>
             )}
 
@@ -1597,121 +1505,14 @@ const styles = StyleSheet.create({
     filterChipTextActive: {
         color: COLORS.WHITE,
     },
-    tourCard: {
-        width: '100%',
-        marginBottom: 16,
-        borderRadius: 16,
-        backgroundColor: COLORS.WHITE,
-        overflow: 'hidden',
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-    },
-    cardTop: {
-        flexDirection: 'row',
-        padding: 16,
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-    imagePlaceholder: {
-        width: 70,
-        height: 100,
-        borderRadius: 6.7,
-        backgroundColor: '#EDEDED',
-    },
-    cardInfo: {
-        flex: 1,
-        marginLeft: 12,
-        gap: 5,
-    },
-    cardHeaderRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    iconRow: {
-        flexDirection: 'row',
-        gap: 10,
-        alignItems: 'center',
-    },
-    tourTitle: {
-        flex: 1,
-        fontSize: FONT_SIZE.SMALL_TEXT,
-        fontFamily: FONT_FAMILY.Poppins_SemiBold,
-        color: COLORS.TEXT_PRIMARY,
-    },
-    iconInfoRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flexWrap: 'nowrap',
-        justifyContent: 'space-between',
-        gap: 12,
-    },
-    topIcons: {
-        height: 20,
-        width: 20,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    iconTextGroup: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        flexShrink: 1,
-    },
-    textInfo: {
-        fontSize: FONT_SIZE.PILL_TEXT,
-        fontFamily: FONT_FAMILY.InterTight_Regular,
-        color: COLORS.TEXT_SECONDARY,
-        flexShrink: 1,
-    },
-    textGreen: {
-        color: COLORS.TEXT_GREEN,
-    },
-    cardActionRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10,
-    },
-    cardMetaActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        flexShrink: 1,
-    },
-    cardFavoriteBtn: {
-        width: 34,
-        height: 34,
-        borderRadius: 17,
-        borderWidth: 1,
-        borderColor: '#E3E3E3',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: COLORS.WHITE,
-    },
+
     actionRow: {
         marginTop: 10,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
     },
-    cardStartBtn: {
-        height: 36,
-        minWidth: 112,
-        paddingHorizontal: 18,
-        borderRadius: 18,
-        backgroundColor: COLORS.BUTTON_COLOR,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    cardStartBtnText: {
-        color: COLORS.WHITE,
-        fontSize: FONT_SIZE.TEXT,
-        fontFamily: FONT_FAMILY.InterTight_SemiBold,
-    },
+
     cardEndBtn: {
         height: 36,
         paddingHorizontal: 16,
@@ -1806,15 +1607,5 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.Poppins_SemiBold,
         color: COLORS.TEXT_PRIMARY,
     },
-    statusBadge: {
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 10,
-        borderWidth: 1,
-        // marginBottom:10,
-    },
-    statusBadgeText: {
-        fontSize: 10,
-        fontFamily: FONT_FAMILY.InterTight_SemiBold,
-    },
+
 });

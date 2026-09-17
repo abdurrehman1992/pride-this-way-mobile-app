@@ -62,6 +62,16 @@ export type ProfileStackParamList = {
 
 export type FovoritesStackParamList = {
   Favorites: undefined,
+  RecommendationDetials: {
+    item: {
+      id: string;
+      title: string;
+      description: string;
+      rating: string;
+      image: string;
+      category: string;
+    };
+  },
 };
 export type MapStackParamList = {
   Map: undefined,

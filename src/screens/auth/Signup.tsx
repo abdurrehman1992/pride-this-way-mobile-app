@@ -5,8 +5,7 @@ import {
     Text,
     ScrollView,
     Keyboard,
-    ImageBackground,
-    StatusBar
+    ImageBackground
 } from "react-native";
 
 import { COLORS } from "../../constants/colors";
@@ -130,11 +129,6 @@ const Signup: React.FC = () => {
 
     return (
         <>
-            <StatusBar
-                translucent
-                backgroundColor="transparent"
-                barStyle="light-content"
-            />
             <ImageBackground style={styles.container}
                 source={AuthBackGroundImage}
             >

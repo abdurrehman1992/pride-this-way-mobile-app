@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet, Image, TouchableOpacity, StatusBar } from 'react-native'
+import ActionTouchable from "../../components/common/ActionTouchable";
+import { View, Text, StyleSheet, Image } from 'react-native'
 import React from 'react'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { COLORS } from '../../constants/colors'
@@ -35,11 +36,6 @@ const Profile = () => {
 
   return (
     <>
-      <StatusBar
-        translucent
-        backgroundColor="transparent"
-        barStyle="light-content"
-      />
       <SafeAreaView style={styles.container}>
         <View style={styles.top}>
           <ForgeTopHeader title="Profile" />
@@ -55,7 +51,7 @@ const Profile = () => {
           <Text style={styles.email}>{user?.email || "guest@example.com"}</Text>
         </View>
         <View style={styles.buttonContainer}>
-          <TouchableOpacity style={styles.button}
+          <ActionTouchable style={styles.button}
             onPress={() => navigation.navigate('EditProfile')}
           >
             <View style={styles.left}>
@@ -63,8 +59,8 @@ const Profile = () => {
               <Text style={styles.buttonText}>Edit Profile</Text>
             </View>
             <Arrow width={18.25} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.button}
+          </ActionTouchable>
+          <ActionTouchable style={styles.button}
             onPress={() => navigation.navigate('ChangePassword')}
           >
             <View style={styles.left}>
@@ -72,14 +68,14 @@ const Profile = () => {
               <Text style={styles.buttonText}>Change Password</Text>
             </View>
             <Arrow width={18.25} />
-          </TouchableOpacity>
+          </ActionTouchable>
         </View>
-        <TouchableOpacity style={styles.logoutBtn}
+        <ActionTouchable style={styles.logoutBtn}
           onPress={handleLogout}
         >
           <LogoutIcon width={36} height={36} />
           <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
+        </ActionTouchable>
       </SafeAreaView>
     </>
   )

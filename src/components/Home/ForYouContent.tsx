@@ -1,10 +1,10 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
-  TouchableOpacity,
   Image,
   ActivityIndicator,
 } from 'react-native';
@@ -306,9 +306,9 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                 value={searchText}
                 onChangeText={(text: string) => setSearchText(text)}
                 rightIcon={
-                  <TouchableOpacity onPress={openLocationModal}>
+                  <ActionTouchable onPress={openLocationModal}>
                     <Image source={FilterIcon} style={styles.filterIcon} />
-                  </TouchableOpacity>
+                  </ActionTouchable>
                 }
               />
             </View>
@@ -316,32 +316,32 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
               <View style={styles.filterSection}>
                 <View style={styles.filterHeader}>
                   <Text style={styles.filterTitle}>Selected City & Preferences</Text>
-                  <TouchableOpacity onPress={resetFilters}>
+                  <ActionTouchable onPress={resetFilters}>
                     <Text style={styles.reset}>Reset</Text>
-                  </TouchableOpacity>
+                  </ActionTouchable>
                 </View>
                 <View style={styles.filterRow}>
                   {selectedLocation && (
                     <View style={styles.chip}>
                       <Text style={styles.chipText}>{selectedLocation}</Text>
-                      <TouchableOpacity onPress={() => {
+                      <ActionTouchable onPress={() => {
                         setSelectedLocation(null);
                       }}>
                         <Text style={styles.remove}>✕</Text>
-                      </TouchableOpacity>
+                      </ActionTouchable>
                     </View>
                   )}
 
                   {selectedPrefs.map(item => (
                     <View key={item} style={styles.chip}>
                       <Text style={styles.chipText}>{item}</Text>
-                      <TouchableOpacity
+                      <ActionTouchable
                         onPress={() =>
                           setSelectedPrefs(prev => prev.filter(i => i !== item))
                         }
                       >
                         <Text style={styles.remove}>✕</Text>
-                      </TouchableOpacity>
+                      </ActionTouchable>
                     </View>
                   ))}
                 </View>
@@ -363,13 +363,13 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                 <Text style={styles.errorReasonText}>
                   {errorReason || 'Please check your connection and try again.'}
                 </Text>
-                <TouchableOpacity
+                <ActionTouchable
                   style={styles.retryBtn}
                   disabled={loading}
                   onPress={() => loadRecommendations(selectedLocation || '', selectedPrefs, true, true)}
                 >
                   <Text style={styles.retryText}>Retry</Text>
-                </TouchableOpacity>
+                </ActionTouchable>
               </View>
             )}
 
@@ -388,14 +388,14 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                     <Text style={styles.sectionHeaderText} numberOfLines={2}>
                       Places Around You
                     </Text>
-                    <TouchableOpacity
+                    <ActionTouchable
                       onPress={() => setShowAllPlaces(!showAllPlaces)}
                       style={styles.headerAction}
                     >
                       <Text style={styles.seeAllText}>
                         {showAllPlaces ? 'Show Less' : 'See All'}
                       </Text>
-                    </TouchableOpacity>
+                    </ActionTouchable>
                   </View>
 
                   <FlatList
@@ -445,14 +445,14 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
                     <Text style={styles.sectionHeaderText} numberOfLines={2}>
                       Recommended For You
                     </Text>
-                    <TouchableOpacity
+                    <ActionTouchable
                       onPress={() => setShowAll(!showAll)}
                       style={styles.headerAction}
                     >
                       <Text style={[styles.seeAllText, styles.recommendedAction]}>
                         {showAll ? 'Show Less' : 'See All'}
                       </Text>
-                    </TouchableOpacity>
+                    </ActionTouchable>
 
                   </View>
                 </View>

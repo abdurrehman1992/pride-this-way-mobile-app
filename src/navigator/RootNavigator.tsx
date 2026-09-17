@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { NavigationContainer } from "@react-navigation/native";
+import { StatusBar } from "react-native";
+import { NavigationContainer, useNavigationContainerRef } from "@react-navigation/native";
 import Splash from "../screens/Splash";
 import AuthNavigator from "./AuthNavigator";
 import AppNavigator from "./AppNavigator";
@@ -15,7 +16,20 @@ import { getActiveTour } from "../services/myTourService";
 import { getNativeTourLocationStatus } from "../utils/nativeTourLocation";
 import { useTourTrackingLifecycle } from "../hooks/useTourTrackingLifecycle";
 
+// These screens have an image or blue header behind the status bar.
+// All plain/light screens use dark system icons, including password recovery.
+const LIGHT_STATUS_BAR_SCREENS = new Set([
+  'Login', 'Signup', 'Home', 'MyTour', 'CreateTour', 'TourSuggestion',
+  'MyTourStart', 'Map', 'ForYou', 'Favorites', 'RecommendationDetials',
+]);
+
 const RootNavigator: React.FC = () => {
+  const navigationRef = useNavigationContainerRef();
+  const [activeScreen, setActiveScreen] = useState('Login');
+  const updateActiveScreen = () => {
+    const route = navigationRef.getCurrentRoute();
+    if (route) setActiveScreen(route.name);
+  };
   const [showSplash, setShowSplash] = useState(true);
   const [initialNavState, setInitialNavState] = useState<any>(undefined);
   const [navStateResolved, setNavStateResolved] = useState(false);
@@ -140,9 +154,22 @@ const RootNavigator: React.FC = () => {
   }
 
   return (
-    <NavigationContainer initialState={initialNavState}>
-      {isLoggedIn ? <AppNavigator /> : <AuthNavigator />}
-    </NavigationContainer>
+    <>
+      <StatusBar
+        hidden={false}
+        translucent
+        backgroundColor="transparent"
+        barStyle={LIGHT_STATUS_BAR_SCREENS.has(activeScreen) ? 'light-content' : 'dark-content'}
+      />
+      <NavigationContainer
+        ref={navigationRef}
+        initialState={initialNavState}
+        onReady={updateActiveScreen}
+        onStateChange={updateActiveScreen}
+      >
+        {isLoggedIn ? <AppNavigator /> : <AuthNavigator />}
+      </NavigationContainer>
+    </>
   );
 };
 

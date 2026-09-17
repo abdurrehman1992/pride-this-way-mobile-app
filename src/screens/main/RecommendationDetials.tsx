@@ -1,3 +1,4 @@
+import ActionTouchable from "../../components/common/ActionTouchable";
 import React, { useEffect, useState } from "react";
 import {
     View,
@@ -6,7 +7,6 @@ import {
     StyleSheet,
     ScrollView,
     Image,
-    TouchableOpacity,
     ActivityIndicator,
     Share,
     Platform,
@@ -200,14 +200,14 @@ const RecommendationDetials = () => {
         }
     }, [imageSource, safeGallery]);
 
-    const handleFavorite = () => {
+    const handleFavorite = async () => {
         if (!id) return;
 
         if (favorite) {
-            removeFromFavorites(id);
+            await removeFromFavorites(id);
             showInfo("Removed", "Removed from favorites");
         } else {
-                addToFavorites({ id, title, description, rating, image, category, originalPlace: item.originalPlace });
+                await addToFavorites({ id, title, description, rating, image, category, originalPlace: item.originalPlace });
             showSuccess("Added", "Added to favorites");
         }
     };
@@ -238,16 +238,16 @@ const RecommendationDetials = () => {
 
                     {/* TOP BAR */}
                     <View style={styles.topBar}>
-                        <TouchableOpacity style={{shadowColor: 'black', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }} onPress={() => navigation.goBack()}>
+                        <ActionTouchable style={{shadowColor: 'black', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }} onPress={() => navigation.goBack()}>
                             {useLightHeaderControls ? (
                                 <DetailsBackIcon height={43} width={43} />
                             ) : (
                                 <DetailsBackDarkIcon height={43} width={43} />
                             )}
-                        </TouchableOpacity>
+                        </ActionTouchable>
 
                         <View style={styles.rightIcons}>
-                            <TouchableOpacity onPress={handleFavorite}>
+                            <ActionTouchable onPress={handleFavorite}>
                                 {favorite ? (
                                     <DetailsFavoriteIcon height={43} width={43} />
                                 ) : useLightHeaderControls ? (
@@ -255,15 +255,15 @@ const RecommendationDetials = () => {
                                 ) : (
                                     <DetailsFavoriteDarkIcon height={43} width={43} />
                                 )}
-                            </TouchableOpacity>
+                            </ActionTouchable>
 
-                            <TouchableOpacity onPress={handleShare}>
+                            <ActionTouchable onPress={handleShare}>
                                 {useLightHeaderControls ? (
                                     <DetailsShareIcon height={43} width={43} />
                                 ) : (
                                     <DetailsShareDarkIcon height={43} width={43} />
                                 )}
-                            </TouchableOpacity>
+                            </ActionTouchable>
                         </View>
                     </View>
 

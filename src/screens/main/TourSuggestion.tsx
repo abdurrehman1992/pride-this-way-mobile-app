@@ -1,3 +1,5 @@
+import { canAddTourLocation, hasTourLocation } from '../../utils/tourLocationValidation';
+import ActionTouchable from "../../components/common/ActionTouchable";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     View,
@@ -5,7 +7,6 @@ import {
     Image,
     ScrollView,
     StyleSheet,
-    TouchableOpacity,
     ActivityIndicator,
 } from 'react-native';
 import { CommonActions, useNavigation, usePreventRemove, useRoute } from '@react-navigation/native';
@@ -311,6 +312,7 @@ const TourSuggestion: React.FC = () => {
 
         const nextPlaces = places.filter((place) => place.id !== placeId);
         setPlaces(nextPlaces);
+        if (!hasTourLocation(nextPlaces.length)) return;
 
         if (!userId || !primary || !existingTourId) {
             showSuccess('Location removed', `${removedPlace.name} was removed from your tour.`);
@@ -479,6 +481,7 @@ const TourSuggestion: React.FC = () => {
     }, [navigation, resetToCreateTour, saved, showDiscardAlert]);
 
     const handleSave = async () => {
+        if (!hasTourLocation(places.length)) return;
         if (!userId || recommendations.length === 0 || !primary) {
             navigation.goBack();
             return;
@@ -573,21 +576,21 @@ const TourSuggestion: React.FC = () => {
                     <View style={styles.cardTop}>
                         <Image source={{ uri: previewImage }} style={styles.thumb} />
                         <View style={styles.cardInfo}>
-                            <TouchableOpacity
+                            <ActionTouchable
                                 style={styles.cardHeaderRow}
                                 onPress={() => setIsTourExpanded((prev) => !prev)}
                                 activeOpacity={0.8}
                             >
                                 <View style={styles.leftTitleRow}>
                                     <Text style={styles.tourTitle} numberOfLines={1}>{tourNameState}</Text>
-                                    <TouchableOpacity onPress={() => setNameModalVisible(true)} hitSlop={8} style={styles.editIconWrap}>
+                                    <ActionTouchable onPress={() => setNameModalVisible(true)} hitSlop={8} style={styles.editIconWrap}>
                                         <EditProfileIcon width={18} height={18} />
-                                    </TouchableOpacity>
+                                    </ActionTouchable>
                                 </View>
                                 <View style={styles.topIcons}>
                                     {isTourExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
                                 </View>
-                            </TouchableOpacity>
+                            </ActionTouchable>
                             <View style={styles.iconInfoRow}>
                                 <View style={styles.iconTextGroup}>
                                     <TourLocationIcon width={20} height={20} />
@@ -613,20 +616,21 @@ const TourSuggestion: React.FC = () => {
                     {isTourExpanded && <View style={styles.cardBottom}>
                         <View style={styles.locationHeader}>
                             <Text style={styles.locationTitle}>Locations</Text>
-                            <TouchableOpacity
+                            <ActionTouchable
                                 style={styles.addLocBtn}
-                                onPress={() =>
+                                onPress={async () => {
+                                    if (!(await canAddTourLocation())) return;
                                     navigation.navigate('AddLocations', {
                                         routeId: primary?.route?.id,
                                         cityLabel,
                                         fromScreen: 'TourSuggestion',
                                         existingPlaceIds: places.map((place) => place.id),
-                                    })
-                                }
+                                    });
+                                }}
                             >
                                 <IconPlus width={11} height={11} />
                                 <Text style={styles.addLocation}>Add Locations</Text>
-                            </TouchableOpacity>
+                            </ActionTouchable>
                         </View>
                         {places.map((place) => {
                             const isExpanded = Boolean(expandedLocations[place.id]);
@@ -640,17 +644,17 @@ const TourSuggestion: React.FC = () => {
                                         </View>
                                         <View style={styles.locationActions}>
                                             {hasDetails ? (
-                                                <TouchableOpacity
+                                                <ActionTouchable
                                                     onPress={() => toggleLocationDetails(place.id)}
                                                     hitSlop={8}
                                                     style={styles.locationToggle}
                                                 >
                                                     {isExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
-                                                </TouchableOpacity>
+                                                </ActionTouchable>
                                             ) : null}
-                                            <TouchableOpacity onPress={() => removePlace(place.id)} hitSlop={8} style={styles.deleteBtn}>
+                                            <ActionTouchable onPress={() => removePlace(place.id)} hitSlop={8} style={styles.deleteBtn}>
                                                 <IconDelete width={15} height={15} />
-                                            </TouchableOpacity>
+                                            </ActionTouchable>
                                         </View>
                                     </View>
                                     {isExpanded && (
@@ -691,9 +695,9 @@ const TourSuggestion: React.FC = () => {
                                                             {event.city_name ? ` • ${event.city_name}` : ''}
                                                         </Text>
                                                     </View>
-                                                    <TouchableOpacity onPress={() => removeSelectedEvent(event.id)} hitSlop={8} style={styles.deleteBtn}>
+                                                    <ActionTouchable onPress={() => removeSelectedEvent(event.id)} hitSlop={8} style={styles.deleteBtn}>
                                                         <IconDelete width={18} height={18} />
-                                                    </TouchableOpacity>
+                                                    </ActionTouchable>
                                                 </View>
                                             </View>
                                         );
@@ -704,9 +708,9 @@ const TourSuggestion: React.FC = () => {
                         <View style={styles.eventsSectionHeader}>
                             <Text style={styles.eventsTitle}>Event Suggestions</Text>
                             {availableSuggestions.length > 0 && (
-                                <TouchableOpacity onPress={removeAllSuggestions}>
+                                <ActionTouchable onPress={removeAllSuggestions}>
                                     <Text style={styles.clearAllText}>Clear all</Text>
-                                </TouchableOpacity>
+                                </ActionTouchable>
                             )}
                         </View>
                         {loadingEvents ? (
@@ -738,23 +742,23 @@ const TourSuggestion: React.FC = () => {
                                                 </View>
                                                 <View style={styles.locationActions}>
                                                     {hasDetails && (
-                                                        <TouchableOpacity
+                                                        <ActionTouchable
                                                             onPress={() => toggleLocationDetails(event.id)}
                                                             hitSlop={8}
                                                             style={styles.locationToggle}
                                                         >
                                                             {isExpanded ? <IconUp width={16} height={16} /> : <DownArrow width={16} height={16} />}
-                                                        </TouchableOpacity>
+                                                        </ActionTouchable>
                                                     )}
-                                                    <TouchableOpacity style={styles.addEventBtn} onPress={() => toggleEventSelection(event.id)} activeOpacity={0.8}>
+                                                    <ActionTouchable style={styles.addEventBtn} onPress={() => toggleEventSelection(event.id)} activeOpacity={0.8}>
                                                         {/* <IconPlus width={10} height={10} /> */}
                                                         <Text style={{color: COLORS.BUTTON_COLOR}}>+</Text>
                                                         <Text style={styles.addEventText}>Add</Text>
-                                                    </TouchableOpacity>
-                                                    <TouchableOpacity onPress={() => removeEventSuggestion(event.id)} hitSlop={8} style={styles.deleteBtn}>
+                                                    </ActionTouchable>
+                                                    <ActionTouchable onPress={() => removeEventSuggestion(event.id)} hitSlop={8} style={styles.deleteBtn}>
                                                         {/* <CloseIcon width={15} height={15} /> */}
                                                         <Text style={{color: COLORS.LOGOUT_TEXT}}>x</Text>
-                                                    </TouchableOpacity>
+                                                    </ActionTouchable>
                                                 </View>
                                             </View>
                                             {isExpanded && (
@@ -782,14 +786,14 @@ const TourSuggestion: React.FC = () => {
                 onUpdateLater={() => setNameModalVisible(false)}
             />
             <View style={styles.footer}>
-                <TouchableOpacity
+                <ActionTouchable
                     activeOpacity={0.85}
                     style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
                     onPress={handleSave}
-                    disabled={saving || places.length === 0}
+                    disabled={saving}
                 >
                     {saving ? <ActivityIndicator color={COLORS.WHITE} /> : <Text style={styles.saveText}>Save Tour</Text>}
-                </TouchableOpacity>
+                </ActionTouchable>
             </View>
         </View>
     );

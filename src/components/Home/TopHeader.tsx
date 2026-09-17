@@ -4,8 +4,7 @@ import {
   Text,
   StyleSheet,
   ImageBackground,
-  TouchableOpacity,
-  StatusBar
+  TouchableOpacity
 } from "react-native";
 
 import { MenuIcon, Notification } from "../../constants/icons";
@@ -31,11 +30,6 @@ const TopHeader: React.FC<Props> = ({ title }) => {
 
   return (
     <>
-      <StatusBar
-        translucent
-        backgroundColor="transparent"
-        barStyle="light-content"
-      />
       <ImageBackground
         source={BgFrame}
         style={styles.container}
