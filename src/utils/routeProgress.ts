@@ -85,3 +85,20 @@ export const splitPolylineAt = (
 
   return { completed, remaining };
 };
+
+// Share the exact road join between the route and its live access dots so
+// they cannot leave a gap or draw a road through an off-road location.
+export const buildLiveRoadGeometry = (
+  polyline: Coord[],
+  location: Coord,
+  minimumAccessMeters = 8,
+): { remaining: Coord[]; access: Coord[][] } => {
+  if (polyline.length < 2) return { remaining: polyline, access: [] };
+  const projection = projectPointOnPolyline(location, polyline);
+  return {
+    remaining: splitPolylineAt(polyline, projection).remaining,
+    access: distanceMetersBetween(location, projection.point) >= minimumAccessMeters
+      ? [[location, projection.point]]
+      : [],
+  };
+};

@@ -69,6 +69,7 @@ import {
 import { scheduleStopsWithEventTiming } from '../../utils/tourRouteScheduling';
 import {
   distanceMetersBetween,
+  buildLiveRoadGeometry,
   projectPointOnPolyline,
   splitPolylineAt,
   type Coord,
@@ -213,9 +214,6 @@ const LIVE_ROUTE_REOPTIMIZE_DISTANCE_METERS = 35;
 const LIVE_ROUTE_REOPTIMIZE_MIN_INTERVAL_MS = 8_000;
 const STATIONARY_GPS_SPEED_METERS_PER_SECOND = 0.8;
 const MAX_STATIONARY_GPS_JUMP_METERS = 28;
-// GPS has a few metres of normal drift. Below this distance the marker is
-// treated as being on the routed road, so no artificial access dots appear.
-const ACTIVE_ROUTE_ON_ROAD_TOLERANCE_METERS = 15;
 
 // Route data arrives asynchronously from Directions and, while a request is
 // being replaced, an individual leg can briefly be absent. Keep every map
@@ -246,32 +244,17 @@ const makeAccessConnectorDots = (segments: Coord[][]): FeatureCollection<Point> 
       const from = segment[0];
       const to = segment[segment.length - 1];
       const distance = distanceMetersBetween(from, to);
-      const dotCount = Math.max(2, Math.ceil(distance / ACCESS_DOT_SPACING_METERS));
-      const deltaLongitude = to[0] - from[0];
-      const deltaLatitude = to[1] - from[1];
-      const largestDelta = Math.max(Math.abs(deltaLongitude), Math.abs(deltaLatitude), 0.000001);
-      // A very gentle perpendicular bend makes the access path read like a
-      // pedestrian approach, without pretending it is a mapped road.
-      const bend = Math.min(0.000035, largestDelta * 0.14);
-      const control: Coord = [
-        (from[0] + to[0]) / 2 - (deltaLatitude / largestDelta) * bend,
-        (from[1] + to[1]) / 2 + (deltaLongitude / largestDelta) * bend,
-      ];
+      const dotCount = Math.min(300, Math.max(2, Math.ceil(distance / ACCESS_DOT_SPACING_METERS)));
       return Array.from({ length: dotCount }, (_, index) => {
         const ratio = (index + 1) / (dotCount + 1);
-        const inverseRatio = 1 - ratio;
         return {
           type: 'Feature' as const,
           properties: {},
           geometry: {
             type: 'Point' as const,
             coordinates: [
-              inverseRatio * inverseRatio * from[0] +
-                2 * inverseRatio * ratio * control[0] +
-                ratio * ratio * to[0],
-              inverseRatio * inverseRatio * from[1] +
-                2 * inverseRatio * ratio * control[1] +
-                ratio * ratio * to[1],
+              from[0] + ratio * (to[0] - from[0]),
+              from[1] + ratio * (to[1] - from[1]),
             ],
           },
         };
@@ -3335,25 +3318,10 @@ const MyTourStart = () => {
         return { type: 'FeatureCollection', features: [] };
       }
 
-      let remaining: Coord[] = activeSegment;
-      if (currentLocation) {
-        const projection = projectPointOnPolyline(currentLocation, remaining);
-        // Only trim the red route when the marker is actually on that road.
-        // When the user is inside a building, keep the snapped road start so
-        // the dotted connector can join exactly to the red route.
-        if (
-          distanceMetersBetween(currentLocation, projection.point) <=
-          ACTIVE_ROUTE_ON_ROAD_TOLERANCE_METERS
-        ) {
-          const split = splitPolylineAt(remaining, projection);
-          remaining = Array.isArray(split?.remaining) ? split.remaining : [];
-        } else {
-          // Keep the navigation line anchored at the live marker, matching
-          // the original route-start behaviour. Do not draw a separate
-          // current-location-to-road access connector.
-          remaining = [currentLocation, ...remaining];
-        }
-      }
+      const remaining = currentLocation
+        ? buildLiveRoadGeometry(activeSegment, currentLocation,
+          NAVIGATION_ACCESS_CONNECTOR_MIN_METERS).remaining
+        : activeSegment;
 
       return {
         type: 'FeatureCollection',
@@ -3405,18 +3373,20 @@ const MyTourStart = () => {
       : null;
     if (!activeRoad) return [];
 
-    const snappedRoadStart = activeRoad[0];
+    const snappedRoadEnd = activeRoad[activeRoad.length - 1];
     const activeAccess = accessSegmentsByLeg[0] || [];
-    // Do not show a user-to-road dotted line. The active red route is anchored
-    // at the live marker above; retain only the current destination's pin
-    // access dots and never draw future-stop connectors.
     const destinationConnector = activeAccess.filter(
       (segment) =>
         isRenderableRouteSegment(segment) &&
-        distanceMetersBetween(segment[segment.length - 1], snappedRoadStart) >=
-          NAVIGATION_ACCESS_CONNECTOR_MIN_METERS
+        distanceMetersBetween(segment[0], snappedRoadEnd) < 1
     );
-    return destinationConnector;
+    const originConnector = currentLocation
+      ? buildLiveRoadGeometry(activeRoad, currentLocation,
+        NAVIGATION_ACCESS_CONNECTOR_MIN_METERS).access
+      : activeAccess.filter((segment) =>
+        isRenderableRouteSegment(segment) &&
+        distanceMetersBetween(segment[segment.length - 1], activeRoad[0]) < 1);
+    return [...originConnector, ...destinationConnector];
   }, [accessSegmentsByLeg, currentLocation, hasVisitedProgress, roadSegments, tourStarted]);
 
   const accessConnectorDots = useMemo(
@@ -3479,6 +3449,10 @@ const MyTourStart = () => {
       return { type: 'FeatureCollection', features: [] };
     }
     const projection = projectPointOnPolyline(currentLocation, activePolyline);
+    if (distanceMetersBetween(currentLocation, projection.point) >=
+      NAVIGATION_ACCESS_CONNECTOR_MIN_METERS) {
+      return { type: 'FeatureCollection', features: [] };
+    }
     const split = splitPolylineAt(activePolyline, projection);
     const completed = Array.isArray(split?.completed) ? split.completed : [];
     if (polylineDistanceMeters(completed) < 10) {
