@@ -212,6 +212,9 @@ const MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS = 15;
 // reroute on the first accepted fix, including when the user has stopped.
 const DEFINITE_OFF_ROUTE_REROUTE_METERS = 30;
 const OFF_ROUTE_REROUTE_CONFIRMATION_COUNT = 2;
+// Display the travelled trace on the nearby navigable road rather than
+// exposing every metre of normal consumer-GPS side-to-side drift.
+const TRAVELLED_TRACE_ROAD_SNAP_METERS = 35;
 const PRECISE_REROUTE_ACCURACY_METERS = 15;
 const BACKTRACK_REROUTE_DISTANCE_METERS = 7;
 const WRONG_DIRECTION_REROUTE_DEGREES = 35;
@@ -3882,17 +3885,47 @@ const MyTourStart = () => {
   );
 
   const actualTravelledRouteLine = useMemo<FeatureCollection<LineString>>(
-    () => ({
-      type: 'FeatureCollection',
-      features: actualTravelledLocationSegments
-        .filter(isRenderableRouteSegment)
-        .map((coordinates) => ({
-          type: 'Feature' as const,
-          properties: {},
-          geometry: { type: 'LineString' as const, coordinates },
-        })),
-    }),
-    [actualTravelledLocationSegments],
+    () => {
+      // Directions geometries are real drivable roads. Use the active and
+      // already-covered roads only; future legs must never pull a trace onto
+      // a road the user has not reached yet.
+      const traceRoads = [roadSegments[0], ...completedRoadSegments]
+        .filter(isRenderableRouteSegment);
+
+      const snapToNearbyRoad = (coordinate: Coord): Coord => {
+        let closestPoint: Coord | null = null;
+        let closestDistance = Number.POSITIVE_INFINITY;
+
+        traceRoads.forEach((road) => {
+          const projection = projectPointOnPolyline(coordinate, road);
+          const distance = distanceMetersBetween(coordinate, projection.point);
+          if (distance < closestDistance) {
+            closestDistance = distance;
+            closestPoint = projection.point;
+          }
+        });
+
+        return closestPoint && closestDistance <= TRAVELLED_TRACE_ROAD_SNAP_METERS
+          ? closestPoint
+          : coordinate;
+      };
+
+      return {
+        type: 'FeatureCollection',
+        // Keep the original segments separate. A foreground/background gap
+        // must not become an invented straight connector.
+        features: actualTravelledLocationSegments
+          .filter(isRenderableRouteSegment)
+          .map((coordinates) => coordinates.map(snapToNearbyRoad))
+          .filter(isRenderableRouteSegment)
+          .map((coordinates) => ({
+            type: 'Feature' as const,
+            properties: {},
+            geometry: { type: 'LineString' as const, coordinates },
+          })),
+      };
+    },
+    [actualTravelledLocationSegments, completedRoadSegments, roadSegments],
   );
 
   const completedApproachRouteLine = useMemo<FeatureCollection<LineString>>(
