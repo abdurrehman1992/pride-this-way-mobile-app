@@ -1,4 +1,8 @@
-import { canAddTourLocation, hasTourLocation } from '../../utils/tourLocationValidation';
+import {
+    canAddTourLocation,
+    canSaveTour,
+    hasTourLocation,
+} from '../../utils/tourLocationValidation';
 import ActionTouchable from "../../components/common/ActionTouchable";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -484,6 +488,9 @@ const TourSuggestion: React.FC = () => {
     const handleSave = async () => {
         if (saveInFlightRef.current) return;
         if (!hasTourLocation(places.length)) return;
+        // Check before enabling the Save loader. Firestore can otherwise wait
+        // for its offline queue and leave the user looking at a spinner.
+        if (!(await canSaveTour())) return;
         if (!userId || recommendations.length === 0 || !primary) {
             navigation.goBack();
             return;

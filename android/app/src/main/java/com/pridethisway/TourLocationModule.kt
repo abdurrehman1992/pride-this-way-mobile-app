@@ -100,6 +100,33 @@ class TourLocationModule(
   }
 
   @ReactMethod
+  fun getRecentLocations(sinceTimestamp: Double, promise: Promise) {
+    try {
+      val prefs = reactContext.getSharedPreferences(TourLocationService.PREFS_NAME, Context.MODE_PRIVATE)
+      val points = org.json.JSONArray(prefs.getString(TourLocationService.TRACE_POINTS_KEY, "[]") ?: "[]")
+      val result = Arguments.createArray()
+      for (index in 0 until points.length()) {
+        val point = points.optJSONObject(index) ?: continue
+        val timestamp = point.optLong("timestamp", 0L)
+        if (timestamp <= sinceTimestamp.toLong()) continue
+        val latitude = point.optDouble("latitude", Double.NaN)
+        val longitude = point.optDouble("longitude", Double.NaN)
+        if (!latitude.isFinite() || !longitude.isFinite()) continue
+        val item = Arguments.createMap()
+        item.putDouble("latitude", latitude)
+        item.putDouble("longitude", longitude)
+        item.putDouble("accuracy", point.optDouble("accuracy", 0.0))
+        item.putDouble("speed", point.optDouble("speed", -1.0))
+        item.putDouble("timestamp", timestamp.toDouble())
+        result.pushMap(item)
+      }
+      promise.resolve(result)
+    } catch (error: Exception) {
+      promise.reject("TOUR_LOCATION_HISTORY_FAILED", error)
+    }
+  }
+
+  @ReactMethod
   fun startTrackingSession(options: ReadableMap, promise: Promise) {
     val tourId = options.stringOrNull("tourId")
     val userId = options.stringOrNull("userId")

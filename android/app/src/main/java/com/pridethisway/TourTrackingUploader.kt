@@ -54,7 +54,7 @@ object TourTrackingUploader {
   private const val DEFAULT_SAMPLE_MIN_DISTANCE_METERS = 20f
   private const val DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000L
   private const val DEFAULT_MAX_ACCURACY_METERS = 100f
-  private const val DEFAULT_BACKGROUND_GPS_INTERVAL_MS = 10_000L
+  private const val DEFAULT_BACKGROUND_GPS_INTERVAL_MS = 2_000L
   private const val DEFAULT_BACKGROUND_GPS_MIN_DISTANCE_METERS = 0f
 
   private var sessionLoaded = false

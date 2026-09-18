@@ -11,6 +11,11 @@ type NativeLocationStatus = {
   timestamp?: number;
 };
 
+export type NativeLocationSample = Required<Pick<
+  NativeLocationStatus,
+  'latitude' | 'longitude' | 'accuracy' | 'speed' | 'timestamp'
+>>;
+
 const nativeModule = NativeModules.TourLocation;
 
 export const isNativeTourLocationAvailable = Platform.OS === 'android' && Boolean(nativeModule);
@@ -40,6 +45,18 @@ export const getNativeTourLocationStatus = async (): Promise<NativeLocationStatu
     return await nativeModule.getStatus();
   } catch {
     return null;
+  }
+};
+
+export const getNativeTourLocationSamples = async (
+  sinceTimestamp: number,
+): Promise<NativeLocationSample[]> => {
+  if (!isNativeTourLocationAvailable || typeof nativeModule?.getRecentLocations !== 'function') return [];
+  try {
+    const samples = await nativeModule.getRecentLocations(sinceTimestamp);
+    return Array.isArray(samples) ? samples : [];
+  } catch {
+    return [];
   }
 };
 

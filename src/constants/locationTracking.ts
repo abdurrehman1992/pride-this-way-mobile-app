@@ -16,6 +16,6 @@ export const TOUR_TRACKING_CONFIG = {
   // Android GPS request while the tour UI is not visible (screen locked or app
   // in background). While the tour screen is visible the existing 1 s / 1 m
   // navigation rate is kept. Closing the app from Recents stops tracking.
-  backgroundGpsIntervalMs: 10_000,
+  backgroundGpsIntervalMs: 2_000,
   backgroundGpsMinDistanceMeters: 0,
 } as const;

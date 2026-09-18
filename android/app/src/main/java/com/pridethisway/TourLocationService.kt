@@ -22,6 +22,8 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 
 class TourLocationService : Service() {
 
@@ -59,6 +61,7 @@ class TourLocationService : Service() {
         .putFloat("speed", if (location.hasSpeed()) location.speed else -1f)
         .putLong("timestamp", now)
         .apply()
+      appendTracePoint(location, now)
 
       emitLocation(
         type = "update",
@@ -208,6 +211,34 @@ class TourLocationService : Service() {
       .putBoolean("tracking", false)
       .putBoolean("taskRemovedWhileTracking", false)
       .apply()
+  }
+
+  // JS can be paused while Android continues this foreground service. Keep a
+  // short, bounded history so the map can draw every recorded movement when
+  // the activity resumes instead of joining two distant points with a line.
+  private fun appendTracePoint(location: Location, timestamp: Long) {
+    try {
+      val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+      val points = JSONArray(prefs.getString(TRACE_POINTS_KEY, "[]") ?: "[]")
+      val retained = JSONArray()
+      val oldestAllowed = timestamp - TRACE_POINT_RETENTION_MS
+      for (index in 0 until points.length()) {
+        val point = points.optJSONObject(index) ?: continue
+        if (point.optLong("timestamp", 0L) >= oldestAllowed) retained.put(point)
+      }
+      retained.put(
+        JSONObject()
+          .put("latitude", location.latitude)
+          .put("longitude", location.longitude)
+          .put("accuracy", location.accuracy.toDouble())
+          .put("speed", if (location.hasSpeed()) location.speed.toDouble() else -1.0)
+          .put("timestamp", timestamp),
+      )
+      while (retained.length() > MAX_TRACE_POINTS) retained.remove(0)
+      prefs.edit().putString(TRACE_POINTS_KEY, retained.toString()).apply()
+    } catch (_: Exception) {
+      // A trace cache is optional; the latest location is still persisted.
+    }
   }
 
   private fun hasLocationPermission(): Boolean =
@@ -369,6 +400,7 @@ class TourLocationService : Service() {
     const val EVENT_ACTION = "com.pridethisway.TOUR_LOCATION_EVENT"
     const val JS_EVENT = "TourLocationEvent"
     const val PREFS_NAME = "tour_location_state"
+    const val TRACE_POINTS_KEY = "trace_points"
     private const val CHANNEL_ID = "active_tour_location_min"
     private const val LEGACY_CHANNEL_ID = "active_tour_location"
     private const val NOTIFICATION_ID = 4201
@@ -382,6 +414,8 @@ class TourLocationService : Service() {
     // Navigation rate while the tour UI is visible.
     private const val FOREGROUND_GPS_INTERVAL_MS = 1_000L
     private const val FOREGROUND_GPS_MIN_DISTANCE_METERS = 1f
+    private const val TRACE_POINT_RETENTION_MS = 30 * 60 * 1_000L
+    private const val MAX_TRACE_POINTS = 1_000
 
     fun isLocationEnabled(context: Context): Boolean {
       val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false

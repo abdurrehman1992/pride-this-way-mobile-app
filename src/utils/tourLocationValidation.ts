@@ -12,3 +12,9 @@ export const canAddTourLocation = async (): Promise<boolean> => {
   showInfo('No internet connection', 'Your internet is off. Please connect and try again.');
   return false;
 };
+
+export const canSaveTour = async (): Promise<boolean> => {
+  if (await checkInternetConnection()) return true;
+  showInfo('No internet connection', 'Your internet is off. Please connect and try again.');
+  return false;
+};

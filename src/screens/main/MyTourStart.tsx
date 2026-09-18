@@ -25,6 +25,7 @@ import type { FeatureCollection, LineString, Point } from 'geojson';
 import {
   useRoute,
   useNavigation,
+  useFocusEffect,
   usePreventRemove,
 } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -82,6 +83,7 @@ import {
 import { checkInternetConnection, useInternetConnectivity } from '../../utils/networkStatus';
 import { requestLocationPermission } from '../../utils/location';
 import {
+  getNativeTourLocationSamples,
   getNativeTourLocationStatus,
   startNativeTourLocation,
   stopNativeTourLocation,
@@ -102,6 +104,8 @@ import { setUserPoints } from '../../Redux/slices/authSlice';
 import NextStopBanner from '../../components/MyTourStart/NextStopBanner';
 import NavigationSummaryCard from '../../components/MyTourStart/NavigationSummaryCard';
 import RecenterButton from '../../components/MyTourStart/RecenterButton';
+import UserHeadingMarker from '../../components/MyTourStart/UserHeadingMarker';
+import { subscribeToDeviceHeading } from '../../utils/deviceHeading';
 
 type TourStop = {
   id: string;
@@ -167,6 +171,11 @@ const accessConnectorDotLayerStyle: CircleLayerStyle = {
   circleStrokeWidth: 0.5,
 };
 
+const travelledOffRoadDotLayerStyle: CircleLayerStyle = {
+  ...accessConnectorDotLayerStyle,
+  circleRadius: 3.5,
+};
+
 const NEAREST_STOP_TOLERANCE_METERS = 1;
 
 
@@ -210,14 +219,11 @@ const MIN_OFF_ROUTE_REROUTE_DISTANCE_METERS = 5;
 const MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS = 15;
 // A location this far from the active road is not normal GPS jitter. It must
 // reroute on the first accepted fix, including when the user has stopped.
-const DEFINITE_OFF_ROUTE_REROUTE_METERS = 30;
-const OFF_ROUTE_REROUTE_CONFIRMATION_COUNT = 2;
-// Display the travelled trace on the nearby navigable road rather than
-// exposing every metre of normal consumer-GPS side-to-side drift.
-const TRAVELLED_TRACE_ROAD_SNAP_METERS = 35;
+const DEFINITE_OFF_ROUTE_REROUTE_METERS = 12;
+const OFF_ROUTE_REROUTE_CONFIRMATION_COUNT = 1;
 const PRECISE_REROUTE_ACCURACY_METERS = 15;
 const BACKTRACK_REROUTE_DISTANCE_METERS = 7;
-const WRONG_DIRECTION_REROUTE_DEGREES = 35;
+const WRONG_DIRECTION_REROUTE_DEGREES = 25;
 const MIN_PERSISTED_TRAVELLED_METERS = 3;
 const INTRACITY_ROUTE_DISTANCE_METERS = 50_000;
 const FLIGHT_ROUTE_DISTANCE_METERS = 150_000;
@@ -568,50 +574,6 @@ const pulseStyles = StyleSheet.create({
   },
 });
 
-// Google-Maps-style user pin: white outer ring + blue inner dot + a small
-// rotating chevron that always points in the user's direction of travel.
-const userPinStyles = StyleSheet.create({
-  outer: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 5,
-  },
-  inner: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#1D82DD',
-  },
-  // arrowWrap sits 'above' the dot and rotates with the user's heading;
-  // its size is the rotation pivot box.
-  arrowWrap: {
-    position: 'absolute',
-    width: 30,
-    height: 38,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  // The arrow itself: a small upward-pointing triangle created with borders.
-  arrow: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderBottomWidth: 8,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: '#1D82DD',
-  },
-});
-
 const tourStartMarkerStyles = StyleSheet.create({
   outer: {
     width: 22,
@@ -699,10 +661,14 @@ const MyTourStart = () => {
   const [activeTravelledRoadSegment, setActiveTravelledRoadSegment] = useState<Coord[]>([]);
   const activeTravelledRoadSegmentRef = useRef<Coord[]>([]);
   const activeTravelledRouteKeyRef = useRef('');
-  // This is deliberately an accepted-GPS trace, not a slice of the suggested
-  // road. It is the only reliable way to show where the user actually drove
-  // after taking a shortcut, a wrong turn, or a U-turn.
-  const [actualTravelledLocationSegments, setActualTravelledLocationSegments] = useState<Coord[][]>([]);
+  // One uninterrupted breadcrumb of accepted GPS fixes. This records the
+  // road the user really took, including wrong turns and streets that were
+  // never part of the suggested route.
+  const [actualTravelledCoordinates, setActualTravelledCoordinates] = useState<Coord[]>([]);
+  // Captured once from the tour's original location. It must not chase the
+  // live marker as the user moves or when the route is recalculated.
+  const [tourOriginAccessSegment, setTourOriginAccessSegment] = useState<Coord[] | null>(null);
+  const [tourStartRoadSegment, setTourStartRoadSegment] = useState<Coord[]>([]);
   const [completedApproachRoadSegments, setCompletedApproachRoadSegments] = useState<[number, number][][]>([]);
   const [completedApproachAirSegments, setCompletedApproachAirSegments] = useState<[number, number][][]>([]);
   const [completedApproachAccessSegments, setCompletedApproachAccessSegments] = useState<Coord[][]>([]);
@@ -841,29 +807,18 @@ const MyTourStart = () => {
       }
     }
 
-    // Do not join distant foreground/background fixes with a made-up straight
-    // line. Normal native-service fixes arrive every second and stay in the
-    // same segment; a gap simply begins a new truthful segment.
     if (tourStartedRef.current && previous) {
       const movementMeters = distanceMetersBetween(previous.coordinate, coordinate);
-      const elapsedSeconds = Math.max(0, timestamp - previous.timestamp) / 1000;
-      const maximumTraceLinkMeters = Math.max(
-        80,
-        Math.min(150, elapsedSeconds * 30 + 30),
-      );
-      if (movementMeters >= 3 && movementMeters <= maximumTraceLinkMeters) {
-        setActualTravelledLocationSegments((segments) => {
-          const lastSegment = segments[segments.length - 1];
-          if (
-            isRenderableRouteSegment(lastSegment) &&
-            distanceMetersBetween(lastSegment[lastSegment.length - 1], previous.coordinate) <= 6
-          ) {
-            return [
-              ...segments.slice(0, -1),
-              [...lastSegment, coordinate],
-            ];
-          }
-          return [...segments, [previous.coordinate, coordinate]];
+      if (movementMeters >= 3) {
+        setActualTravelledCoordinates((existing) => {
+          const last = existing[existing.length - 1];
+          const withPrevious = last
+            ? existing
+            : [previous.coordinate];
+          const latest = withPrevious[withPrevious.length - 1];
+          return distanceMetersBetween(latest, coordinate) >= 3
+            ? [...withPrevious, coordinate]
+            : withPrevious;
         });
       }
     }
@@ -1118,6 +1073,7 @@ const MyTourStart = () => {
   // userHeading is the direction of travel (degrees, 0 = north) used by both
   // the navigation camera and the on-map user pin.
   const [userHeading, setUserHeading] = useState<number>(0);
+  const [deviceHeading, setDeviceHeading] = useState<number | null>(null);
   const hasNavigationHeadingRef = useRef(false);
   const previousHeadingLocationRef = useRef<[number, number] | null>(null);
   const reportedHeadingLocationRef = useRef<[number, number] | null>(null);
@@ -1141,6 +1097,15 @@ const MyTourStart = () => {
         : smoothHeading(current, normalizedHeading);
     });
   }, []);
+
+  useFocusEffect(useCallback(() => {
+    const subscription = subscribeToDeviceHeading((heading) => {
+      setDeviceHeading((current) =>
+        current === null ? heading : smoothHeading(current, heading, 0.28)
+      );
+    });
+    return () => subscription.remove();
+  }, []));
 
   useEffect(() => {
     if (!tourStarted) return;
@@ -2845,6 +2810,31 @@ const MyTourStart = () => {
     setTourOrigin(currentLocation);
   }, [tourStarted, tourOrigin, currentLocation]);
 
+  useEffect(() => {
+    if (
+      !tourStarted ||
+      !tourOrigin ||
+      tourOriginAccessSegment !== null ||
+      !isRenderableRouteSegment(roadSegments[0])
+    ) return;
+
+    const projection = projectPointOnPolyline(tourOrigin, roadSegments[0]);
+    const accessDistance = distanceMetersBetween(tourOrigin, projection.point);
+    setTourStartRoadSegment(roadSegments[0]);
+    setTourOriginAccessSegment(
+      accessDistance >= NAVIGATION_ACCESS_CONNECTOR_MIN_METERS
+        ? [tourOrigin, projection.point]
+        : [],
+    );
+  }, [roadSegments, tourOrigin, tourOriginAccessSegment, tourStarted]);
+
+  useEffect(() => {
+    if (!tourStarted || !currentLocation) return;
+    setActualTravelledCoordinates((existing) =>
+      existing.length > 0 ? existing : [currentLocation],
+    );
+  }, [currentLocation, tourStarted]);
+
   // Keep the user low in the viewport so more of the forward-facing route is
   // visible, like a turn-by-turn navigation camera.
   useEffect(() => {
@@ -3884,48 +3874,74 @@ const MyTourStart = () => {
     [completedAirSegments, completedRoadSegments]
   );
 
+  // Draw the accepted breadcrumb itself, rather than a prefix of the current
+  // suggestion. It therefore survives every reroute and also records a road
+  // or street taken in the wrong direction.
   const actualTravelledRouteLine = useMemo<FeatureCollection<LineString>>(
     () => {
-      // Directions geometries are real drivable roads. Use the active and
-      // already-covered roads only; future legs must never pull a trace onto
-      // a road the user has not reached yet.
-      const traceRoads = [roadSegments[0], ...completedRoadSegments]
-        .filter(isRenderableRouteSegment);
-
-      const snapToNearbyRoad = (coordinate: Coord): Coord => {
-        let closestPoint: Coord | null = null;
-        let closestDistance = Number.POSITIVE_INFINITY;
-
-        traceRoads.forEach((road) => {
-          const projection = projectPointOnPolyline(coordinate, road);
-          const distance = distanceMetersBetween(coordinate, projection.point);
-          if (distance < closestDistance) {
-            closestDistance = distance;
-            closestPoint = projection.point;
-          }
+      let coordinates = actualTravelledCoordinates;
+      if (isRenderableRouteSegment(tourOriginAccessSegment)) {
+        const origin = tourOriginAccessSegment[0];
+        const originalRoadEntry = tourOriginAccessSegment[tourOriginAccessSegment.length - 1];
+        const initialAccessDistance = distanceMetersBetween(origin, originalRoadEntry);
+        // The starting GPS fix is itself off-road, so a broad tolerance would
+        // immediately treat it as having reached the street and draw a solid
+        // line directly underneath the dots. Require a fix substantially
+        // closer to the street than the original indoor position.
+        // Consumer GPS commonly remains 10–20 m away from the visual road
+        // centre even when the user is physically on it. Keep the threshold
+        // below the original access distance (so the indoor start cannot
+        // qualify), but wide enough for a real outdoor road fix.
+        const roadReachedThreshold = Math.min(
+          22,
+          Math.max(8, initialAccessDistance * 0.7),
+        );
+        const entryRoads = [tourStartRoadSegment, roadSegments[0]]
+          .filter(isRenderableRouteSegment);
+        let snappedRoadEntry = originalRoadEntry;
+        const roadEntryIndex = coordinates.findIndex((coordinate) => {
+          let closestDistance = Number.POSITIVE_INFINITY;
+          entryRoads.forEach((road) => {
+            const projection = projectPointOnPolyline(coordinate, road);
+            const distance = distanceMetersBetween(coordinate, projection.point);
+            if (distance < closestDistance) {
+              closestDistance = distance;
+              snappedRoadEntry = projection.point;
+            }
+          });
+          return closestDistance <= roadReachedThreshold;
         });
-
-        return closestPoint && closestDistance <= TRAVELLED_TRACE_ROAD_SNAP_METERS
-          ? closestPoint
-          : coordinate;
-      };
+        coordinates = roadEntryIndex >= 0
+          ? [snappedRoadEntry, ...coordinates.slice(roadEntryIndex)]
+          : [];
+      }
 
       return {
         type: 'FeatureCollection',
-        // Keep the original segments separate. A foreground/background gap
-        // must not become an invented straight connector.
-        features: actualTravelledLocationSegments
-          .filter(isRenderableRouteSegment)
-          .map((coordinates) => coordinates.map(snapToNearbyRoad))
-          .filter(isRenderableRouteSegment)
-          .map((coordinates) => ({
-            type: 'Feature' as const,
-            properties: {},
-            geometry: { type: 'LineString' as const, coordinates },
-          })),
+        features: isRenderableRouteSegment(coordinates)
+          ? [makeRouteFeature(coordinates)]
+          : [],
       };
     },
-    [actualTravelledLocationSegments, completedRoadSegments, roadSegments],
+    [
+      actualTravelledCoordinates,
+      makeRouteFeature,
+      roadSegments,
+      tourOriginAccessSegment,
+      tourStartRoadSegment,
+    ],
+  );
+
+  // This connector is frozen at tour start. It stays a single dotted path
+  // from the original indoor/off-road position to the street and never
+  // follows the live marker.
+  const actualTravelledOffRoadDots = useMemo<FeatureCollection<Point>>(
+    () => makeAccessConnectorDots(
+      isRenderableRouteSegment(tourOriginAccessSegment)
+        ? [tourOriginAccessSegment]
+        : [],
+    ),
+    [tourOriginAccessSegment],
   );
 
   const completedApproachRouteLine = useMemo<FeatureCollection<LineString>>(
@@ -4653,6 +4669,34 @@ const MyTourStart = () => {
           // that automatic pause; a user-initiated pause stays paused.
           await resumeLocationPausedTour();
         }
+
+        // Android's foreground service keeps collecting locations while the
+        // React runtime is suspended. Replay that bounded native history in
+        // timestamp order, so the grey travelled line stays attached to the
+        // user's real path after returning to the app.
+        const lastTimestamp = lastAcceptedLocationFixRef.current?.timestamp ?? 0;
+        const backgroundSamples = await getNativeTourLocationSamples(lastTimestamp);
+        let replayedLocation = false;
+        for (const sample of backgroundSamples.sort(
+          (left, right) => Number(left.timestamp) - Number(right.timestamp),
+        )) {
+          if (cancelled) return;
+          const latitude = Number(sample.latitude);
+          const longitude = Number(sample.longitude);
+          const accuracy = Number(sample.accuracy);
+          if (
+            !Number.isFinite(latitude) ||
+            !Number.isFinite(longitude) ||
+            (Number.isFinite(accuracy) && accuracy > MAX_ACCEPTED_GPS_ACCURACY_METERS)
+          ) continue;
+          replayedLocation = applyLiveLocationFix([longitude, latitude], {
+            accuracy,
+            timestamp: Number(sample.timestamp),
+            speed: Number(sample.speed),
+          }) || replayedLocation;
+        }
+        if (replayedLocation) refreshRouteFromResumedLocation();
+
         const nativeAge = Number(nativeStatus?.timestamp) > 0
           ? Date.now() - Number(nativeStatus?.timestamp)
           : Number.POSITIVE_INFINITY;
@@ -4962,6 +5006,15 @@ const MyTourStart = () => {
     if (!permitted) return currentLocationRef.current;
 
     return getCurrentPositionAsync().catch(() => currentLocationRef.current);
+  };
+
+  // The highlighted destination pin sits above the regular stop marker. Send
+  // its tap to the same small details card as a normal marker; the user then
+  // chooses Confirm Visit before the camera opens.
+  const handleActiveDestinationPress = () => {
+    const stop = nearestPendingStop;
+    if (!stop || isStopComplete(stop)) return;
+    handleMarkerPress(stop);
   };
 
   const handlePauseTour = async () => {
@@ -5483,6 +5536,15 @@ const MyTourStart = () => {
                 </Mapbox.ShapeSource>
               )}
 
+              {actualTravelledOffRoadDots.features.length > 0 && (
+                <Mapbox.ShapeSource id="actualTravelledOffRoadDots" shape={actualTravelledOffRoadDots}>
+                  <Mapbox.CircleLayer
+                    id="actualTravelledOffRoadDotsLayer"
+                    style={travelledOffRoadDotLayerStyle}
+                  />
+                </Mapbox.ShapeSource>
+              )}
+
               {shouldShowTourStartMarker && tourOrigin ? (
                 <Mapbox.PointAnnotation
                   id="tourStartMarker"
@@ -5519,6 +5581,8 @@ const MyTourStart = () => {
                     id={stop.id}
                     coordinate={[...stop.coordinate]}
                     anchor={{ x: 0.5, y: 1 }}
+                    allowOverlap
+                    allowOverlapWithPuck
                   >
                     <ActionTouchable
                       activeOpacity={0.8}
@@ -5547,6 +5611,8 @@ const MyTourStart = () => {
                       id={`event-${stop.id}`}
                       coordinate={[...stop.coordinate]}
                       anchor={{ x: 0.5, y: 1 }}
+                      allowOverlap
+                      allowOverlapWithPuck
                     >
                       <ActionTouchable
                         activeOpacity={0.8}
@@ -5590,6 +5656,8 @@ const MyTourStart = () => {
                     id={`event-expired-${stop.id}`}
                     coordinate={[...stop.coordinate]}
                     anchor={{ x: 0.5, y: 1 }}
+                    allowOverlap
+                    allowOverlapWithPuck
                   >
                     <ActionTouchable
                       activeOpacity={0.8}
@@ -5613,6 +5681,8 @@ const MyTourStart = () => {
                     id={`event-completed-${stop.id}`}
                     coordinate={[...stop.coordinate]}
                     anchor={{ x: 0.5, y: 1 }}
+                    allowOverlap
+                    allowOverlapWithPuck
                   >
                     <ActionTouchable
                       activeOpacity={0.8}
@@ -5630,30 +5700,43 @@ const MyTourStart = () => {
                 : null}
 
               {currentLocation && currentMarkerNeedsStandalonePin ? (
-                <Mapbox.PointAnnotation
+                <Mapbox.MarkerView
                   id="currentUserLocationMarker"
                   coordinate={[...currentLocation]}
                   anchor={{ x: 0.5, y: 0.5 }}
+                  allowOverlap
+                  allowOverlapWithPuck
+                  isSelected
+                  style={styles.currentUserLocationMarker}
                 >
-                  <View style={userPinStyles.outer}>
-                    <View style={userPinStyles.inner} />
-                    <View
-                      style={[
-                        userPinStyles.arrowWrap,
-                        {
-                          transform: [
-                            {
-                              rotate: `${tourStarted || followMode === 'follow' ? 0 : userHeading}deg`,
-                            },
-                          ],
-                        },
-                      ]}
-                      pointerEvents="none"
-                    >
-                      <View style={userPinStyles.arrow} />
-                    </View>
-                  </View>
-                </Mapbox.PointAnnotation>
+                  <UserHeadingMarker
+                    rotation={
+                      tourStarted && followMode === 'follow'
+                        ? (((deviceHeading ?? userHeading) - userHeading + 360) % 360)
+                        : deviceHeading ?? userHeading
+                    }
+                  />
+                </Mapbox.MarkerView>
+              ) : null}
+
+              {tourStarted && nearestPendingStop ? (
+                <Mapbox.MarkerView
+                  id="activeDestinationMarker"
+                  coordinate={[...nearestPendingStop.coordinate]}
+                  anchor={{ x: 0.5, y: 1 }}
+                  allowOverlap
+                  allowOverlapWithPuck
+                >
+                  <ActionTouchable
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Show ${nearestPendingStop.title}`}
+                    onPress={handleActiveDestinationPress}
+                    style={[styles.markerTapArea, styles.activeDestinationMarker]}
+                  >
+                    <PulsingPin />
+                  </ActionTouchable>
+                </Mapbox.MarkerView>
               ) : null}
             </Mapbox.MapView>
           ) : (
@@ -6147,6 +6230,14 @@ const styles = StyleSheet.create({
     height: 70,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  activeDestinationMarker: {
+    zIndex: 1000,
+    elevation: 1000,
+  },
+  currentUserLocationMarker: {
+    zIndex: 2000,
+    elevation: 2000,
   },
   eventMarker: {
     width: 44,
