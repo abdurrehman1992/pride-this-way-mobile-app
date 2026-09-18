@@ -155,6 +155,14 @@ const AddLocations = () => {
             ) : null}
           </View>
 
+          {isMultiSelect ? (
+            <View style={styles.selectionSummary}>
+              <Text style={styles.selectionCount}>
+                {pendingPlaceIds.length} selected
+              </Text>
+            </View>
+          ) : null}
+
           {loading ? (
             <View style={styles.loaderWrap}>
               <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
@@ -165,7 +173,10 @@ const AddLocations = () => {
               keyExtractor={(item) => item.id}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.listContainer}
+              contentContainerStyle={[
+                styles.listContainer,
+                isMultiSelect && styles.multiSelectListContainer,
+              ]}
               style={styles.list}
               renderItem={({ item }) => {
                 const isAlreadyAdded = existingPlaceIdSet.has(item.id);
@@ -246,9 +257,6 @@ const AddLocations = () => {
 
           {isMultiSelect ? (
             <View style={styles.selectionFooter}>
-              <Text style={styles.selectionCount}>
-                {pendingPlaceIds.length} selected
-              </Text>
               <ActionTouchable
                 activeOpacity={0.85}
                 disabled={pendingPlaceIds.length === 0}
@@ -331,6 +339,11 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     gap: 14,
   },
+  multiSelectListContainer: {
+    // Reserve the fixed action footer plus the Android gesture area so the
+    // final recommendation can scroll fully above the Add button.
+    paddingBottom: 72,
+  },
   selectedCard: {
     borderWidth: 1.5,
     borderColor: COLORS.BUTTON_COLOR,
@@ -352,21 +365,27 @@ const styles = StyleSheet.create({
   },
   selectionFooter: {
     backgroundColor: COLORS.SCREENS_BG,
-    paddingTop: 12,
+    paddingTop: 8,
     paddingBottom: 12,
+  },
+  selectionSummary: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 16,
+    backgroundColor: '#E7F2FC',
   },
   selectionCount: {
     color: COLORS.TEXT_SECONDARY,
-    fontSize: FONT_SIZE.CARD_TEXT,
+    fontSize: FONT_SIZE.PILL_TEXT,
     fontFamily: FONT_FAMILY.InterTight_Medium,
-    marginBottom: 6,
-    textAlign: 'center',
   },
   addSelectedButton: {
     alignItems: 'center',
     backgroundColor: COLORS.BUTTON_COLOR,
     borderRadius: 12,
-    height: 50,
+    height: 48,
     justifyContent: 'center',
   },
   addSelectedButtonDisabled: {

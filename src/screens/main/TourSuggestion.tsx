@@ -86,6 +86,7 @@ const TourSuggestion: React.FC = () => {
     const [loadingEvents, setLoadingEvents] = useState(false);
     const [existingTourId, setExistingTourId] = useState<string | null>(null);
     const bypassGuardRef = useRef(false);
+    const saveInFlightRef = useRef(false);
 
     // Combine current route template events with external live suggestions
     const allAvailableEvents = useMemo(() => {
@@ -481,11 +482,14 @@ const TourSuggestion: React.FC = () => {
     }, [navigation, resetToCreateTour, saved, showDiscardAlert]);
 
     const handleSave = async () => {
+        if (saveInFlightRef.current) return;
         if (!hasTourLocation(places.length)) return;
         if (!userId || recommendations.length === 0 || !primary) {
             navigation.goBack();
             return;
         }
+
+        saveInFlightRef.current = true;
         setSaving(true);
         const now = new Date().toISOString();
         try {
@@ -514,7 +518,9 @@ const TourSuggestion: React.FC = () => {
                 })),
             ];
 
-            await saveUserTour({
+            // The write may remain pending after Firestore has accepted it.
+            // Start it once, then hand the user straight to the saved-tour UI.
+            void saveUserTour({
                 tourId: existingTourId,
                 userId,
                 userName: authUser?.name || '',
@@ -533,27 +539,44 @@ const TourSuggestion: React.FC = () => {
                     selectedEventsToSave
                 ),
                 allPlacesAndEvents,
-            });
+            })
+                .then(() => {
+                    showSuccess('Tour Saved', 'Your tour has been saved successfully.');
+                })
+                .catch((error) => {
+                    const message =
+                        error instanceof Error ? error.message : 'Unable to save this tour right now.';
+                    showError('Save Failed', message);
+                });
 
             // events are now embedded in all_places; no need for separate write
 
             setSaved(true);
             bypassGuardRef.current = true;
 
-            navigation.navigate('MyTour', {
-                pendingCreate: {
-                    status: 'saved',
-                    scheduledDate: null,
-                    createdAt: now,
-                    tourName: tourNameState,
-                    recommendations: [{ ...primary, places, events: selectedEventsToSave }],
-                },
+            // Let `saved` commit for one frame before leaving this screen.
+            // `usePreventRemove` is based on that state; dispatching in the
+            // same turn made the first successful Save look like an unsaved
+            // exit and only the second tap could navigate.
+            requestAnimationFrame(() => {
+                navigation.navigate('MyTour', {
+                    pendingCreate: {
+                        status: 'saved',
+                        scheduledDate: null,
+                        createdAt: now,
+                        tourName: tourNameState,
+                        recommendations: [{ ...primary, places, events: selectedEventsToSave }],
+                    },
+                });
             });
         } catch (error) {
+            saveInFlightRef.current = false;
             const message = error instanceof Error ? error.message : 'Unable to save this tour right now.';
             showError('Save Failed', message);
         } finally {
-            setSaving(false);
+            // On success this screen is immediately replaced. A failed setup
+            // unlocks Save so the user can retry.
+            if (!saveInFlightRef.current) setSaving(false);
         }
     };
 

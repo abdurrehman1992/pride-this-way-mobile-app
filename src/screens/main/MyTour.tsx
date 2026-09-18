@@ -169,6 +169,10 @@ const MyTour = () => {
     const [savedTourCards, setSavedTourCards] = useState<RouteCardState[]>([]);
     const [expandedLocations, setExpandedLocations] = useState<Record<string, boolean>>({});
     const [initialLoad, setInitialLoad] = useState(true);
+    // Only a successful, server-confirmed empty list is allowed to render
+    // TourIntro. A stale cache or failed refresh must never claim there are
+    // no tours when the user already has one.
+    const [hasConfirmedNoTours, setHasConfirmedNoTours] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [activeFilter, setActiveFilter] = useState<TourFilter>('All');
 
@@ -318,18 +322,27 @@ const MyTour = () => {
     const tourUpdate = route.params?.tourUpdate as TourStatusUpdate | undefined;
 
     const loadSavedTours = useCallback(async () => {
+        // A screen that previously had no tours may regain focus immediately
+        // after a save. Hide the old empty state while the fresh server check
+        // runs, otherwise "No Tours Yet" flashes before the saved card loads.
+        setInitialLoad(true);
+
         if (!userId) {
             setSavedTourCards([]);
+            setHasConfirmedNoTours(true);
             setInitialLoad(false);
             return;
         }
 
         try {
-            const tours = await fetchUserTours(userId);
+            const tours = await fetchUserTours(userId, { serverOnly: true });
             if (!tours || tours.length === 0) {
                 setSavedTourCards([]);
+                setHasConfirmedNoTours(true);
                 return;
             }
+
+            setHasConfirmedNoTours(false);
 
             const allPlaceIds = Array.from(
                 new Set(tours.flatMap((t) => t.all_places?.map((p) => p.place_id) || []))
@@ -659,37 +672,44 @@ const MyTour = () => {
                 style: 'destructive',
                 onPress: async () => {
                     const deletedKey = `${tour.route.id}:${tour.displayName}`;
-                    deletedTourKeys.current.add(deletedKey);
-                    if (tour.tourId) {
-                        deletedTourIds.current.add(tour.tourId);
-                    }
-                    setSavedTourCards((prev) =>
-                        normalizeTourCards(
-                            prev.filter((card) =>
-                                tour.tourId
-                                    ? card.tourId !== tour.tourId
-                                    : card.cardId !== tour.cardId
-                            )
-                        )
-                    );
-                    showInfo('Tour Removed', 'This tour has been removed.');
-
-                    if (!tour.tourId) return;
                     try {
-                        await deleteUserTour(tour.tourId, { userId: userId || undefined });
-                        // Re-read Firestore after deletion. The tombstones stay
-                        // in memory so an already-running/stale query cannot
-                        // reinsert the deleted card.
-                        await loadSavedTours();
-                    } catch (error) {
-                        const errorMessage =
-                            error instanceof Error ? error.message : 'Unable to remove this tour right now.';
-                        showError('Delete Failed', errorMessage);
                         if (tour.tourId) {
-                            deletedTourIds.current.delete(tour.tourId);
+                            if (!(await checkInternetConnection())) {
+                                setTimeout(() => showError(
+                                    'Internet Required',
+                                    'Connect to the internet, then try deleting this tour again.',
+                                ), 250);
+                                return;
+                            }
+
+                            // Do not update the list or show success until the
+                            // server confirms that the tour document is gone.
+                            await deleteUserTour(tour.tourId, { userId: userId || undefined });
                         }
-                        deletedTourKeys.current.delete(deletedKey);
-                        loadSavedTours();
+
+                        deletedTourKeys.current.add(deletedKey);
+                        if (tour.tourId) deletedTourIds.current.add(tour.tourId);
+                        setSavedTourCards((prev) =>
+                            normalizeTourCards(
+                                prev.filter((card) =>
+                                    tour.tourId
+                                        ? card.tourId !== tour.tourId
+                                        : card.cardId !== tour.cardId
+                                )
+                            )
+                        );
+                        setTimeout(() => showInfo('Tour Removed', 'This tour has been removed.'), 250);
+                        if (tour.tourId) void loadSavedTours();
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : '';
+                        const isConnectionFailure =
+                            /timed out|network|internet|unavailable|offline/i.test(message);
+                        setTimeout(() => showError(
+                            isConnectionFailure ? 'Internet Connection Problem' : 'Delete Failed',
+                            isConnectionFailure
+                                ? 'We could not confirm the deletion. Check your internet connection and try again.'
+                                : message || 'Unable to remove this tour right now.',
+                        ), 250);
                     }
                 },
             },
@@ -1123,7 +1143,9 @@ const MyTour = () => {
                         <View style={styles.locationHeader}>
                             <Text style={styles.locationTitle}>Locations</Text>
 
-                            {tour.status !== 'completed' ? (
+                            {/* Saved tours should only be started/resumed here.
+                                Keep this action commented for a future edit flow. */}
+                            {/* {tour.status !== 'completed' ? (
                                 <ActionTouchable
                                     style={styles.addLocBtn}
                                     onPress={() =>
@@ -1138,7 +1160,7 @@ const MyTour = () => {
                                     <IconPlus width={11} height={11} />
                                     <Text style={styles.addLocation}>Add Locations</Text>
                                 </ActionTouchable>
-                            ) : null}
+                            ) : null} */}
                         </View>
 
                         {locations.map((loc) => {
@@ -1299,7 +1321,7 @@ const MyTour = () => {
                 <View style={styles.loaderWrap}>
                     <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
                 </View>
-            ) : allCards.length === 0 ? (
+            ) : allCards.length === 0 && hasConfirmedNoTours ? (
                 <TourIntro
                     onCreate={() => openModal('location')}
                     refreshing={refreshing}

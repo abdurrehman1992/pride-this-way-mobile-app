@@ -119,6 +119,14 @@ const TabNavigator: React.FC = () => {
           }
 
           if (targetTab.name === "MyTours") {
+            // Tapping the already-selected tab normally pops its nested stack
+            // to the first MyTour route. After creating a tour that first
+            // route can still be the old "No Tours Yet" screen, while the
+            // current nested route correctly shows the saved card. Keep the
+            // current MyTours route instead of performing that pop.
+            if (currentTab?.name === "MyTours") {
+              event.preventDefault();
+            }
             return;
           }
 
@@ -166,7 +174,8 @@ const TabNavigator: React.FC = () => {
         const icons = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
         const focusedNestedRouteName = getFocusedRouteNameFromRoute(route);
         const hideTabsForTourNavigation =
-          route.name === "MyTours" && focusedNestedRouteName === "MyTourStart";
+          route.name === "MyTours" &&
+          (focusedNestedRouteName === "MyTourStart" || focusedNestedRouteName === "AddLocations");
 
         return {
           headerShown: false,

@@ -206,12 +206,23 @@ const VISIT_DISTANCE_THRESHOLD_METERS = 100;
 // The visual progress is updated locally for every GPS fix. A network
 // reroute is only needed when the user has genuinely left the current road
 // geometry; using the reported accuracy avoids reroute storms from noisy GPS.
-const MIN_OFF_ROUTE_REROUTE_DISTANCE_METERS = 12;
-const MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS = 45;
+const MIN_OFF_ROUTE_REROUTE_DISTANCE_METERS = 5;
+const MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS = 15;
+// A location this far from the active road is not normal GPS jitter. It must
+// reroute on the first accepted fix, including when the user has stopped.
+const DEFINITE_OFF_ROUTE_REROUTE_METERS = 30;
+const OFF_ROUTE_REROUTE_CONFIRMATION_COUNT = 2;
+const PRECISE_REROUTE_ACCURACY_METERS = 15;
+const BACKTRACK_REROUTE_DISTANCE_METERS = 7;
+const WRONG_DIRECTION_REROUTE_DEGREES = 35;
+const MIN_PERSISTED_TRAVELLED_METERS = 3;
 const INTRACITY_ROUTE_DISTANCE_METERS = 50_000;
 const FLIGHT_ROUTE_DISTANCE_METERS = 150_000;
 const LIVE_ROUTE_REOPTIMIZE_DISTANCE_METERS = 35;
 const LIVE_ROUTE_REOPTIMIZE_MIN_INTERVAL_MS = 8_000;
+// A brief reachability failure is common while a device changes between cell
+// towers/Wi-Fi. Do not interrupt navigation for that transient state.
+const OFFLINE_TOUR_ALERT_DELAY_MS = 8_000;
 const STATIONARY_GPS_SPEED_METERS_PER_SECOND = 0.8;
 const MAX_STATIONARY_GPS_JUMP_METERS = 28;
 
@@ -270,14 +281,28 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const NAVIGATION_CAMERA_PITCH = 42;
 const NAVIGATION_FOLLOW_ZOOM = 17.2;
 const NAVIGATION_SUMMARY_HEIGHT = 176;
-const NAVIGATION_HEADER_HEIGHT = 115;
 const NAVIGATION_BANNER_SAFE_HEIGHT = 108;
 const NAVIGATION_ACCESS_CONNECTOR_MIN_METERS = 8;
-const NAVIGATION_FRAME_MAX_ROUTE_METERS = 700;
-const NAVIGATION_FRAME_NEAR_STOP_METERS = 1_000;
 const DETAIL_CARD_WIDTH = 260;
 const DETAIL_CARD_HEIGHT = 255;
 const MAX_INITIAL_FIX_AGE_MS = 15_000;
+
+const headingDifferenceDegrees = (from: number, to: number) =>
+  Math.abs(((to - from + 540) % 360) - 180);
+
+const takePolylinePrefix = (coordinates: Coord[], maxDistanceMeters: number) => {
+  if (coordinates.length < 2) return coordinates;
+  const prefix: Coord[] = [coordinates[0]];
+  let distance = 0;
+  for (let index = 1; index < coordinates.length; index += 1) {
+    const previous = coordinates[index - 1];
+    const current = coordinates[index];
+    distance += distanceMetersBetween(previous, current);
+    prefix.push(current);
+    if (distance >= maxDistanceMeters) break;
+  }
+  return prefix;
+};
 
 const isFreshGpsPosition = (position: any) => {
   const timestamp = Number(position?.timestamp);
@@ -584,14 +609,38 @@ const userPinStyles = StyleSheet.create({
   },
 });
 
+const tourStartMarkerStyles = StyleSheet.create({
+  outer: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 3,
+    borderColor: '#6B7280',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 3,
+  },
+  inner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#6B7280',
+  },
+});
+
 const MyTourStart = () => {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const safeAreaInsets = useSafeAreaInsets();
   const navigationCameraPadding = useMemo(() => ({
-    // This is the actual unobscured navigation viewport: header + destination
-    // banner are above it and the summary card is below it.
-    paddingTop: NAVIGATION_HEADER_HEIGHT + NAVIGATION_BANNER_SAFE_HEIGHT + 18,
+    // TopHeader sits outside the map. Only the destination banner overlays
+    // its top edge, while the tour summary card overlays the bottom edge.
+    paddingTop: NAVIGATION_BANNER_SAFE_HEIGHT + 18,
     paddingRight: 26,
     paddingBottom: NAVIGATION_SUMMARY_HEIGHT + safeAreaInsets.bottom + 24,
     paddingLeft: 26,
@@ -618,6 +667,10 @@ const MyTourStart = () => {
   }, []);
 
   const [tourStarted, setTourStarted] = useState(Boolean(route.params?.autoStart));
+  const tourStartedRef = useRef(Boolean(route.params?.autoStart));
+  useEffect(() => {
+    tourStartedRef.current = tourStarted;
+  }, [tourStarted]);
   // MAPBOX_TOKEN is loaded synchronously from react-native-config. Mount the
   // native MapView immediately on first launch; waiting for the native token
   // promise here can leave a brand-new install stuck on the blue fallback.
@@ -637,6 +690,16 @@ const MyTourStart = () => {
   const [completedRoadSegments, setCompletedRoadSegments] = useState<[number, number][][]>([]);
   const [completedAirSegments, setCompletedAirSegments] = useState<[number, number][][]>([]);
   const [completedAccessSegments, setCompletedAccessSegments] = useState<Coord[][]>([]);
+  // Live-leg progress is separate from completed-stop history. Changing the
+  // next stop must never erase road already travelled in this active tour.
+  const [travelledRoadSegments, setTravelledRoadSegments] = useState<[number, number][][]>([]);
+  const [activeTravelledRoadSegment, setActiveTravelledRoadSegment] = useState<Coord[]>([]);
+  const activeTravelledRoadSegmentRef = useRef<Coord[]>([]);
+  const activeTravelledRouteKeyRef = useRef('');
+  // This is deliberately an accepted-GPS trace, not a slice of the suggested
+  // road. It is the only reliable way to show where the user actually drove
+  // after taking a shortcut, a wrong turn, or a U-turn.
+  const [actualTravelledLocationSegments, setActualTravelledLocationSegments] = useState<Coord[][]>([]);
   const [completedApproachRoadSegments, setCompletedApproachRoadSegments] = useState<[number, number][][]>([]);
   const [completedApproachAirSegments, setCompletedApproachAirSegments] = useState<[number, number][][]>([]);
   const [completedApproachAccessSegments, setCompletedApproachAccessSegments] = useState<Coord[][]>([]);
@@ -673,6 +736,7 @@ const MyTourStart = () => {
     coordinate: [number, number];
     timestamp: number;
     accuracy: number;
+    speed: number | null;
   } | null>(null);
   const pendingStationaryJumpRef = useRef<{
     coordinate: [number, number];
@@ -713,11 +777,22 @@ const MyTourStart = () => {
       const speed = Number(options.speed);
       const reportsStationary = Number.isFinite(speed) && speed >= 0 &&
         speed < STATIONARY_GPS_SPEED_METERS_PER_SECOND;
+      const reportsReliableMovement =
+        tourStartedRef.current &&
+        Number.isFinite(speed) &&
+        speed >= 0.4 &&
+        accuracy <= 25 &&
+        movementMeters >= 2;
+      const elapsedSeconds = elapsedMs / 1000;
 
       // Hold tiny movement briefly, then accept its accumulated displacement.
       // This prevents the pin/camera vibrating at traffic lights without
       // blocking a user who genuinely starts walking slowly.
-      if (movementMeters <= jitterRadius && elapsedMs < 4_000) return false;
+      if (
+        movementMeters <= jitterRadius &&
+        elapsedMs < 4_000 &&
+        !reportsReliableMovement
+      ) return false;
 
       // A stationary GPS report occasionally jumps to a nearby house/road.
       // It must not move the marker or cause an off-route replacement.
@@ -750,9 +825,55 @@ const MyTourStart = () => {
       ) {
         return false;
       }
+
+      // Reject a fix that would require an implausible jump for the reported
+      // speed. This catches the occasional one-sample "ahead of the car"
+      // position without slowing valid motorway movement or real turns.
+      const plausibleSpeed = Number.isFinite(speed) && speed >= 0
+        ? Math.max(8, speed * 2.2)
+        : 35;
+      const plausibleDistance = plausibleSpeed * elapsedSeconds + Math.max(12, accuracy * 1.5);
+      if (elapsedMs < 10_000 && movementMeters > plausibleDistance) {
+        return false;
+      }
     }
 
-    lastAcceptedLocationFixRef.current = { coordinate, timestamp, accuracy };
+    // Do not join distant foreground/background fixes with a made-up straight
+    // line. Normal native-service fixes arrive every second and stay in the
+    // same segment; a gap simply begins a new truthful segment.
+    if (tourStartedRef.current && previous) {
+      const movementMeters = distanceMetersBetween(previous.coordinate, coordinate);
+      const elapsedSeconds = Math.max(0, timestamp - previous.timestamp) / 1000;
+      const maximumTraceLinkMeters = Math.max(
+        80,
+        Math.min(150, elapsedSeconds * 30 + 30),
+      );
+      if (movementMeters >= 3 && movementMeters <= maximumTraceLinkMeters) {
+        setActualTravelledLocationSegments((segments) => {
+          const lastSegment = segments[segments.length - 1];
+          if (
+            isRenderableRouteSegment(lastSegment) &&
+            distanceMetersBetween(lastSegment[lastSegment.length - 1], previous.coordinate) <= 6
+          ) {
+            return [
+              ...segments.slice(0, -1),
+              [...lastSegment, coordinate],
+            ];
+          }
+          return [...segments, [previous.coordinate, coordinate]];
+        });
+      }
+    }
+
+    const acceptedSpeed = Number(options.speed);
+    lastAcceptedLocationFixRef.current = {
+      coordinate,
+      timestamp,
+      accuracy,
+      speed: Number.isFinite(acceptedSpeed) && acceptedSpeed >= 0
+        ? acceptedSpeed
+        : null,
+    };
     pendingStationaryJumpRef.current = null;
     currentLocationAccuracyRef.current = accuracy;
     currentLocationRef.current = coordinate;
@@ -982,6 +1103,7 @@ const MyTourStart = () => {
   const leavingRef = useRef(false);
   const locationPauseAlertRef = useRef(false);
   const offlineAlertRef = useRef(false);
+  const offlineAlertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationUnavailableErrorsRef = useRef(0);
   const pausedByLocationRef = useRef(false);
   const locationPausePromiseRef = useRef<Promise<string | null> | null>(null);
@@ -990,23 +1112,30 @@ const MyTourStart = () => {
   const [zoomLevel, setZoomLevel] = useState(
     tourStarted ? NAVIGATION_FOLLOW_ZOOM : 12.6,
   );
-  const recenterStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recenterFollowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // userHeading is the direction of travel (degrees, 0 = north) used by both
   // the navigation camera and the on-map user pin.
   const [userHeading, setUserHeading] = useState<number>(0);
   const hasNavigationHeadingRef = useRef(false);
   const previousHeadingLocationRef = useRef<[number, number] | null>(null);
   const reportedHeadingLocationRef = useRef<[number, number] | null>(null);
+  const movementCourseOriginRef = useRef<[number, number] | null>(null);
+  const trustedMovementHeadingRef = useRef<{
+    heading: number;
+    coordinate: [number, number];
+    timestamp: number;
+  } | null>(null);
 
-  const updateNavigationHeading = useCallback((heading: number) => {
+  const updateNavigationHeading = useCallback((heading: number, immediate = false) => {
     if (!Number.isFinite(heading) || heading < 0 || heading > 360) return;
+    const normalizedHeading = ((heading % 360) + 360) % 360;
     setUserHeading((current) => {
       if (!hasNavigationHeadingRef.current) {
         hasNavigationHeadingRef.current = true;
-        return heading % 360;
+        return normalizedHeading;
       }
-      return smoothHeading(current, heading);
+      return immediate
+        ? normalizedHeading
+        : smoothHeading(current, normalizedHeading);
     });
   }, []);
 
@@ -1015,15 +1144,6 @@ const MyTourStart = () => {
     setFollowMode('follow');
     setZoomLevel(NAVIGATION_FOLLOW_ZOOM);
   }, [tourStarted]);
-
-  useEffect(() => () => {
-    if (recenterStartTimerRef.current) {
-      clearTimeout(recenterStartTimerRef.current);
-    }
-    if (recenterFollowTimerRef.current) {
-      clearTimeout(recenterFollowTimerRef.current);
-    }
-  }, []);
 
   const pendingEditSaveRef = useRef(false);
   const pendingSaveInProgressRef = useRef(false);
@@ -1040,6 +1160,8 @@ const MyTourStart = () => {
     id: number;
     stopsKey: string;
     kind: 'full' | 'active';
+    origin: Coord | null;
+    heading: number | null;
   } | null>(null);
   const lastRouteRequestAtRef = useRef(0);
   const lastRouteRequestStopsKeyRef = useRef('');
@@ -1100,22 +1222,37 @@ const MyTourStart = () => {
   const preserveActiveRoadProgressBeforeReroute = useCallback(() => {
     const activeRoad = roadSegmentsRef.current[0];
     const liveLocation = currentLocationRef.current;
-    if (!isRenderableRouteSegment(activeRoad) || !liveLocation) return;
+    let travelled = activeTravelledRoadSegmentRef.current;
 
-    const projection = projectPointOnPolyline(liveLocation, activeRoad);
-    const split = splitPolylineAt(activeRoad, projection);
-    const travelled = Array.isArray(split?.completed) ? split.completed : [];
-    if (!isRenderableRouteSegment(travelled) || polylineDistanceMeters(travelled) < 20) return;
+    // The monotonic snapshot is authoritative. The projection fallback covers
+    // the first GPS update if a reroute begins before the snapshot effect ran.
+    if (!isRenderableRouteSegment(travelled)) {
+      if (!isRenderableRouteSegment(activeRoad) || !liveLocation) return;
+      const projection = projectPointOnPolyline(liveLocation, activeRoad);
+      const split = splitPolylineAt(activeRoad, projection);
+      travelled = Array.isArray(split?.completed) ? split.completed : [];
+    }
+    if (
+      !isRenderableRouteSegment(travelled) ||
+      polylineDistanceMeters(travelled) < MIN_PERSISTED_TRAVELLED_METERS
+    ) return;
 
-    setCompletedRoadSegments((current) => {
+    setTravelledRoadSegments((current) => {
       const first = travelled[0];
-      const last = travelled[travelled.length - 1];
-      const alreadyStored = current.some((segment) =>
+      const matchingIndex = current.findIndex((segment) =>
         isRenderableRouteSegment(segment) &&
-        distanceMetersBetween(segment[0], first) < 3 &&
-        distanceMetersBetween(segment[segment.length - 1], last) < 12
+        distanceMetersBetween(segment[0], first) < 3
       );
-      return alreadyStored ? current : [...current, travelled];
+      if (matchingIndex < 0) return [...current, travelled];
+
+      const existing = current[matchingIndex];
+      const existingDistance = polylineDistanceMeters(existing);
+      const nextDistance = polylineDistanceMeters(travelled);
+      if (nextDistance <= existingDistance) return current;
+
+      const next = [...current];
+      next[matchingIndex] = travelled;
+      return next;
     });
   }, []);
 
@@ -1132,7 +1269,14 @@ const MyTourStart = () => {
   }, []);
 
   const fetchRoadSegment = useCallback(
-    async (from: [number, number], to: [number, number]): Promise<RoadRoute | null> => {
+    async (
+      from: [number, number],
+      to: [number, number],
+      options: {
+        originBearing?: number | null;
+        originRadiusMeters?: number | null;
+      } = {},
+    ): Promise<RoadRoute | null> => {
       const dist = distanceMetersBetween(from, to);
       if (!Config.MAPBOX_TOKEN) {
         return null;
@@ -1146,8 +1290,27 @@ const MyTourStart = () => {
       // Prefer city roads, but retry without the motorway exclusion if the
       // constrained request has no route. Both attempts remain real by-road
       // Mapbox routes; a straight-line visual fallback is never produced.
-      const attempts = excludeMotorway ? [true, false] : [false];
-      for (const shouldExcludeMotorway of attempts) {
+      const motorwayAttempts = excludeMotorway ? [true, false] : [false];
+      const hasOriginBearing = Number.isFinite(options.originBearing);
+      const attempts = hasOriginBearing
+        ? [
+          ...motorwayAttempts.map((shouldExcludeMotorway) => ({
+            shouldExcludeMotorway,
+            useOriginBearing: true,
+          })),
+          // A one-way street can make a bearing-constrained request
+          // impossible. Fall back to an unconstrained road route instead of
+          // leaving the user without navigation.
+          ...motorwayAttempts.map((shouldExcludeMotorway) => ({
+            shouldExcludeMotorway,
+            useOriginBearing: false,
+          })),
+        ]
+        : motorwayAttempts.map((shouldExcludeMotorway) => ({
+          shouldExcludeMotorway,
+          useOriginBearing: false,
+        }));
+      for (const { shouldExcludeMotorway, useOriginBearing } of attempts) {
         try {
           const { data } = await axios.get<DirectionsResponse>(
             `https://api.mapbox.com/directions/v5/mapbox/driving/${from[0]},${from[1]};${to[0]},${to[1]}`,
@@ -1157,6 +1320,20 @@ const MyTourStart = () => {
                 geometries: 'geojson',
                 overview: 'full',
                 steps: false,
+                ...(useOriginBearing
+                  ? {
+                    // Force an active reroute to leave the live GPS point in
+                    // the user's direction of travel. This prevents Mapbox
+                    // snapping a parallel gali back onto the old road behind.
+                    bearings: `${Math.round(Number(options.originBearing))},60;`,
+                    ...(Number.isFinite(options.originRadiusMeters)
+                      ? {
+                        radiuses: `${Math.round(Number(options.originRadiusMeters))};`,
+                      }
+                      : {}),
+                    continue_straight: true,
+                  }
+                  : {}),
                 ...(shouldExcludeMotorway ? { exclude: 'motorway' } : {}),
               },
               timeout: 6_000,
@@ -1205,7 +1382,14 @@ const MyTourStart = () => {
   );
 
   const fetchRouteSegment = useCallback(
-    async (from: Coord, to: Coord): Promise<{
+    async (
+      from: Coord,
+      to: Coord,
+      options: {
+        originBearing?: number | null;
+        originRadiusMeters?: number | null;
+      } = {},
+    ): Promise<{
       road: Coord[];
       air: Coord[];
       accessSegments: Coord[][];
@@ -1230,7 +1414,7 @@ const MyTourStart = () => {
         };
       }
 
-      const road = await fetchRoadSegment(from, to);
+      const road = await fetchRoadSegment(from, to, options);
       return road
         ? {
           road: road.coordinates,
@@ -2510,19 +2694,66 @@ const MyTourStart = () => {
               distanceFromRoute <= Math.max(25, currentLocationAccuracyRef.current * 1.5)
               ? bearingAlongPolyline(next, activeRoad, 24)
               : null;
+
+          const previousCourseCoordinate = movementCourseOriginRef.current;
+          const numericSpeed = Number(speed);
+          const speedIsExplicitlyStationary =
+            Number.isFinite(numericSpeed) &&
+            numericSpeed >= 0 &&
+            numericSpeed < 0.4;
+          if (speedIsExplicitlyStationary) {
+            trustedMovementHeadingRef.current = null;
+          }
+          const minimumCourseDistance = Math.max(
+            5,
+            Math.min(8, currentLocationAccuracyRef.current * 0.5),
+          );
+          const coordinateMovementDistance = previousCourseCoordinate
+            ? distanceMetersBetween(previousCourseCoordinate, next)
+            : 0;
+          const coordinateMovementHeading =
+            previousCourseCoordinate &&
+              !speedIsExplicitlyStationary &&
+              coordinateMovementDistance >= minimumCourseDistance
+              ? bearingBetween(previousCourseCoordinate, next)
+              : null;
           const headingIsFromMovement =
-            typeof speed === 'number' && Number.isFinite(speed) && speed >= 0.5;
-          if (routeHeading !== null) {
-            reportedHeadingLocationRef.current = next;
-            updateNavigationHeading(routeHeading);
-          } else if (
+            Number.isFinite(numericSpeed) && numericSpeed >= 0.4;
+          const nativeMovementHeading =
             headingIsFromMovement &&
-            typeof heading === 'number' &&
-            heading >= 0 &&
-            heading <= 360
+              typeof heading === 'number' &&
+              Number.isFinite(heading) &&
+              // Android's geolocation bridge reports 0 when the Location has
+              // no bearing. Treat exact zero as unknown; a genuine northward
+              // course is derived from displacement on the next fix.
+              heading > 0 &&
+              heading <= 360
+              ? heading
+              : null;
+          const trustedMovementHeading =
+            coordinateMovementHeading ?? nativeMovementHeading;
+
+          if (
+            !previousCourseCoordinate ||
+            speedIsExplicitlyStationary ||
+            coordinateMovementHeading !== null
           ) {
+            movementCourseOriginRef.current = next;
+          }
+
+          // Real movement owns the camera direction. The old route bearing
+          // is only a fallback; otherwise a turn on a side street keeps the
+          // camera pointed down the road the user already left.
+          if (trustedMovementHeading !== null) {
             reportedHeadingLocationRef.current = next;
-            updateNavigationHeading(heading);
+            trustedMovementHeadingRef.current = {
+              heading: trustedMovementHeading,
+              coordinate: next,
+              timestamp: Date.now(),
+            };
+            updateNavigationHeading(trustedMovementHeading, true);
+          } else if (routeHeading !== null) {
+            updateNavigationHeading(routeHeading);
           }
         },
         (error) => {
@@ -2562,19 +2793,42 @@ const MyTourStart = () => {
   useEffect(() => {
     if (!currentLocation) return;
     const previous = previousHeadingLocationRef.current;
-    previousHeadingLocationRef.current = currentLocation;
-    if (!previous) return;
+    if (!previous) {
+      previousHeadingLocationRef.current = currentLocation;
+      return;
+    }
     const reportedAt = reportedHeadingLocationRef.current;
     if (
       reportedAt?.[0] === currentLocation[0] &&
       reportedAt?.[1] === currentLocation[1]
     ) {
       reportedHeadingLocationRef.current = null;
+      previousHeadingLocationRef.current = currentLocation;
       return;
     }
+    const latestFix = lastAcceptedLocationFixRef.current;
+    if (latestFix?.speed !== null && latestFix?.speed !== undefined && latestFix.speed < 0.4) {
+      // Do not turn the camera or force a reroute from GPS drift while the
+      // provider explicitly says the user is stationary.
+      trustedMovementHeadingRef.current = null;
+      previousHeadingLocationRef.current = currentLocation;
+      return;
+    }
+    const movementDistance = distanceMetersBetween(previous, currentLocation);
+    const minimumCourseDistance = Math.max(
+      5,
+      Math.min(8, (latestFix?.accuracy || currentLocationAccuracyRef.current) * 0.5),
+    );
+    if (movementDistance < minimumCourseDistance) return;
     const movementHeading = bearingBetween(previous, currentLocation);
     if (movementHeading !== null) {
-      updateNavigationHeading(movementHeading);
+      previousHeadingLocationRef.current = currentLocation;
+      trustedMovementHeadingRef.current = {
+        heading: movementHeading,
+        coordinate: currentLocation,
+        timestamp: Date.now(),
+      };
+      updateNavigationHeading(movementHeading, true);
     }
   }, [currentLocation, updateNavigationHeading]);
 
@@ -2602,8 +2856,10 @@ const MyTourStart = () => {
       heading,
       pitch: NAVIGATION_CAMERA_PITCH,
       padding: navigationCameraPadding,
-      animationDuration: 850,
-      animationMode: 'easeTo',
+      // Keep this far shorter than the GPS interval: it makes a turn feel
+      // natural without allowing the camera to fall behind the live marker.
+      animationDuration: 180,
+      animationMode: 'linearTo',
     });
   }, [currentLocation, followMode, mapReady, nativeMapReady, navigationCameraPadding, tourStarted, userHeading, zoomLevel]);
 
@@ -2828,12 +3084,13 @@ const MyTourStart = () => {
         ? currentAirSegments[0]
         : null;
     const activeLegSegment = activeRoadSegment || activeAirSegment;
-    const offRouteDistance =
+    const activeRoadProjection =
       tourStarted && currentLocation && activeRoadSegment
-        ? distanceMetersBetween(
-          currentLocation,
-          projectPointOnPolyline(currentLocation, activeRoadSegment).point
-        )
+        ? projectPointOnPolyline(currentLocation, activeRoadSegment)
+        : null;
+    const offRouteDistance =
+      currentLocation && activeRoadProjection
+        ? distanceMetersBetween(currentLocation, activeRoadProjection.point)
         : tourStarted && currentLocation && activeAirSegment
           ? distanceMetersBetween(currentLocation, activeAirSegment[0])
           : 0;
@@ -2841,13 +3098,54 @@ const MyTourStart = () => {
       MAX_OFF_ROUTE_REROUTE_DISTANCE_METERS,
       Math.max(
         MIN_OFF_ROUTE_REROUTE_DISTANCE_METERS,
-        currentLocationAccuracyRef.current * 1.25
+        currentLocationAccuracyRef.current * 0.75
       )
+    );
+    const activeProgressMeters =
+      activeRoadSegment && activeRoadProjection
+        ? polylineDistanceMeters(
+          splitPolylineAt(activeRoadSegment, activeRoadProjection).completed
+        )
+        : 0;
+    const activeProgressKey = `${renderedRouteStopsKeyRef.current}:${routeGeometryVersion}`;
+    const storedProgressMeters =
+      activeTravelledRouteKeyRef.current === activeProgressKey &&
+      isRenderableRouteSegment(activeTravelledRoadSegmentRef.current)
+        ? polylineDistanceMeters(activeTravelledRoadSegmentRef.current)
+        : 0;
+    const hasBacktrackedOnActiveRoad =
+      Boolean(activeRoadProjection) &&
+      offRouteDistance < accuracyAwareRerouteDistance &&
+      storedProgressMeters - activeProgressMeters >= BACKTRACK_REROUTE_DISTANCE_METERS;
+    const trustedMovement = trustedMovementHeadingRef.current;
+    const trustedMovementIsCurrent = Boolean(
+      trustedMovement &&
+      currentLocation &&
+      Date.now() - trustedMovement.timestamp <= 8_000 &&
+      distanceMetersBetween(trustedMovement.coordinate, currentLocation) <=
+        Math.max(8, currentLocationAccuracyRef.current)
+    );
+    const activeRouteHeading =
+      currentLocation && activeRoadSegment
+        ? bearingAlongPolyline(currentLocation, activeRoadSegment, 12)
+        : null;
+    const hasWrongDirectionFix = Boolean(
+      trustedMovementIsCurrent &&
+      trustedMovement &&
+      activeRouteHeading !== null &&
+      currentLocationAccuracyRef.current <= 25 &&
+      offRouteDistance >= 3 &&
+      headingDifferenceDegrees(trustedMovement.heading, activeRouteHeading) >=
+        WRONG_DIRECTION_REROUTE_DEGREES
     );
     const hasOffRouteFix =
       tourStarted &&
       Boolean(activeLegSegment) &&
-      offRouteDistance >= accuracyAwareRerouteDistance;
+      (
+        offRouteDistance >= accuracyAwareRerouteDistance ||
+        hasBacktrackedOnActiveRoad ||
+        hasWrongDirectionFix
+      );
     if (hasOffRouteFix) {
       const now = Date.now();
       const previousEvidence = offRouteEvidenceRef.current;
@@ -2867,23 +3165,74 @@ const MyTourStart = () => {
       offRouteEvidenceRef.current = { count: 0, lastFixAt: 0, locationKey: '' };
     }
     // A single bad GPS sample at a signal must never replace the road route.
-    // Require three consecutive off-road fixes before rerouting; a real turn
-    // or deviation still refreshes quickly after a few seconds.
+    // A precise fix reroutes immediately; less accurate GPS still needs a
+    // second fix so a signal-side bounce cannot replace a valid road route.
+    const requiredConfirmationCount =
+      hasWrongDirectionFix ||
+      offRouteDistance >= Math.max(
+        DEFINITE_OFF_ROUTE_REROUTE_METERS,
+        currentLocationAccuracyRef.current * 1.5,
+      ) ||
+      currentLocationAccuracyRef.current <= PRECISE_REROUTE_ACCURACY_METERS
+        ? 1
+        : OFF_ROUTE_REROUTE_CONFIRMATION_COUNT;
     const needsOffRouteRefresh =
-      hasOffRouteFix && offRouteEvidenceRef.current.count >= 3;
+      hasOffRouteFix &&
+      offRouteEvidenceRef.current.count >= requiredConfirmationCount;
 
     if (hasCompleteRoute && !needsOffRouteRefresh) {
       return;
     }
 
     const inFlight = routeRequestInFlightRef.current;
+    // A tour can receive a better native GPS fix while its initial/full
+    // Directions request is still loading. That request is anchored to the
+    // old fix and must not be allowed to eventually commit a red leg behind
+    // the user. Supersede it from the current GPS position immediately.
+    const hasMovedSinceFullRequest = Boolean(
+      isNavigatedRoute &&
+      inFlight?.kind === 'full' &&
+      inFlight.origin &&
+      currentLocation &&
+      // Once the first (active) leg has rendered, let the same full request
+      // finish its remaining legs. Cancelling it on every GPS movement meant
+      // only the first red leg ever appeared and the light-red future legs
+      // never got a chance to commit.
+      !isRenderableRouteSegment(currentRoadSegments[0]) &&
+      !isRenderableRouteSegment(currentAirSegments[0]) &&
+      distanceMetersBetween(inFlight.origin, currentLocation) >= 8
+    );
+    // Replace an in-flight active reroute only when the user has materially
+    // moved or turned again. That keeps normal cellular requests stable but
+    // never leaves someone in a parallel gali following a route from behind.
+    const canSupersedeActiveInFlight = Boolean(
+      needsOffRouteRefresh &&
+      activeLegSegment &&
+      (
+        inFlight?.kind === 'full' ||
+        (
+          inFlight?.kind === 'active' &&
+          (
+            Boolean(
+              inFlight.origin &&
+              currentLocation &&
+              distanceMetersBetween(inFlight.origin, currentLocation) >= 8
+            ) ||
+            Boolean(
+              inFlight.heading !== null &&
+              trustedMovementIsCurrent &&
+              trustedMovement &&
+              headingDifferenceDegrees(inFlight.heading, trustedMovement.heading) >= 25
+            )
+          )
+        )
+      )
+    );
+    const canSupersedeInFlight =
+      hasMovedSinceFullRequest || canSupersedeActiveInFlight;
     if (
       inFlight?.stopsKey === pendingRouteStopsKey &&
-      !(
-        needsOffRouteRefresh &&
-        inFlight.kind === 'full' &&
-        Boolean(activeLegSegment)
-      )
+      !canSupersedeInFlight
     ) {
       return;
     }
@@ -2892,7 +3241,8 @@ const MyTourStart = () => {
     const elapsedSinceRequest = now - lastRouteRequestAtRef.current;
     if (
       lastRouteRequestStopsKeyRef.current === pendingRouteStopsKey &&
-      elapsedSinceRequest < LIVE_ROUTE_REFRESH_MIN_INTERVAL_MS
+      elapsedSinceRequest < LIVE_ROUTE_REFRESH_MIN_INTERVAL_MS &&
+      !needsOffRouteRefresh
     ) {
       if (!routeRetryTimerRef.current) {
         routeRetryTimerRef.current = setTimeout(() => {
@@ -2911,6 +3261,16 @@ const MyTourStart = () => {
     }
 
     const requestId = routeRequestSequenceRef.current + 1;
+    const requestOrigin = routeStartCoordinate
+      ? ([...routeStartCoordinate] as Coord)
+      : null;
+    const requestMovementHeading =
+      trustedMovementIsCurrent && trustedMovement
+        ? trustedMovement.heading
+        : null;
+    const requestOriginRadius = requestMovementHeading !== null
+      ? Math.max(15, Math.min(50, currentLocationAccuracyRef.current * 2))
+      : null;
     routeRequestSequenceRef.current = requestId;
     routeRequestInFlightRef.current = {
       id: requestId,
@@ -2919,6 +3279,8 @@ const MyTourStart = () => {
         needsOffRouteRefresh && Boolean(activeLegSegment)
           ? 'active'
           : 'full',
+      origin: requestOrigin,
+      heading: requestMovementHeading,
     };
     lastRouteRequestAtRef.current = now;
     lastRouteRequestStopsKeyRef.current = pendingRouteStopsKey;
@@ -2956,6 +3318,20 @@ const MyTourStart = () => {
         : hasAnyRoad || hasAnyAir;
       if (!usableRoute) return false;
 
+      // A new optimisation can select a different nearest stop while the
+      // tour is already moving. Preserve the old active road before its
+      // geometry is replaced, otherwise the grey history appears to begin at
+      // the moment the destination changed instead of at the tour start.
+      if (
+        tourStarted &&
+        isNavigatedRoute &&
+        (needsOffRouteRefresh || !routeMatchesCurrentStops) &&
+        (isRenderableRouteSegment(roadSegmentsRef.current[0]) ||
+          isRenderableRouteSegment(airSegmentsRef.current[0]))
+      ) {
+        preserveActiveRoadProgressBeforeReroute();
+      }
+
       // Commit geometry and its stop-key atomically. Navigation calculations
       // use this key only after the replacement matches the current stop
       // sequence; the renderer may keep the previous geometry visible while
@@ -2965,11 +3341,14 @@ const MyTourStart = () => {
       accessSegmentsByLegRef.current = nextAccessByLeg;
       routeLegMetricsRef.current = nextMetrics;
       renderedRouteStopsKeyRef.current = pendingRouteStopsKey;
+      activeTravelledRoadSegmentRef.current = [];
+      activeTravelledRouteKeyRef.current = '';
       setRoadSegments(nextRoad);
       setAirSegments(nextAir);
       setAccessSegmentsByLeg(nextAccessByLeg);
       setRouteLegMetrics(nextMetrics);
       setRenderedRouteStopsKey(pendingRouteStopsKey);
+      setActiveTravelledRoadSegment([]);
       setRouteGeometryVersion((value) => value + 1);
       return true;
     };
@@ -2996,7 +3375,11 @@ const MyTourStart = () => {
           preserveActiveRoadProgressBeforeReroute();
           const activeLeg = await fetchRouteSegment(
             routeStartCoordinate,
-            pendingNavigableStops[0].coordinate
+            pendingNavigableStops[0].coordinate,
+            {
+              originBearing: requestMovementHeading,
+              originRadiusMeters: requestOriginRadius,
+            },
           );
           if (
             !isRenderableRouteSegment(activeLeg.road) &&
@@ -3004,6 +3387,38 @@ const MyTourStart = () => {
           ) {
             scheduleRetry();
             return;
+          }
+          const liveLocationAfterRequest = currentLocationRef.current;
+          const returnedActiveSegment = isRenderableRouteSegment(activeLeg.road)
+            ? activeLeg.road
+            : isRenderableRouteSegment(activeLeg.air)
+              ? activeLeg.air
+              : null;
+          if (
+            requestOrigin &&
+            liveLocationAfterRequest &&
+            returnedActiveSegment &&
+            distanceMetersBetween(requestOrigin, liveLocationAfterRequest) >= 10
+          ) {
+            // Validate only the route portion immediately ahead of the
+            // request origin. Projecting onto the whole route can falsely
+            // accept a stale result where a later loop passes near the user.
+            const returnedRoutePrefix = takePolylinePrefix(
+              returnedActiveSegment,
+              150,
+            );
+            const liveProjection = projectPointOnPolyline(
+              liveLocationAfterRequest,
+              returnedRoutePrefix,
+            );
+            const liveDistanceFromReturnedRoute = distanceMetersBetween(
+              liveLocationAfterRequest,
+              liveProjection.point
+            );
+            if (liveDistanceFromReturnedRoute >= accuracyAwareRerouteDistance) {
+              scheduleRetry(0);
+              return;
+            }
           }
           nextRoad = [activeLeg.road, ...currentRoadSegments.slice(1)];
           nextAir = [activeLeg.air, ...currentAirSegments.slice(1)];
@@ -3016,7 +3431,13 @@ const MyTourStart = () => {
           const segmentRequests = lineStops.slice(0, -1).map((from, index) =>
             fetchRouteSegment(
               from as [number, number],
-              lineStops[index + 1] as [number, number]
+              lineStops[index + 1] as [number, number],
+              index === 0
+                ? {
+                  originBearing: requestMovementHeading,
+                  originRadiusMeters: requestOriginRadius,
+                }
+                : undefined,
             )
           );
           const activeLeg = await segmentRequests[0];
@@ -3152,6 +3573,44 @@ const MyTourStart = () => {
     routeRetryNonce,
     tourStarted,
   ]);
+
+  // Keep the grey progress monotonic for the active road. Moving backwards,
+  // going temporarily off-route, or replacing the red route must never make
+  // already-covered road disappear from the original tour history.
+  useEffect(() => {
+    if (!tourStarted || !currentLocation) return;
+    const activeRoad = roadSegmentsRef.current[0];
+    if (!isRenderableRouteSegment(activeRoad)) return;
+
+    const progressKey = `${renderedRouteStopsKeyRef.current}:${routeGeometryVersion}`;
+    if (activeTravelledRouteKeyRef.current !== progressKey) {
+      activeTravelledRouteKeyRef.current = progressKey;
+      activeTravelledRoadSegmentRef.current = [];
+      setActiveTravelledRoadSegment([]);
+    }
+
+    const projection = projectPointOnPolyline(currentLocation, activeRoad);
+    const distanceFromRoad = distanceMetersBetween(currentLocation, projection.point);
+    const reliableRoadCorridor = Math.max(
+      12,
+      Math.min(25, currentLocationAccuracyRef.current * 1.1)
+    );
+    if (distanceFromRoad > reliableRoadCorridor) return;
+
+    const completed = splitPolylineAt(activeRoad, projection).completed;
+    if (!isRenderableRouteSegment(completed)) return;
+    const completedDistance = polylineDistanceMeters(completed);
+    if (completedDistance < MIN_PERSISTED_TRAVELLED_METERS) return;
+
+    const previous = activeTravelledRoadSegmentRef.current;
+    const previousDistance = isRenderableRouteSegment(previous)
+      ? polylineDistanceMeters(previous)
+      : 0;
+    if (completedDistance <= previousDistance + 1) return;
+
+    activeTravelledRoadSegmentRef.current = completed;
+    setActiveTravelledRoadSegment(completed);
+  }, [currentLocation, routeGeometryVersion, tourStarted]);
 
   useEffect(() => {
     const completedStops = [
@@ -3318,9 +3777,18 @@ const MyTourStart = () => {
         return { type: 'FeatureCollection', features: [] };
       }
 
-      const remaining = currentLocation
+      // GPS can drift while stopped, slowing down, or at a turn. Keep the
+      // last valid active road visible during that short reroute window; the
+      // reroute effect replaces it as soon as Directions returns. Rendering
+      // an empty collection here made the red navigation line flicker away.
+      const projectedRemaining = currentLocation
         ? buildLiveRoadGeometry(activeSegment, currentLocation,
           NAVIGATION_ACCESS_CONNECTOR_MIN_METERS).remaining
+        : activeSegment;
+      // A noisy fix can project beyond the final coordinate. Keep the valid
+      // active leg instead of making the navigation line disappear.
+      const remaining = projectedRemaining.length >= 2
+        ? projectedRemaining
         : activeSegment;
 
       return {
@@ -3380,12 +3848,17 @@ const MyTourStart = () => {
         isRenderableRouteSegment(segment) &&
         distanceMetersBetween(segment[0], snappedRoadEnd) < 1
     );
-    const originConnector = currentLocation
-      ? buildLiveRoadGeometry(activeRoad, currentLocation,
-        NAVIGATION_ACCESS_CONNECTOR_MIN_METERS).access
-      : activeAccess.filter((segment) =>
-        isRenderableRouteSegment(segment) &&
-        distanceMetersBetween(segment[segment.length - 1], activeRoad[0]) < 1);
+    // During an active tour this would draw invented dots from the live pin
+    // back to an old route after a shortcut or wrong turn. The GPS trace is
+    // the authoritative representation of the travelled path instead.
+    const originConnector = tourStarted
+      ? []
+      : currentLocation
+        ? buildLiveRoadGeometry(activeRoad, currentLocation,
+          NAVIGATION_ACCESS_CONNECTOR_MIN_METERS).access
+        : activeAccess.filter((segment) =>
+          isRenderableRouteSegment(segment) &&
+          distanceMetersBetween(segment[segment.length - 1], activeRoad[0]) < 1);
     return [...originConnector, ...destinationConnector];
   }, [accessSegmentsByLeg, currentLocation, hasVisitedProgress, roadSegments, tourStarted]);
 
@@ -3406,6 +3879,20 @@ const MyTourStart = () => {
         })),
     }),
     [completedAirSegments, completedRoadSegments]
+  );
+
+  const actualTravelledRouteLine = useMemo<FeatureCollection<LineString>>(
+    () => ({
+      type: 'FeatureCollection',
+      features: actualTravelledLocationSegments
+        .filter(isRenderableRouteSegment)
+        .map((coordinates) => ({
+          type: 'Feature' as const,
+          properties: {},
+          geometry: { type: 'LineString' as const, coordinates },
+        })),
+    }),
+    [actualTravelledLocationSegments],
   );
 
   const completedApproachRouteLine = useMemo<FeatureCollection<LineString>>(
@@ -3431,54 +3918,6 @@ const MyTourStart = () => {
     () => makeAccessConnectorDots(completedApproachAccessSegments),
     [completedApproachAccessSegments]
   );
-  const activeRouteCompletedShape = useMemo<FeatureCollection<LineString>>(() => {
-    const activePolyline: Coord[] | null =
-      isRenderableRouteSegment(roadSegments[0])
-        ? roadSegments[0]
-        : isRenderableRouteSegment(airSegments[0])
-          ? airSegments[0]
-          : null;
-    if (!activePolyline || !currentLocation) {
-      return { type: 'FeatureCollection', features: [] };
-    }
-    const activeAccess = accessSegmentsByLeg[0] || [];
-    const activeOrigin = activeAccess.find(isRenderableRouteSegment)?.[0] || activePolyline[0];
-    // A newly-created route begins at this same GPS position. Never label
-    // Mapbox's initial snap as travelled road before the user has moved.
-    if (distanceMetersBetween(currentLocation, activeOrigin) < 10) {
-      return { type: 'FeatureCollection', features: [] };
-    }
-    const projection = projectPointOnPolyline(currentLocation, activePolyline);
-    if (distanceMetersBetween(currentLocation, projection.point) >=
-      NAVIGATION_ACCESS_CONNECTOR_MIN_METERS) {
-      return { type: 'FeatureCollection', features: [] };
-    }
-    const split = splitPolylineAt(activePolyline, projection);
-    const completed = Array.isArray(split?.completed) ? split.completed : [];
-    if (polylineDistanceMeters(completed) < 10) {
-      return { type: 'FeatureCollection', features: [] };
-    }
-    const markerGap = distanceMetersBetween(currentLocation, projection.point);
-    // Never draw a solid diagonal from an off-road marker to the snapped
-    // route. That gap is represented only by the dedicated dotted access
-    // connector. The solid grey geometry remains actual road progress.
-    const completedToLiveMarker: Coord[] =
-      markerGap > 0.75 && markerGap < NAVIGATION_ACCESS_CONNECTOR_MIN_METERS
-        ? [...completed, currentLocation]
-        : completed;
-    if (completedToLiveMarker.length < 2) {
-      return { type: 'FeatureCollection', features: [] };
-    }
-    return {
-      type: 'FeatureCollection',
-      features: [{
-        type: 'Feature',
-        properties: {},
-        geometry: { type: 'LineString', coordinates: completedToLiveMarker },
-      }],
-    };
-  }, [accessSegmentsByLeg, airSegments, currentLocation, roadSegments]);
-
   // Stop name labels (native SymbolLayer — renders at every zoom level reliably)
   const unvisitedStopLabels = useMemo<FeatureCollection<Point>>(() => ({
     type: 'FeatureCollection',
@@ -3632,6 +4071,18 @@ const MyTourStart = () => {
   const currentMarkerNeedsStandalonePin = useMemo(
     () => Boolean(currentLocation),
     [currentLocation]
+  );
+  // While the user is still at the departure point, only show the normal
+  // blue current-location marker. Once they have genuinely moved away, add a
+  // small Google-Maps-style start marker so the beginning remains visible.
+  const shouldShowTourStartMarker = useMemo(
+    () => Boolean(
+      tourStarted &&
+      tourOrigin &&
+      currentLocation &&
+      distanceMetersBetween(tourOrigin, currentLocation) >= 20
+    ),
+    [currentLocation, tourOrigin, tourStarted],
   );
 
   const updateSelectedStopPosition = useCallback(async (stop: TourStop) => {
@@ -4037,13 +4488,53 @@ const MyTourStart = () => {
   }, [isOnline, locationUnavailable, pauseTourState, tourStarted]);
 
   useEffect(() => {
-    if (tourStarted && !isOnline) {
-      offlineAlertRef.current = true;
-      showInternetRequiredAlert();
+    if (!tourStarted) {
+      if (offlineAlertTimerRef.current) {
+        clearTimeout(offlineAlertTimerRef.current);
+        offlineAlertTimerRef.current = null;
+      }
+      offlineAlertRef.current = false;
       return;
     }
 
-    if (offlineAlertRef.current && isOnline) {
+    if (!isOnline) {
+      // Wait before warning: NetInfo can temporarily report unreachable on a
+      // weak connection even though the route currently on screen is usable.
+      if (offlineAlertRef.current) return;
+
+      offlineAlertRef.current = true;
+      offlineAlertTimerRef.current = setTimeout(() => {
+        offlineAlertTimerRef.current = null;
+        void checkInternetConnection().then((stillOffline) => {
+          if (!tourStartedRef.current) {
+            offlineAlertRef.current = false;
+            return;
+          }
+
+          if (!stillOffline) {
+            offlineAlertRef.current = false;
+            return;
+          }
+
+          // Navigation keeps its last valid route while offline. The user can
+          // close this warning and continue; it is shown only once per outage.
+          showInternetRequiredAlert({ blocking: false, closeLabel: 'Close' });
+        });
+      }, OFFLINE_TOUR_ALERT_DELAY_MS);
+      return () => {
+        if (offlineAlertTimerRef.current) {
+          clearTimeout(offlineAlertTimerRef.current);
+          offlineAlertTimerRef.current = null;
+        }
+      };
+    }
+
+    if (offlineAlertTimerRef.current) {
+      clearTimeout(offlineAlertTimerRef.current);
+      offlineAlertTimerRef.current = null;
+    }
+
+    if (offlineAlertRef.current) {
       offlineAlertRef.current = false;
       CustomAlert.dismiss();
       if (tourStarted && locationUnavailable) {
@@ -4069,6 +4560,16 @@ const MyTourStart = () => {
       if (nextState !== 'active' || (!tourStarted && !pausedByLocationRef.current)) return;
 
       let cancelled = false;
+      const refreshRouteFromResumedLocation = () => {
+        // The native foreground service may have advanced the location while
+        // an old Directions request was still pending. Invalidate that stale
+        // request before the map becomes visible, so return-from-background
+        // never briefly draws a route back to an old position.
+        routeRequestSequenceRef.current += 1;
+        routeRequestInFlightRef.current = null;
+        lastRouteRequestAtRef.current = 0;
+        setRouteRetryNonce((value) => value + 1);
+      };
       const resumeLocationPausedTour = async () => {
         if (!pausedByLocationRef.current) return;
         await locationPausePromiseRef.current;
@@ -4133,18 +4634,19 @@ const MyTourStart = () => {
           const nativeAccuracy = Number(nativeStatus.accuracy);
           const next: [number, number] = [nativeLongitude, nativeLatitude];
           setLocationUnavailable(false);
-          applyLiveLocationFix(next, {
+          const accepted = applyLiveLocationFix(next, {
             accuracy: nativeAccuracy,
             timestamp: Number(nativeStatus.timestamp),
             speed: Number(nativeStatus.speed),
           });
+          if (accepted) refreshRouteFromResumedLocation();
           return;
         }
 
         try {
           const next = await getCurrentPositionAsync(6000);
           if (cancelled) return;
-          applyLiveLocationFix(next);
+          if (applyLiveLocationFix(next)) refreshRouteFromResumedLocation();
           setLocationUnavailable(false);
           await resumeLocationPausedTour();
         } catch {
@@ -4315,89 +4817,23 @@ const MyTourStart = () => {
       return;
     }
 
-    if (recenterStartTimerRef.current) {
-      clearTimeout(recenterStartTimerRef.current);
-    }
-    if (recenterFollowTimerRef.current) {
-      clearTimeout(recenterFollowTimerRef.current);
-    }
-
     const targetCoordinate: [number, number] = [...target];
     const targetHeading = Number.isFinite(userHeading) ? userHeading : 0;
-    const activeRoad = roadSegmentsRef.current[0];
-    const activeAccess = accessSegmentsByLegRef.current[0] || [];
-    const nextStop = pendingNavigableStops[0];
-
-    // Frame only the upcoming portion of this leg. Including a far-away pin
-    // would zoom out to the entire city and defeat navigation framing.
-    let frameCoordinates: Coord[] = [targetCoordinate];
-    const userAccess = activeAccess.find(
-      (segment) =>
-        isRenderableRouteSegment(segment) &&
-        distanceMetersBetween(segment[0], targetCoordinate) <
-          distanceMetersBetween(segment[segment.length - 1], targetCoordinate)
-    );
-    if (userAccess) frameCoordinates.push(...userAccess.slice(1));
-    if (isRenderableRouteSegment(activeRoad)) {
-      const projected = projectPointOnPolyline(targetCoordinate, activeRoad);
-      const split = splitPolylineAt(activeRoad, projected);
-      const remaining = Array.isArray(split?.remaining) ? split.remaining : [];
-      let travelled = 0;
-      for (const coordinate of remaining) {
-        const previous = frameCoordinates[frameCoordinates.length - 1];
-        const step = distanceMetersBetween(previous, coordinate);
-        if (travelled > 0 && travelled + step > NAVIGATION_FRAME_MAX_ROUTE_METERS) break;
-        frameCoordinates.push(coordinate);
-        travelled += step;
-      }
-    }
-    if (
-      nextStop &&
-      distanceMetersBetween(targetCoordinate, nextStop.coordinate) <= NAVIGATION_FRAME_NEAR_STOP_METERS
-    ) {
-      frameCoordinates.push(nextStop.coordinate);
-    }
-    const uniqueFrameCoordinates = frameCoordinates.filter(
-      (coordinate, index, coordinates) =>
-        index === 0 || distanceMetersBetween(coordinates[index - 1], coordinate) > 0.5
-    );
-
-    // Mapbox ignores imperative center updates while native user tracking is
-    // active. Briefly release tracking, perform the Google Maps-style camera
-    // flight, then lock back into heading-follow mode when it completes.
-    setFollowMode('free');
-    recenterStartTimerRef.current = setTimeout(() => {
-      if (uniqueFrameCoordinates.length >= 2) {
-        const longitudes = uniqueFrameCoordinates.map((coordinate) => coordinate[0]);
-        const latitudes = uniqueFrameCoordinates.map((coordinate) => coordinate[1]);
-        cameraRef.current?.setCamera({
-          bounds: {
-            ne: [Math.max(...longitudes), Math.max(...latitudes)],
-            sw: [Math.min(...longitudes), Math.min(...latitudes)],
-          },
-          heading: targetHeading,
-          pitch: NAVIGATION_CAMERA_PITCH,
-          padding: navigationCameraPadding,
-          animationDuration: 800,
-          animationMode: 'easeTo',
-        });
-      } else {
-        cameraRef.current?.setCamera({
-          centerCoordinate: targetCoordinate,
-          zoomLevel: NAVIGATION_FOLLOW_ZOOM,
-          heading: targetHeading,
-          pitch: NAVIGATION_CAMERA_PITCH,
-          padding: navigationCameraPadding,
-          animationDuration: 800,
-          animationMode: 'easeTo',
-        });
-      }
-
-      recenterFollowTimerRef.current = setTimeout(() => {
-        setFollowMode('follow');
-      }, 950);
-    }, 50);
-  }, [handleCurrentLocation, navigationCameraPadding, pendingNavigableStops, userHeading]);
+    // Recenter goes straight to the validated live fix. Do not first frame
+    // route bounds: that produced the visible random-view hop before the
+    // camera eventually returned to the user.
+    setZoomLevel(NAVIGATION_FOLLOW_ZOOM);
+    setFollowMode('follow');
+    cameraRef.current?.setCamera({
+      centerCoordinate: targetCoordinate,
+      zoomLevel: NAVIGATION_FOLLOW_ZOOM,
+      heading: targetHeading,
+      pitch: NAVIGATION_CAMERA_PITCH,
+      padding: navigationCameraPadding,
+      animationDuration: 0,
+      animationMode: 'moveTo',
+    });
+  }, [handleCurrentLocation, navigationCameraPadding, userHeading]);
 
   // First road geometry can arrive after the GPS fix. Hand the initial tour
   // camera to the same safe next-leg framing used by the recenter control.
@@ -4911,17 +5347,19 @@ const MyTourStart = () => {
               onMapLoadingError={() => {
                 console.warn('[MyTourStart] Mapbox loading error');
               }}
-              onCameraChanged={() => {
-                if (selectedStop) {
-                  updateSelectedStopPosition(selectedStop).catch(() => { });
-                }
-              }}
-              onRegionDidChange={(feature: any) => {
+              onCameraChanged={(state: any) => {
+                // Programmatic camera moves are not user gestures. The old
+                // deprecated region callback classified Android animations
+                // as interaction and silently disabled follow mode.
                 if (
-                  feature?.properties?.isUserInteraction &&
+                  !tourStarted &&
+                  state?.gestures?.isGestureActive &&
                   followMode === 'follow'
                 ) {
                   setFollowMode('free');
+                }
+                if (selectedStop) {
+                  updateSelectedStopPosition(selectedStop).catch(() => { });
                 }
               }}
               onPress={() => {
@@ -4948,12 +5386,6 @@ const MyTourStart = () => {
                 animationMode="easeTo"
                 animationDuration={900}
               />
-
-              {completedRouteLine.features.length > 0 && (
-                <Mapbox.ShapeSource id="completedTourRouteLine" shape={completedRouteLine}>
-                  <Mapbox.LineLayer id="completedTourRouteLineLayer" style={completedRouteLineLayerStyle} />
-                </Mapbox.ShapeSource>
-              )}
 
               {completedAccessConnectorDots.features.length > 0 && (
                 <Mapbox.ShapeSource id="completedAccessRouteDots" shape={completedAccessConnectorDots}>
@@ -5006,9 +5438,29 @@ const MyTourStart = () => {
                 </Mapbox.ShapeSource>
               )}
 
-              <Mapbox.ShapeSource id="activeRouteCompletedLine" shape={activeRouteCompletedShape}>
-                <Mapbox.LineLayer id="activeRouteCompletedLineLayer" style={completedRouteLineLayerStyle} />
-              </Mapbox.ShapeSource>
+              {completedRouteLine.features.length > 0 && (
+                <Mapbox.ShapeSource id="completedTourRouteLine" shape={completedRouteLine}>
+                  <Mapbox.LineLayer id="completedTourRouteLineLayer" style={completedRouteLineLayerStyle} />
+                </Mapbox.ShapeSource>
+              )}
+
+              {actualTravelledRouteLine.features.length > 0 && (
+                <Mapbox.ShapeSource id="actualTravelledRouteLine" shape={actualTravelledRouteLine}>
+                  <Mapbox.LineLayer id="actualTravelledRouteLineLayer" style={completedRouteLineLayerStyle} />
+                </Mapbox.ShapeSource>
+              )}
+
+              {shouldShowTourStartMarker && tourOrigin ? (
+                <Mapbox.PointAnnotation
+                  id="tourStartMarker"
+                  coordinate={[...tourOrigin]}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={tourStartMarkerStyles.outer} pointerEvents="none">
+                    <View style={tourStartMarkerStyles.inner} />
+                  </View>
+                </Mapbox.PointAnnotation>
+              ) : null}
 
               {distanceLabels.features.length > 0 && (
                 <Mapbox.ShapeSource id="distanceLabels" shape={distanceLabels}>

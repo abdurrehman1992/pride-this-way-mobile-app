@@ -1285,8 +1285,13 @@ async function uriToBase64(
 const PHOTO_VERIFICATION_ERROR_MESSAGE =
   'Something went wrong while verifying your photo. Please try again.';
 const GEMINI_VERIFICATION_TIMEOUT_MS = 75_000;
-const GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION = 1280;
-const GEMINI_VERIFICATION_JPEG_QUALITY = 72;
+// A verification photo does not need a 4K upload. Keeping the request under
+// a few hundred KB materially improves cellular latency without affecting the
+// visual evidence Gemini needs for a place check.
+const GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION = 960;
+const GEMINI_VERIFICATION_JPEG_QUALITY = 62;
+const GEMINI_REFERENCE_MAX_IMAGE_DIMENSION = 640;
+const GEMINI_REFERENCE_JPEG_QUALITY = 58;
 
 export async function verifyPlaceImageMatch(
   place: {
@@ -1380,10 +1385,26 @@ A large destination may extend far beyond its coordinate pin, so the user does n
     // Gemini does not need a 4K camera image to identify a landmark. A
     // bounded JPEG keeps mobile uploads small and avoids aborting a free-tier
     // request before Gemini has time to respond.
-    const base64 = await uriToBase64(localImageUri, {
+    // Encode the captured photo and fetch/resize the target reference in
+    // parallel. Previously a mobile connection paid for these two expensive
+    // operations one after another before Gemini was even contacted.
+    const capturedImagePromise = uriToBase64(localImageUri, {
       maxDimension: GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION,
       quality: GEMINI_VERIFICATION_JPEG_QUALITY,
     });
+    const referenceImagePromise = place.imageUrl
+      ? uriToBase64(place.imageUrl, {
+        maxDimension: GEMINI_REFERENCE_MAX_IMAGE_DIMENSION,
+        quality: GEMINI_REFERENCE_JPEG_QUALITY,
+      }).catch((error) => {
+        console.warn('[aiService] Could not load Cloudinary reference image:', error);
+        return '';
+      })
+      : Promise.resolve('');
+    const [base64, referenceBase64] = await Promise.all([
+      capturedImagePromise,
+      referenceImagePromise,
+    ]);
 
     const defaultEndpoint =
       `${GEMINI_BASE_V1BETA}/models/${GEMINI_DEFAULT_MODEL}:generateContent`;
@@ -1456,32 +1477,17 @@ Return matched=true only when the captured image provides reasonable visual evid
     const parts: any[] = [{ text: prompt }];
 
     // Reference image from Cloudinary
-    verificationStage = 'loading destination reference image';
-    if (place.imageUrl) {
-      try {
-        const referenceBase64 = await uriToBase64(place.imageUrl, {
-          maxDimension: 896,
-          quality: 68,
-        });
+    if (referenceBase64) {
+      parts.push({
+        text: 'REFERENCE IMAGE OF TARGET PLACE:',
+      });
 
-        if (referenceBase64) {
-          parts.push({
-            text: 'REFERENCE IMAGE OF TARGET PLACE:',
-          });
-
-          parts.push({
-            inline_data: {
-              mime_type: 'image/jpeg',
-              data: referenceBase64,
-            },
-          });
-        }
-      } catch (error) {
-        console.warn(
-          '[aiService] Could not load Cloudinary reference image:',
-          error,
-        );
-      }
+      parts.push({
+        inline_data: {
+          mime_type: 'image/jpeg',
+          data: referenceBase64,
+        },
+      });
     }
 
     // Fresh captured image

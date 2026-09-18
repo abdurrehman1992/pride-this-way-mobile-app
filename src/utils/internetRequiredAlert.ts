@@ -16,6 +16,8 @@ export const openInternetSettings = async (): Promise<void> => {
 type InternetRequiredAlertOptions = {
   /** Active tours must stay blocked; pre-start/resume checks may be cancelled. */
   blocking?: boolean;
+  /** Label for the dismiss action when the alert is not blocking. */
+  closeLabel?: string;
 };
 
 export const showInternetRequiredAlert = (
@@ -29,7 +31,7 @@ export const showInternetRequiredAlert = (
         dismissOnPress: false,
       }]
     : [
-        { text: 'Cancel', style: 'cancel' as const },
+        { text: options.closeLabel || 'Cancel', style: 'cancel' as const },
         {
           text: 'Open Internet Settings',
           onPress: openInternetSettings,

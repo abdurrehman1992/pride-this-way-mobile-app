@@ -454,7 +454,9 @@ const LocationModal: React.FC<Props> = ({
                     </View>
                     <ActionTouchable
                         style={styles.currentLocation}
-                        onPress={getCurrentLocation}
+                        onPress={() => {
+                            void getCurrentLocation();
+                        }}
                         disabled={loadingLocation}
                     >
                         {loadingLocation ? (
@@ -479,11 +481,7 @@ const LocationModal: React.FC<Props> = ({
                             styles.scrollContentBottom,
                         ]}
                     >
-                        {showLoadingSuggestions ? (
-                            <View style={styles.emptyState}>
-                                <ActivityIndicator color={COLORS.BUTTON_COLOR} />
-                            </View>
-                        ) : filteredLocations.length > 0 && !selected ? ( // Added "&& !selected" here
+                        {showLoadingSuggestions ? null : filteredLocations.length > 0 && !selected ? ( // Added "&& !selected" here
                             <>
                                 {filteredLocations.map((item, i) => (
                                     <ActionTouchable

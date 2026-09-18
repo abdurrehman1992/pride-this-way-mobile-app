@@ -13,7 +13,7 @@ export const showToast = ({
   type,
   title,
   message,
-  duration = 2000,
+  duration = 5000,
 }: ToastOptions) => {
   Toast.show({
     type,
