@@ -1,9 +1,9 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React from "react";
 import {
   Modal,
   View,
   Text,
-  TouchableOpacity,
   TextInput,
   Image,
   StyleSheet,
@@ -49,12 +49,12 @@ const NameTourModal: React.FC<Props> = ({
   const handleConfirm = () => {
     const nextName = draftName.trim() || tourName;
     setTourName(nextName);
-    onConfirm(nextName);
+    return onConfirm(nextName);
   };
 
   const handleUpdateLaterPress = () => {
     setDraftName(tourName);
-    onUpdateLater?.();
+    return onUpdateLater?.();
   };
 
   return (
@@ -75,9 +75,9 @@ const NameTourModal: React.FC<Props> = ({
           <View style={styles.floatingImageWrapper}>
             <Image source={NameTourIcon} style={styles.floatingImage} />
           </View>
-          <TouchableOpacity style={styles.nameModalClose} onPress={handleClose}>
+          <ActionTouchable style={styles.nameModalClose} onPress={handleClose}>
             <CrossIcon width={12} height={12} />
-          </TouchableOpacity>
+          </ActionTouchable>
           <Text style={styles.nameModalTitle}>Name this Tour</Text>
           <Text style={styles.nameModalDesc}>Give your adventure a catchy name to save it to your list and easily find it later.</Text>
 
@@ -96,20 +96,20 @@ const NameTourModal: React.FC<Props> = ({
           />
 
           <View style={styles.nameModalButtonRow}>
-            <TouchableOpacity
+            <ActionTouchable
               testID="name-tour-update-later"
               style={styles.updateLaterBtn}
               onPress={handleUpdateLaterPress}
             >
               <Text style={styles.updateLaterText}>Update this Later</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
+            </ActionTouchable>
+            <ActionTouchable
               testID="name-tour-confirm"
               style={styles.confirmTourBtn}
               onPress={handleConfirm}
             >
               <Text style={styles.btnText}>Confirm</Text>
-            </TouchableOpacity>
+            </ActionTouchable>
           </View>
           </View>
         </ScrollView>

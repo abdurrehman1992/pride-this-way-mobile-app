@@ -1,11 +1,11 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ImageBackground,
-  TouchableOpacity,
-} from "react-native";
+  } from "react-native";
 import { COLORS } from "../../constants/colors";
 import {
   ForkIcon,
@@ -79,12 +79,12 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
     return <EventIcon width={9.92} height={12.05} />;
   };
 
-  const handleFavorite = () => {
+  const handleFavorite = async () => {
     if (favorite) {
-      removeFromFavorites(id);
+      await removeFromFavorites(id);
       showInfo('Favorites Removed', "Successfully removed from favorites");
     } else {
-      addToFavorites({
+      await addToFavorites({
         id,
         title,
         description,
@@ -99,7 +99,7 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
   };
 
   return (
-    <TouchableOpacity activeOpacity={0.8} onPress={onPress}>
+    <ActionTouchable activeOpacity={0.8} onPress={onPress}>
       <View style={styles.container}>
         <ImageBackground
           source={resolvedImage}
@@ -125,13 +125,13 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
               <Text style={styles.pillText}>{normalizedCategory}</Text>
             </View>
 
-            <TouchableOpacity onPress={handleFavorite}>
+            <ActionTouchable onPress={handleFavorite}>
               {favorite ? (
                 <RedHeartIcon width={15} height={12.91} />
               ) : (
                 <WhiteHeart width={15} height={12.91} />
               )}
-            </TouchableOpacity>
+            </ActionTouchable>
           </View>
 
           <View style={styles.bottomContent}>
@@ -147,7 +147,7 @@ const RecommendedForYou: React.FC<RecommendedProps> = ({
           </View>
         </ImageBackground>
       </View>
-    </TouchableOpacity>
+    </ActionTouchable>
   );
 };
 

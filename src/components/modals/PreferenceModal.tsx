@@ -1,9 +1,9 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useRef, useEffect } from "react";
 import {
     Modal,
     View,
     Text,
-    TouchableOpacity,
     StyleSheet,
     Animated,
     PanResponder,
@@ -118,11 +118,11 @@ const PreferenceModal: React.FC<Props> = ({
                             Select Preferences
                         </Text>
 
-                        <TouchableOpacity onPress={clearAll}>
+                        <ActionTouchable onPress={clearAll}>
                             <Text style={styles.clearText}>
                                 Clear All
                             </Text>
-                        </TouchableOpacity>
+                        </ActionTouchable>
                     </View>
 
                     {/* LIST */}
@@ -131,7 +131,7 @@ const PreferenceModal: React.FC<Props> = ({
                             const isLast = i === preferences.length - 1;
 
                             return (
-                                <TouchableOpacity
+                                <ActionTouchable
                                     key={i}
                                     style={[
                                         styles.prefItem,
@@ -149,7 +149,7 @@ const PreferenceModal: React.FC<Props> = ({
                                             {item}
                                         </Text>
                                     </View>
-                                </TouchableOpacity>
+                                </ActionTouchable>
                             );
                         })}
                     </ScrollView>
@@ -158,16 +158,16 @@ const PreferenceModal: React.FC<Props> = ({
                     {showTwoButtons && (
                         <View style={styles.rowButtons}>
 
-                            <TouchableOpacity
+                            <ActionTouchable
                                 style={styles.secondaryBtnSmall}
                                 onPress={onSecondary}
                             >
                                 <Text style={styles.secondaryText}>
                                     {secondaryText}
                                 </Text>
-                            </TouchableOpacity>
+                            </ActionTouchable>
 
-                            <TouchableOpacity
+                            <ActionTouchable
                                 style={[styles.primaryBtnSmall, !hasSelection && styles.primaryBtnSmallDisabled]}
                                 disabled={!hasSelection}
                                 onPress={() => {
@@ -181,13 +181,13 @@ const PreferenceModal: React.FC<Props> = ({
                                         return;
                                     }
 
-                                    onPrimary?.();
+                                    return onPrimary?.();
                                 }}
                             >
                                 <Text style={[styles.primaryText, !hasSelection && styles.primaryTextDisabled]}>
                                     {primaryText}
                                 </Text>
-                            </TouchableOpacity>
+                            </ActionTouchable>
 
                         </View>
                     )}

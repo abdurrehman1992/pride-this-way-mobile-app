@@ -1,8 +1,36 @@
 import {
+  buildLiveRoadGeometry,
   distanceMetersBetween,
   projectPointOnPolyline,
   splitPolylineAt,
 } from '../../src/utils/routeProgress';
+
+describe('live road access', () => {
+  const road: [number, number][] = [[0, 0], [0, 0.01]];
+
+  it('joins an indoor location to the exact remaining road start', () => {
+    const location: [number, number] = [0.001, 0.002];
+    const result = buildLiveRoadGeometry(road, location);
+    expect(result.access).toEqual([[location, result.remaining[0]]]);
+    expect(result.remaining[0]).toEqual([0, 0.002]);
+    expect(result.remaining).not.toContainEqual(location);
+  });
+
+  it('moves the connector with the user and removes it on reaching the road', () => {
+    const first = buildLiveRoadGeometry(road, [0.001, 0.002]);
+    const next = buildLiveRoadGeometry(road, [0.0005, 0.003]);
+    expect(next.access[0][0]).toEqual([0.0005, 0.003]);
+    expect(next.remaining[0]).not.toEqual(first.remaining[0]);
+    expect(buildLiveRoadGeometry(road, [0, 0.003]).access).toEqual([]);
+    expect(buildLiveRoadGeometry(road, [0.00001, 0.003]).access).toEqual([]);
+  });
+
+  it('clamps access to road endpoints and tolerates missing geometry', () => {
+    expect(buildLiveRoadGeometry(road, [0, -0.001]).access[0][1]).toEqual(road[0]);
+    expect(buildLiveRoadGeometry(road, [0, 0.011]).access[0][1]).toEqual(road[1]);
+    expect(buildLiveRoadGeometry([], [0, 0])).toEqual({ remaining: [], access: [] });
+  });
+});
 
 describe('distanceMetersBetween', () => {
   it('returns 0 for identical points', () => {

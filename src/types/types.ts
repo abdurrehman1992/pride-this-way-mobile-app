@@ -12,8 +12,10 @@ export type MyTourStackParamList = {
     tourName: string;
     cityLabel: string;
     recommendations: any[];
+    selectedTagIds?: string[];
     hasUnsavedChanges?: boolean;
     addedPlaceId?: string;
+    addedPlaceIds?: string[];
     timestamp?: number;
   };
   AddLocations: {
@@ -60,6 +62,16 @@ export type ProfileStackParamList = {
 
 export type FovoritesStackParamList = {
   Favorites: undefined,
+  RecommendationDetials: {
+    item: {
+      id: string;
+      title: string;
+      description: string;
+      rating: string;
+      image: string;
+      category: string;
+    };
+  },
 };
 export type MapStackParamList = {
   Map: undefined,

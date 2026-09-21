@@ -1,3 +1,5 @@
+import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
+
 export const validateName = (name: string) => {
     if (!name.trim()) return "Name is required";
 
@@ -121,27 +123,29 @@ export const validateLoginEmail = (email: string) => {
     return "";
 };
 
+export const normalizeInternationalPhone = (phone: string) => {
+    const compact = phone.trim().replace(/[\s().-]/g, '');
+    return compact.startsWith('00') ? `+${compact.slice(2)}` : compact;
+};
+
 export const validatePhone = (phone: string) => {
     const trimmed = phone.trim();
-    if (!trimmed) return "Phone number is required";
-    let cleaned = trimmed.replace(/(?!^\+)\D/g, "");
-    if (cleaned.startsWith("00")) {
-        cleaned = `+${cleaned.slice(2)}`;
+    if (!trimmed) return 'Phone number is required';
+
+    const normalized = normalizeInternationalPhone(trimmed);
+    if (!normalized.startsWith('+')) {
+        return 'Include the country prefix (for example, +92)';
     }
-    const internationalRegex = /^\+[1-9]\d{9,14}$/;
-    if (!cleaned.startsWith("+")) {
-        return "International prefix (+ or 00) is required";
+    if (!/^\+[1-9]\d{1,14}$/.test(normalized)) {
+        return 'Enter a valid international phone number';
     }
-    if (cleaned.length < 11) {
-        return "Phone number is too short";
+
+    const parsed = parsePhoneNumberFromString(normalized);
+    if (!parsed?.isValid()) {
+        return 'Enter a valid number for the selected country code';
     }
-    if (cleaned.length > 16) {
-        return "Phone number exceeds maximum length (15 digits)";
-    }
-    if (!internationalRegex.test(cleaned)) {
-        return "Enter a valid international number (e.g. +923436173864)";
-    }
-    return "";
+
+    return '';
 };
 
 export const validatePassword = (password: string) => {

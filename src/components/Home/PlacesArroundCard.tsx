@@ -1,10 +1,10 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
   StyleSheet,
   Image,
-  TouchableOpacity,
   DimensionValue,
 } from "react-native";
 import { COLORS } from "../../constants/colors";
@@ -40,6 +40,7 @@ type PlacesAroundCardProps = {
   hideRating?: boolean;
   hideLocation?: boolean;
   hideDivider?: boolean;
+  showFullText?: boolean;
   timeColor?: string;
   onPress?: () => void;
 };
@@ -59,6 +60,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   hideRating = false,
   hideLocation = false,
   hideDivider = false,
+  showFullText = false,
   timeColor = COLORS.TEXT_GREEN,
   onPress,
 }) => {
@@ -137,12 +139,12 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
     return <EventIcon width={12} height={14} />;
   };
 
-  const handleFavorite = () => {
+  const handleFavorite = async () => {
     if (favorite) {
-      removeFromFavorites(id);
+      await removeFromFavorites(id);
       showInfo('Favorites Removed', "Successfully removed from favorites");
     } else {
-      addToFavorites({
+      await addToFavorites({
         id,
         title,
         description,
@@ -158,7 +160,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
 
   const handleHeartPress = (event: any) => {
     event?.stopPropagation?.();
-    handleFavorite();
+    return handleFavorite();
   };
 
   const showRating = Boolean(rating) && !hideRating;
@@ -170,10 +172,10 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   const displayTime = time;
 
   return (
-    <TouchableOpacity
+    <ActionTouchable
       activeOpacity={0.9}
       onPress={onPress}
-      style={[{ ...styles.container, height: containerHeight }, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact]}
+      style={[{ ...styles.container, height: containerHeight }, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact, showFullText && styles.fullTextContainer]}
     >
       <View style={styles.topSection}>
         <Image
@@ -183,7 +185,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
           resizeMode="cover"
         />
 
-        <View style={styles.textContainer}>
+        <View style={[styles.textContainer, showFullText && styles.fullTextContent]}>
           <View style={styles.badge}>
             {renderBadgeIcon()}
             <Text style={styles.badgeText}>
@@ -200,7 +202,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
           </View>
 
           <View style={styles.titleRow}>
-            <Text style={styles.title} numberOfLines={1}>{title}</Text>
+            <Text style={styles.title} numberOfLines={showFullText ? undefined : 1}>{title}</Text>
             {showRating ? (
               <View style={styles.titleRating}>
                 <StarIcon width={12} height={12} />
@@ -209,12 +211,12 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
             ) : null}
           </View>
 
-          <Text style={styles.description} numberOfLines={1}>{description}</Text>
+          <Text style={styles.description} numberOfLines={showFullText ? undefined : 1}>{description}</Text>
         </View>
 
-        <TouchableOpacity style={styles.heartIcon} onPress={handleHeartPress}>
+        <ActionTouchable style={styles.heartIcon} onPress={handleHeartPress}>
           {favorite ? <RedHeartIcon width={15} height={13} /> : <HeartIcon width={15} height={13} />}
-        </TouchableOpacity>
+        </ActionTouchable>
       </View>
 
       {!hideDivider && <View style={styles.divider} />}
@@ -223,11 +225,11 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
         (() => {
           const justify = visibleCount === 1 ? 'flex-start' : 'space-between';
           return (
-            <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact, { justifyContent: justify as any }]}>
+            <View style={[styles.bottomSection, showFullText && styles.fullTextBottomSection, variant === "compact" && styles.bottomSectionCompact, { justifyContent: justify as any }]}>
                 {showLocation ? (
                 <View style={[styles.infoItem, styles.locationInfoItem]}>
                   <LocationIcon width={10} height={12} />
-                  <Text style={styles.infoText} numberOfLines={1} ellipsizeMode="tail">{location}</Text>
+                  <Text style={styles.infoText} numberOfLines={showFullText ? undefined : 1} ellipsizeMode="tail">{location}</Text>
                 </View>
               ) : null}
 
@@ -241,7 +243,7 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
           );
         })()
       ) : null}
-    </TouchableOpacity>
+    </ActionTouchable>
   );
 };
 
@@ -253,6 +255,18 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.WHITE,
     borderRadius: 14,
     paddingTop: 9,
+  },
+  fullTextContainer: {
+    height: 'auto',
+    minHeight: 96,
+    paddingBottom: 12,
+  },
+  fullTextContent: {
+    paddingRight: 12,
+  },
+  fullTextBottomSection: {
+    height: 'auto',
+    paddingTop: 12,
   },
   containerCompact: {
     paddingHorizontal: 0,

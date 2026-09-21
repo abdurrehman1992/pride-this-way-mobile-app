@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { NavigationContainer } from "@react-navigation/native";
+import { StatusBar } from "react-native";
+import { NavigationContainer, useNavigationContainerRef } from "@react-navigation/native";
 import Splash from "../screens/Splash";
 import AuthNavigator from "./AuthNavigator";
 import AppNavigator from "./AppNavigator";
@@ -11,16 +12,24 @@ import {
   setAuthInitialized,
 } from "../Redux/slices/authSlice";
 import { subscribeToAuthState } from "../services/authService";
-import {
-  getActiveTour,
-  pauseTourAfterTaskRemoval,
-} from "../services/myTourService";
-import {
-  clearNativeTourTaskRemoval,
-  getNativeTourLocationStatus,
-} from "../utils/nativeTourLocation";
+import { getActiveTour } from "../services/myTourService";
+import { getNativeTourLocationStatus } from "../utils/nativeTourLocation";
+import { useTourTrackingLifecycle } from "../hooks/useTourTrackingLifecycle";
+
+// These screens have an image or blue header behind the status bar.
+// All plain/light screens use dark system icons, including password recovery.
+const LIGHT_STATUS_BAR_SCREENS = new Set([
+  'Login', 'Signup', 'Home', 'MyTour', 'CreateTour', 'TourSuggestion',
+  'MyTourStart', 'Map', 'ForYou', 'Favorites', 'RecommendationDetials',
+]);
 
 const RootNavigator: React.FC = () => {
+  const navigationRef = useNavigationContainerRef();
+  const [activeScreen, setActiveScreen] = useState('Login');
+  const updateActiveScreen = () => {
+    const route = navigationRef.getCurrentRoute();
+    if (route) setActiveScreen(route.name);
+  };
   const [showSplash, setShowSplash] = useState(true);
   const [initialNavState, setInitialNavState] = useState<any>(undefined);
   const [navStateResolved, setNavStateResolved] = useState(false);
@@ -29,6 +38,8 @@ const RootNavigator: React.FC = () => {
     (state: RootState) => state.auth
   );
   const userId = user?.id;
+  // Wait for Firebase Auth: a persisted Redux user is not yet authenticated.
+  useTourTrackingLifecycle(initialized && isLoggedIn ? userId : undefined);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -67,41 +78,16 @@ const RootNavigator: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const [active, initialLocationStatus] = await Promise.all([
-          Promise.race([
-            getActiveTour(userId),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
-          ]),
-          getNativeTourLocationStatus(),
+        const active = await Promise.race([
+          getActiveTour(userId),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
         ]);
-
-        if (initialLocationStatus?.taskRemovedWhileTracking) {
-          const interruptedTourId =
-            initialLocationStatus.taskRemovedTourId || active?.id;
-          if (interruptedTourId) {
-            // Keep the native marker until Firestore accepts the pause. If the
-            // app is launched offline, the pending write can finish later in
-            // this session; otherwise the next cold launch retries it.
-            const reconciliation = pauseTourAfterTaskRemoval(interruptedTourId)
-              .then(clearNativeTourTaskRemoval)
-              .catch(() => undefined);
-            await Promise.race([
-              reconciliation,
-              new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
-            ]);
-          } else {
-            await clearNativeTourTaskRemoval();
-          }
-          if (!cancelled) {
-            // Do not restore an interrupted tour as active after a cold launch.
-            setInitialNavState(undefined);
-          }
-          return;
-        }
-
         // Read the switch immediately before constructing the restored route;
         // doing this after the Firestore lookup avoids passing a stale value if
         // the user toggles Location while the splash screen is visible.
+        const initialLocationStatus = active
+          ? await getNativeTourLocationStatus()
+          : null;
         if (cancelled) return;
         if (active) {
           setInitialNavState({
@@ -168,9 +154,22 @@ const RootNavigator: React.FC = () => {
   }
 
   return (
-    <NavigationContainer initialState={initialNavState}>
-      {isLoggedIn ? <AppNavigator /> : <AuthNavigator />}
-    </NavigationContainer>
+    <>
+      <StatusBar
+        hidden={false}
+        translucent
+        backgroundColor="transparent"
+        barStyle={LIGHT_STATUS_BAR_SCREENS.has(activeScreen) ? 'light-content' : 'dark-content'}
+      />
+      <NavigationContainer
+        ref={navigationRef}
+        initialState={initialNavState}
+        onReady={updateActiveScreen}
+        onStateChange={updateActiveScreen}
+      >
+        {isLoggedIn ? <AppNavigator /> : <AuthNavigator />}
+      </NavigationContainer>
+    </>
   );
 };
 

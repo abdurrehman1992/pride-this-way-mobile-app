@@ -1,6 +1,8 @@
 package com.pridethisway
 
 import android.Manifest
+import android.app.Activity
+import android.app.Application
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -13,17 +15,38 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 
 class TourLocationService : Service() {
 
   private lateinit var locationManager: LocationManager
   private val handler = Handler(Looper.getMainLooper())
   private var updatesRequested = false
+  private var requestedInBackgroundMode = false
+  private var appInForeground = true
+
+  // Tells when the tour UI leaves or returns to the screen (Home, Recents,
+  // another app). Pause, not stop: Recents keeps the app as a live, started
+  // preview, so pause is the only callback before the user can swipe it away.
+  private val activityCallbacks = object : Application.ActivityLifecycleCallbacks {
+    override fun onActivityResumed(activity: Activity) = onAppVisibilityChanged(true)
+    override fun onActivityPaused(activity: Activity) = onAppVisibilityChanged(false)
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+    override fun onActivityStarted(activity: Activity) = Unit
+    override fun onActivityStopped(activity: Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+    override fun onActivityDestroyed(activity: Activity) = Unit
+  }
+
+  private val showLeftAppWarning = Runnable { updateTourNotification(appVisible = false) }
 
   private val locationListener = object : LocationListener {
     override fun onLocationChanged(location: Location) {
@@ -35,8 +58,10 @@ class TourLocationService : Service() {
         .putLong("latitude_e6", (location.latitude * 1_000_000.0).toLong())
         .putLong("longitude_e6", (location.longitude * 1_000_000.0).toLong())
         .putFloat("accuracy", location.accuracy)
+        .putFloat("speed", if (location.hasSpeed()) location.speed else -1f)
         .putLong("timestamp", now)
         .apply()
+      appendTracePoint(location, now)
 
       emitLocation(
         type = "update",
@@ -44,6 +69,7 @@ class TourLocationService : Service() {
         location = location,
         timestamp = now,
       )
+      TourTrackingUploader.onLocation(this@TourLocationService, location)
     }
 
     override fun onProviderDisabled(provider: String) {
@@ -51,6 +77,7 @@ class TourLocationService : Service() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
           .putBoolean("locationEnabled", false)
           .apply()
+        TourTrackingUploader.onLocationUnavailable(this@TourLocationService)
         emitLocation(
           type = "unavailable",
           enabled = false,
@@ -76,6 +103,7 @@ class TourLocationService : Service() {
       if (!enabled) {
         emitLocation(type = "unavailable", enabled = false, location = null, timestamp = System.currentTimeMillis())
       }
+      TourTrackingUploader.onTick(this@TourLocationService, enabled)
       handler.postDelayed(this, 2_000L)
     }
   }
@@ -85,11 +113,14 @@ class TourLocationService : Service() {
     locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
     createNotificationChannel()
     startForegroundWithLocationType()
+    // A running tour replaces an earlier "tracking stopped" alert.
+    getSystemService(NotificationManager::class.java).cancel(ALERT_NOTIFICATION_ID)
+    application.registerActivityLifecycleCallbacks(activityCallbacks)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
-      stopTracking(clearTaskRemovalState = true)
+      stopTracking()
       stopSelf()
       return START_NOT_STICKY
     }
@@ -102,7 +133,9 @@ class TourLocationService : Service() {
     requestUpdates()
     handler.removeCallbacks(providerPoll)
     handler.post(providerPoll)
-    return START_STICKY
+    // Not sticky: once the app is closed or killed, tracking must not restart
+    // on its own without the tour UI.
+    return START_NOT_STICKY
   }
 
   private fun requestUpdates() {
@@ -113,19 +146,28 @@ class TourLocationService : Service() {
     }
 
     try {
+      // Full navigation rate while the tour UI is visible; a lighter rate when
+      // only the Firestore upload needs fixes (see TOUR_TRACKING_CONFIG).
+      val backgroundMode = !appInForeground
+      val (intervalMs, minDistanceMeters) = if (backgroundMode) {
+        TourTrackingUploader.backgroundGpsRequest(this)
+      } else {
+        FOREGROUND_GPS_INTERVAL_MS to FOREGROUND_GPS_MIN_DISTANCE_METERS
+      }
       val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
       providers.filter { provider ->
         try { locationManager.isProviderEnabled(provider) } catch (_: Exception) { false }
       }.forEach { provider ->
         locationManager.requestLocationUpdates(
           provider,
-          1_000L,
-          1f,
+          intervalMs,
+          minDistanceMeters,
           locationListener,
           Looper.getMainLooper(),
         )
       }
       updatesRequested = true
+      requestedInBackgroundMode = backgroundMode
     } catch (_: SecurityException) {
       emitLocation(type = "unavailable", enabled = false, location = null, timestamp = System.currentTimeMillis())
     }
@@ -141,18 +183,62 @@ class TourLocationService : Service() {
     updatesRequested = false
   }
 
-  private fun stopTracking(clearTaskRemovalState: Boolean) {
+  private fun applyGpsMode() {
+    if (updatesRequested && requestedInBackgroundMode != !appInForeground) {
+      removeUpdates()
+      requestUpdates()
+    }
+  }
+
+  private fun onAppVisibilityChanged(visible: Boolean) {
+    if (appInForeground == visible) return
+    Log.d(TAG, "Tour UI visible=$visible")
+    appInForeground = visible
+    applyGpsMode()
+    handler.removeCallbacks(showLeftAppWarning)
+    if (visible) {
+      updateTourNotification(appVisible = true)
+    } else {
+      // Skip pauses that end right away, such as a system dialog flashing by.
+      handler.postDelayed(showLeftAppWarning, LEFT_APP_WARNING_DELAY_MS)
+    }
+  }
+
+  private fun stopTracking() {
     handler.removeCallbacks(providerPoll)
     removeUpdates()
-    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().apply {
-      putBoolean("tracking", false)
-      if (clearTaskRemovalState) {
-        putBoolean("taskRemovedWhileTracking", false)
-        remove("taskRemovedAt")
-        remove("taskRemovedTourId")
-        remove("activeTourId")
+    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+      .putBoolean("tracking", false)
+      .putBoolean("taskRemovedWhileTracking", false)
+      .apply()
+  }
+
+  // JS can be paused while Android continues this foreground service. Keep a
+  // short, bounded history so the map can draw every recorded movement when
+  // the activity resumes instead of joining two distant points with a line.
+  private fun appendTracePoint(location: Location, timestamp: Long) {
+    try {
+      val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+      val points = JSONArray(prefs.getString(TRACE_POINTS_KEY, "[]") ?: "[]")
+      val retained = JSONArray()
+      val oldestAllowed = timestamp - TRACE_POINT_RETENTION_MS
+      for (index in 0 until points.length()) {
+        val point = points.optJSONObject(index) ?: continue
+        if (point.optLong("timestamp", 0L) >= oldestAllowed) retained.put(point)
       }
-    }.apply()
+      retained.put(
+        JSONObject()
+          .put("latitude", location.latitude)
+          .put("longitude", location.longitude)
+          .put("accuracy", location.accuracy.toDouble())
+          .put("speed", if (location.hasSpeed()) location.speed.toDouble() else -1.0)
+          .put("timestamp", timestamp),
+      )
+      while (retained.length() > MAX_TRACE_POINTS) retained.remove(0)
+      prefs.edit().putString(TRACE_POINTS_KEY, retained.toString()).apply()
+    } catch (_: Exception) {
+      // A trace cache is optional; the latest location is still persisted.
+    }
   }
 
   private fun hasLocationPermission(): Boolean =
@@ -171,6 +257,7 @@ class TourLocationService : Service() {
       intent.putExtra("latitude", location.latitude)
         .putExtra("longitude", location.longitude)
         .putExtra("accuracy", location.accuracy.toDouble())
+        .putExtra("speed", if (location.hasSpeed()) location.speed.toDouble() else -1.0)
     }
     sendBroadcast(intent)
   }
@@ -178,50 +265,21 @@ class TourLocationService : Service() {
   private fun createNotificationChannel() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val manager = getSystemService(NotificationManager::class.java)
+    // Android requires a notification while this foreground service runs; MIN
+    // keeps it out of the status bar and collapsed at the bottom of the shade.
+    // A channel's importance cannot be lowered after creation, so the earlier
+    // LOW channel is replaced.
+    manager.deleteNotificationChannel(LEGACY_CHANNEL_ID)
     manager.createNotificationChannel(
-      NotificationChannel(CHANNEL_ID, "Active tour location", NotificationManager.IMPORTANCE_LOW)
+      NotificationChannel(CHANNEL_ID, "Active tour location", NotificationManager.IMPORTANCE_MIN)
     )
     manager.createNotificationChannel(
-      NotificationChannel(
-        TASK_REMOVED_CHANNEL_ID,
-        "Tour status updates",
-        NotificationManager.IMPORTANCE_DEFAULT,
-      )
+      NotificationChannel(ALERT_CHANNEL_ID, "Tour tracking alerts", NotificationManager.IMPORTANCE_HIGH)
     )
   }
 
   private fun startForegroundWithLocationType() {
-    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-    val contentIntent = launchIntent?.let {
-      PendingIntent.getActivity(
-        this,
-        0,
-        it,
-        PendingIntent.FLAG_UPDATE_CURRENT or
-          (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0),
-      )
-    }
-    val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      Notification.Builder(this, CHANNEL_ID)
-        .setContentTitle("Tour in progress")
-        .setContentText("Location is active for routing. Open the app to pause the tour.")
-        .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-        .setOngoing(true)
-        .setCategory(Notification.CATEGORY_SERVICE)
-        .apply { contentIntent?.let(::setContentIntent) }
-        .build()
-    } else {
-      @Suppress("DEPRECATION")
-      Notification.Builder(this)
-        .setContentTitle("Tour in progress")
-        .setContentText("Location is active for routing. Open the app to pause the tour.")
-        .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-        .setOngoing(true)
-        .setCategory(Notification.CATEGORY_SERVICE)
-        .apply { contentIntent?.let(::setContentIntent) }
-        .build()
-    }
-
+    val notification = buildTourNotification(appVisible = true)
     if (Build.VERSION.SDK_INT >= 29) {
       startForeground(
         NOTIFICATION_ID,
@@ -233,81 +291,105 @@ class TourLocationService : Service() {
     }
   }
 
-  override fun onDestroy() {
-    // Keep the task-removal marker until the next launch has reconciled the
-    // tour. A normal explicit pause clears it before stopping the service.
-    stopTracking(clearTaskRemovalState = false)
-    super.onDestroy()
-  }
-
-  override fun onTaskRemoved(rootIntent: Intent?) {
-    // This runs only when the Android task is actually removed from Recents;
-    // screen lock and a normal Home/background transition do not trigger it.
-    handler.removeCallbacks(providerPoll)
-    removeUpdates()
-
-    val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-    val activeTourId = prefs.getString("activeTourId", null)
-    prefs.edit()
-      .putBoolean("tracking", false)
-      .putBoolean("taskRemovedWhileTracking", true)
-      .putLong("taskRemovedAt", System.currentTimeMillis())
-      .apply {
-        if (!activeTourId.isNullOrBlank()) {
-          putString("taskRemovedTourId", activeTourId)
-        }
-      }
-      .apply()
-
-    showTaskRemovedNotification()
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-      stopForeground(STOP_FOREGROUND_REMOVE)
+  /**
+   * The single notification of a running tour. Android requires one while
+   * this service runs: it stays quiet while the tour UI is visible and turns
+   * into a heads-up warning when the user leaves the app, so closing the app
+   * from Recents (which stops tracking) is never a surprise.
+   */
+  private fun buildTourNotification(appVisible: Boolean): Notification {
+    val title = if (appVisible) "Tour in progress" else "Your tour is still running"
+    val text = if (appVisible) {
+      "Location is active for your tour. Closing the app from recent apps stops tracking."
+    } else {
+      "Keep Pride This Way open in the background. If you close it from recent apps, location tracking will stop."
+    }
+    val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      Notification.Builder(this, if (appVisible) CHANNEL_ID else ALERT_CHANNEL_ID)
     } else {
       @Suppress("DEPRECATION")
-      stopForeground(true)
+      Notification.Builder(this)
+        .setPriority(if (appVisible) Notification.PRIORITY_MIN else Notification.PRIORITY_HIGH)
     }
-    stopSelf()
-
-    super.onTaskRemoved(rootIntent)
+    return builder
+      .setContentTitle(title)
+      .setContentText(text)
+      .setStyle(Notification.BigTextStyle().bigText(text))
+      .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+      .setOngoing(true)
+      .setCategory(Notification.CATEGORY_SERVICE)
+      .apply { launchAppIntent()?.let(::setContentIntent) }
+      .build()
   }
 
-  private fun showTaskRemovedNotification() {
-    if (
-      Build.VERSION.SDK_INT >= 33 &&
-      ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-        PackageManager.PERMISSION_GRANTED
-    ) {
-      return
-    }
+  private fun updateTourNotification(appVisible: Boolean) {
+    // Same id as the foreground notification: replaced, never a second one.
+    getSystemService(NotificationManager::class.java)
+      .notify(NOTIFICATION_ID, buildTourNotification(appVisible))
+  }
 
-    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-    val contentIntent = launchIntent?.let {
+  private fun launchAppIntent(): PendingIntent? =
+    packageManager.getLaunchIntentForPackage(packageName)?.let {
       PendingIntent.getActivity(
         this,
-        1,
+        0,
         it,
         PendingIntent.FLAG_UPDATE_CURRENT or
           (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0),
       )
     }
+
+  private fun showTourAlert(title: String, text: String) {
+    if (Build.VERSION.SDK_INT >= 33 &&
+      ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
     val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      Notification.Builder(this, TASK_REMOVED_CHANNEL_ID)
+      Notification.Builder(this, ALERT_CHANNEL_ID)
     } else {
       @Suppress("DEPRECATION")
-      Notification.Builder(this)
+      Notification.Builder(this).setPriority(Notification.PRIORITY_HIGH)
     }
     val notification = builder
-      .setContentTitle("Tour paused")
-      .setContentText("Location tracking stopped because the app was removed. Tap to resume your tour.")
+      .setContentTitle(title)
+      .setContentText(text)
+      .setStyle(Notification.BigTextStyle().bigText(text))
       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
       .setAutoCancel(true)
-      .setCategory(Notification.CATEGORY_STATUS)
-      .apply { contentIntent?.let(::setContentIntent) }
+      // Own group: otherwise Android bundles it with the silent ongoing tour
+      // notification and the warning is hidden inside that bundle.
+      .setGroup(ALERT_GROUP_KEY)
+      .apply { launchAppIntent()?.let(::setContentIntent) }
       .build()
+    getSystemService(NotificationManager::class.java).notify(ALERT_NOTIFICATION_ID, notification)
+  }
 
-    getSystemService(NotificationManager::class.java)
-      .notify(TASK_REMOVED_NOTIFICATION_ID, notification)
+  override fun onDestroy() {
+    application.unregisterActivityLifecycleCallbacks(activityCallbacks)
+    handler.removeCallbacks(showLeftAppWarning)
+    // An update posted while stopping would otherwise outlive the service.
+    getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+    stopTracking()
+    super.onDestroy()
+  }
+
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    // Closing the app from Recents ends location tracking. Android does not
+    // let an app block or confirm that swipe, so the user was warned when the
+    // app left the screen (onAppVisibilityChanged) and is told now. The tour
+    // itself stays active and tracking resumes when the app is reopened.
+    TourTrackingUploader.stopSession(this, "app_closed")
+    stopTracking()
+    handler.removeCallbacks(showLeftAppWarning)
+    showTourAlert(
+      "Location tracking stopped",
+      "You closed Pride This Way, so your tour location is no longer tracked. Open the app to continue your tour.",
+    )
+    stopForeground(STOP_FOREGROUND_REMOVE)
+    stopSelf()
+    super.onTaskRemoved(rootIntent)
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -318,10 +400,22 @@ class TourLocationService : Service() {
     const val EVENT_ACTION = "com.pridethisway.TOUR_LOCATION_EVENT"
     const val JS_EVENT = "TourLocationEvent"
     const val PREFS_NAME = "tour_location_state"
-    private const val CHANNEL_ID = "active_tour_location"
-    private const val TASK_REMOVED_CHANNEL_ID = "tour_status_updates"
+    const val TRACE_POINTS_KEY = "trace_points"
+    private const val CHANNEL_ID = "active_tour_location_min"
+    private const val LEGACY_CHANNEL_ID = "active_tour_location"
     private const val NOTIFICATION_ID = 4201
-    private const val TASK_REMOVED_NOTIFICATION_ID = 4202
+
+    private const val TAG = "TourLocationService"
+    private const val ALERT_CHANNEL_ID = "tour_tracking_alerts"
+    private const val ALERT_NOTIFICATION_ID = 4202
+    private const val ALERT_GROUP_KEY = "com.pridethisway.TOUR_TRACKING_ALERT"
+    private const val LEFT_APP_WARNING_DELAY_MS = 700L
+
+    // Navigation rate while the tour UI is visible.
+    private const val FOREGROUND_GPS_INTERVAL_MS = 1_000L
+    private const val FOREGROUND_GPS_MIN_DISTANCE_METERS = 1f
+    private const val TRACE_POINT_RETENTION_MS = 30 * 60 * 1_000L
+    private const val MAX_TRACE_POINTS = 1_000
 
     fun isLocationEnabled(context: Context): Boolean {
       val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false

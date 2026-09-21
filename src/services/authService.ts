@@ -2,6 +2,10 @@ import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import firestore, {
   FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
+import { stopNativeTourLocation } from '../utils/nativeTourLocation';
+import { unregisterPushToken } from './pushNotificationService';
+import { stopTourTrackingForSignOut } from './tourTrackingService';
+import { normalizeInternationalPhone, validatePhone } from '../utils/validation';
 
 const USERS_COLLECTION = 'users';
 const DEFAULT_PROFILE_IMAGE =
@@ -160,7 +164,9 @@ export const signupUser = async (data: SignupPayload): Promise<AuthSession> => {
     const email = data.email.trim().toLowerCase();
     const password = data.password.trim();
     const fullName = data.fullName.trim();
-    const phone = data.phone.trim();
+    const phoneError = validatePhone(data.phone);
+    if (phoneError) throw new Error(phoneError);
+    const phone = normalizeInternationalPhone(data.phone);
 
     const credential = await auth().createUserWithEmailAndPassword(
       email,
@@ -227,7 +233,9 @@ export const updateCurrentUserProfile = async ({
 
     const trimmedName = fullName.trim();
     const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPhone = phone.trim();
+    const phoneError = validatePhone(phone);
+    if (phoneError) throw new Error(phoneError);
+    const trimmedPhone = normalizeInternationalPhone(phone);
 
     if (currentUser.displayName !== trimmedName) {
       await currentUser.updateProfile({ displayName: trimmedName });
@@ -282,6 +290,14 @@ export const changeCurrentUserPassword = async ({
 };
 
 export const logoutUser = async () => {
+  const userId = auth().currentUser?.uid;
+  // Stop tour tracking and tracking alerts while the session can still write
+  // the final state.
+  await stopTourTrackingForSignOut();
+  await stopNativeTourLocation();
+  if (userId) {
+    await unregisterPushToken(userId);
+  }
   await auth().signOut();
 };
 

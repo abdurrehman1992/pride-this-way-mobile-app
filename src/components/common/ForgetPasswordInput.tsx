@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import PasswordVisibilityButton from "./PasswordVisibilityButton";
 import {
   View,
   TextInput,
@@ -27,7 +28,7 @@ const ForgetPasswordInput: React.FC<Props> = ({
   keyboardType,
   error,
 }) => {
-  const isHidden = secureTextEntry;
+  const [isHidden, setIsHidden] = useState(secureTextEntry);
 
   return (
     <View style={styles.container}>
@@ -35,7 +36,7 @@ const ForgetPasswordInput: React.FC<Props> = ({
 
       <View style={styles.inputWrapper}>
         {!value && placeholder ? (
-          <View pointerEvents="none" style={styles.placeholderOverlay}>
+          <View pointerEvents="none" style={[styles.placeholderOverlay, secureTextEntry && styles.passwordPlaceholder]}>
             <Text
               numberOfLines={1}
               ellipsizeMode="tail"
@@ -49,7 +50,9 @@ const ForgetPasswordInput: React.FC<Props> = ({
           placeholder=""
           value={value}
           onChangeText={onChangeText}
-          secureTextEntry={isHidden}
+          secureTextEntry={secureTextEntry && isHidden}
+          autoCorrect={secureTextEntry ? false : undefined}
+          spellCheck={secureTextEntry ? false : undefined}
           style={styles.input}
           autoCapitalize="none"
           keyboardType={keyboardType}
@@ -57,6 +60,12 @@ const ForgetPasswordInput: React.FC<Props> = ({
           numberOfLines={1}
           textAlignVertical="center"
         />
+        {secureTextEntry && (
+          <PasswordVisibilityButton
+            hidden={isHidden}
+            onPress={() => setIsHidden((hidden) => !hidden)}
+          />
+        )}
       </View>
 
       {Array.isArray(error) ? (
@@ -116,6 +125,9 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     justifyContent: "center",
+  },
+  passwordPlaceholder: {
+    right: 60,
   },
   placeholder: {
     color: COLORS.FORGOT_PLACEHOLDER,

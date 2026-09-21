@@ -1039,7 +1039,41 @@ function bytesToBase64(bytes: Uint8Array): string {
   return base64;
 }
 
-async function uriToBase64(uri: string): Promise<string> {
+type ImageEncodingOptions = {
+  maxDimension?: number;
+  quality?: number;
+};
+
+async function encodeImageToBase64(
+  image: any,
+  { maxDimension, quality = 85 }: ImageEncodingOptions,
+): Promise<string> {
+  let encodedImage = image;
+  try {
+    const largestSide = Math.max(image.width, image.height);
+    if (maxDimension && largestSide > maxDimension) {
+      const scale = maxDimension / largestSide;
+      encodedImage = await image.resizeAsync(
+        Math.max(1, Math.round(image.width * scale)),
+        Math.max(1, Math.round(image.height * scale)),
+      );
+    }
+    const encoded = await encodedImage.toEncodedImageDataAsync('jpg', quality);
+    return bytesToBase64(new Uint8Array(encoded.buffer));
+  } finally {
+    if (encodedImage !== image && typeof encodedImage.dispose === 'function') {
+      encodedImage.dispose();
+    }
+    if (typeof image.dispose === 'function') {
+      image.dispose();
+    }
+  }
+}
+
+async function uriToBase64(
+  uri: string,
+  { maxDimension, quality = 85 }: ImageEncodingOptions = {},
+): Promise<string> {
   const dataUriMatch = uri.match(/^data:[^;,]+;base64,(.+)$/i);
   if (dataUriMatch) {
     return dataUriMatch[1];
@@ -1051,19 +1085,39 @@ async function uriToBase64(uri: string): Promise<string> {
   if (/^(?:file:\/\/|content:\/\/)/i.test(uri) || uri.startsWith('/')) {
     const filePath = uri.replace(/^file:\/\//i, '');
     const image = await loadImage({ filePath });
-    const encoded = await image.toEncodedImageDataAsync('jpg', 85);
-    return bytesToBase64(new Uint8Array(encoded.buffer));
+    return encodeImageToBase64(image, { maxDimension, quality });
   }
 
   if (!/^https?:\/\//i.test(uri) && !/^data:/i.test(uri)) {
     throw new Error(`Unsupported captured image URI: ${uri.slice(0, 80)}`);
   }
 
+  // Use the native image loader first so remote reference photos are resized
+  // before being added to Gemini's request. Some hosts/loaders cannot decode
+  // a URL natively, in which case the original fetch fallback stays intact.
+  if (maxDimension) {
+    try {
+      const image = await loadImage({ url: uri });
+      return encodeImageToBase64(image, { maxDimension, quality });
+    } catch {
+      // Fall back to direct download below.
+    }
+  }
+
   console.log('[aiService] Downloading remote image for verification:', {
     scheme: uri.split(':')[0],
     host: uri.startsWith('http') ? new URL(uri).host : undefined,
   });
-  const response = await fetch(uri);
+  const remoteImageController = maxDimension ? new AbortController() : null;
+  const remoteImageTimeout = remoteImageController
+    ? setTimeout(() => remoteImageController.abort(), 7_000)
+    : null;
+  let response: Response;
+  try {
+    response = await fetch(uri, remoteImageController ? { signal: remoteImageController.signal } : undefined);
+  } finally {
+    if (remoteImageTimeout) clearTimeout(remoteImageTimeout);
+  }
   if (!response.ok) {
     throw new Error(`Image download failed with HTTP ${response.status}`);
   }
@@ -1226,6 +1280,19 @@ async function uriToBase64(uri: string): Promise<string> {
 // }
 
 
+// Shown for technical failures (AI service errors, bad responses, missing
+// configuration). The details are logged, never shown to the user.
+const PHOTO_VERIFICATION_ERROR_MESSAGE =
+  'Something went wrong while verifying your photo. Please try again.';
+const GEMINI_VERIFICATION_TIMEOUT_MS = 75_000;
+// A verification photo does not need a 4K upload. Keeping the request under
+// a few hundred KB materially improves cellular latency without affecting the
+// visual evidence Gemini needs for a place check.
+const GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION = 960;
+const GEMINI_VERIFICATION_JPEG_QUALITY = 62;
+const GEMINI_REFERENCE_MAX_IMAGE_DIMENSION = 640;
+const GEMINI_REFERENCE_JPEG_QUALITY = 58;
+
 export async function verifyPlaceImageMatch(
   place: {
     title?: string;
@@ -1312,9 +1379,32 @@ A large destination may extend far beyond its coordinate pin, so the user does n
     : 'image/jpeg';
 
   let verificationStage = `preparing captured image (${localImageUri.split(':')[0] || 'local'})`;
+  let didRequestTimeout = false;
 
   try {
-    const base64 = await uriToBase64(localImageUri);
+    // Gemini does not need a 4K camera image to identify a landmark. A
+    // bounded JPEG keeps mobile uploads small and avoids aborting a free-tier
+    // request before Gemini has time to respond.
+    // Encode the captured photo and fetch/resize the target reference in
+    // parallel. Previously a mobile connection paid for these two expensive
+    // operations one after another before Gemini was even contacted.
+    const capturedImagePromise = uriToBase64(localImageUri, {
+      maxDimension: GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION,
+      quality: GEMINI_VERIFICATION_JPEG_QUALITY,
+    });
+    const referenceImagePromise = place.imageUrl
+      ? uriToBase64(place.imageUrl, {
+        maxDimension: GEMINI_REFERENCE_MAX_IMAGE_DIMENSION,
+        quality: GEMINI_REFERENCE_JPEG_QUALITY,
+      }).catch((error) => {
+        console.warn('[aiService] Could not load Cloudinary reference image:', error);
+        return '';
+      })
+      : Promise.resolve('');
+    const [base64, referenceBase64] = await Promise.all([
+      capturedImagePromise,
+      referenceImagePromise,
+    ]);
 
     const defaultEndpoint =
       `${GEMINI_BASE_V1BETA}/models/${GEMINI_DEFAULT_MODEL}:generateContent`;
@@ -1329,9 +1419,10 @@ A large destination may extend far beyond its coordinate pin, so the user does n
     } else if (GEMINI_TOKEN) {
       headers.Authorization = `Bearer ${GEMINI_TOKEN}`;
     } else {
+      console.error('[aiService] Gemini credentials missing for place verification');
       return {
         matched: false,
-        reason: 'AI verification is unavailable because no Gemini API key is configured.',
+        reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
         confidence: 0,
       };
     }
@@ -1386,29 +1477,17 @@ Return matched=true only when the captured image provides reasonable visual evid
     const parts: any[] = [{ text: prompt }];
 
     // Reference image from Cloudinary
-    verificationStage = 'loading destination reference image';
-    if (place.imageUrl) {
-      try {
-        const referenceBase64 = await uriToBase64(place.imageUrl);
+    if (referenceBase64) {
+      parts.push({
+        text: 'REFERENCE IMAGE OF TARGET PLACE:',
+      });
 
-        if (referenceBase64) {
-          parts.push({
-            text: 'REFERENCE IMAGE OF TARGET PLACE:',
-          });
-
-          parts.push({
-            inline_data: {
-              mime_type: 'image/jpeg',
-              data: referenceBase64,
-            },
-          });
-        }
-      } catch (error) {
-        console.warn(
-          '[aiService] Could not load Cloudinary reference image:',
-          error,
-        );
-      }
+      parts.push({
+        inline_data: {
+          mime_type: 'image/jpeg',
+          data: referenceBase64,
+        },
+      });
     }
 
     // Fresh captured image
@@ -1433,7 +1512,10 @@ Return matched=true only when the captured image provides reasonable visual evid
     });
 
     const requestController = new AbortController();
-    const requestTimeoutId = setTimeout(() => requestController.abort(), 30000);
+    const requestTimeoutId = setTimeout(() => {
+      didRequestTimeout = true;
+      requestController.abort();
+    }, GEMINI_VERIFICATION_TIMEOUT_MS);
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -1466,8 +1548,7 @@ Return matched=true only when the captured image provides reasonable visual evid
 
       return {
         matched: false,
-        reason: `AI verification failed: ${errText || 'Unable to verify this location right now.'
-          }`,
+        reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
         confidence: 0,
       };
     }
@@ -1484,8 +1565,7 @@ Return matched=true only when the captured image provides reasonable visual evid
     if (!rawText) {
       return {
         matched: false,
-        reason:
-          'AI verification did not return a result. Please try again with a clear photo.',
+        reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
         confidence: 0,
       };
     }
@@ -1529,15 +1609,26 @@ Return matched=true only when the captured image provides reasonable visual evid
       confidence,
     };
   } catch (error) {
-    console.error(
-      `[aiService] place verification error while ${verificationStage}:`,
-      error,
-    );
+    const wasAborted =
+      error instanceof Error && /abort/i.test(error.message);
+    // A timeout is a recoverable free-tier/network condition. Keep it out of
+    // the red RN error overlay and give the user an actionable retry message.
+    if (wasAborted) {
+      console.warn(
+        `[aiService] Gemini verification ${didRequestTimeout ? 'timed out' : 'was cancelled'} while ${verificationStage}.`,
+      );
+    } else {
+      console.error(
+        `[aiService] place verification error while ${verificationStage}:`,
+        error,
+      );
+    }
 
     return {
       matched: false,
-      reason:
-        `AI verification could not compare this photo while ${verificationStage}. Please check your internet connection and try again.`,
+      reason: wasAborted
+        ? 'Verification took too long. Please check your internet connection and try again.'
+        : PHOTO_VERIFICATION_ERROR_MESSAGE,
       confidence: 0,
     };
   }

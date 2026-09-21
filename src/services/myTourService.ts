@@ -2,6 +2,10 @@ import firestore, {
   FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
 import { sumVisitedPointsFromItems } from '../utils/rewardPoints';
+import {
+  createCanonicalTagResolver,
+  matchesSelectedCity,
+} from '../utils/recommendationMatching';
 import { searchPlaceSuggestions } from './mapboxSearch';
 
 type Coordinates = {
@@ -192,6 +196,27 @@ const TOURS_COLLECTION = 'tours';
 const USERS_COLLECTION = 'users';
 const FAVORITES_SUBCOLLECTION = 'favorites';
 // const FAVORITES_SUBCOLLECTION = 'favoritePlaces';
+const FIRESTORE_OPERATION_TIMEOUT_MS = 12_000;
+
+// React Native Firestore can wait indefinitely for a server acknowledgement
+// on weak/cellular transitions. A user action must always settle instead of
+// leaving a confirmation modal spinning forever.
+const withFirestoreTimeout = <T,>(operation: Promise<T>, label: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out. Please check your connection and try again.`));
+    }, FIRESTORE_OPERATION_TIMEOUT_MS);
+    operation.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 
 
 const rescheduleOtherActiveTours = async ({
@@ -778,14 +803,14 @@ export const fetchUpcomingEventSuggestions = async ({
   const cutoff = new Date(now);
   cutoff.setMonth(cutoff.getMonth() + 3);
 
-  const normalizedLocation = normalizeText(locationLabel);
+  const [snapshot, tags] = await Promise.all([
+    firestore().collection(EVENTS_COLLECTION).get(),
+    fetchTourTags().catch(() => []),
+  ]);
+  const canonicalTag = createCanonicalTagResolver(tags);
   const requestedTagIds = new Set(
-    (tagIds || []).map((tagId) => normalizeTagId(tagId)).filter(Boolean)
+    (tagIds || []).map(canonicalTag).filter(Boolean)
   );
-
-  const snapshot = await firestore()
-    .collection(EVENTS_COLLECTION)
-    .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
 
   return snapshot.docs
     .map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
@@ -808,21 +833,20 @@ export const fetchUpcomingEventSuggestions = async ({
       );
     })
     .filter((event: FirebaseEvent) => {
-      if (!normalizedLocation) {
-        return true;
-      }
-
-      return locationMatches(locationLabel, event.city_name, event.country);
+      return matchesSelectedCity(locationLabel, event.city_name);
     })
     .map((event: FirebaseEvent) => ({
       event,
       matchingTags: (event.tag_ids || []).reduce(
         (count: number, tagId: string) => {
-          return requestedTagIds.has(normalizeTagId(tagId)) ? count + 1 : count;
+          return requestedTagIds.has(canonicalTag(tagId)) ? count + 1 : count;
         },
         0
       ),
     }))
+    .filter(({ matchingTags }) =>
+      requestedTagIds.size === 0 || matchingTags > 0
+    )
     .sort((a, b) => {
       if (b.matchingTags !== a.matchingTags) {
         return b.matchingTags - a.matchingTags;
@@ -886,17 +910,7 @@ export const fetchRecommendedRoutes = async ({
   // Routes created by different data flows may store either the tag document
   // id or the tag name. Resolve both forms to one canonical key before
   // counting matches.
-  const tagAliases = new Map<string, string>();
-  tags.forEach((tag) => {
-    const canonicalId = normalizeText(tag.id);
-    if (!canonicalId) return;
-    tagAliases.set(canonicalId, canonicalId);
-    tagAliases.set(normalizeText(tag.name), canonicalId);
-  });
-  const canonicalTag = (value?: string | null) => {
-    const normalized = normalizeText(value);
-    return normalized ? tagAliases.get(normalized) || normalized : '';
-  };
+  const canonicalTag = createCanonicalTagResolver(tags);
 
   const normalizedSelectedTagIds = Array.from(
     new Set(selectedTagIds.map(canonicalTag).filter(Boolean))
@@ -1264,11 +1278,14 @@ export const saveUserTour = async ({
 }) => {
   const now = new Date().toISOString();
   if (status === 'active') {
-    await rescheduleOtherActiveTours({
+    // This housekeeping query must not delay the user's Save/Start action.
+    // The tour document itself is written first; the cleanup converges in the
+    // background and failures are retried on the next active save.
+    void rescheduleOtherActiveTours({
       userId,
       excludeTourId: tourId,
       scheduledDate: now,
-    });
+    }).catch(() => undefined);
   }
 
   const allPlaces = places.map((place) => {
@@ -1467,7 +1484,7 @@ export const saveUserTour = async ({
 
   let savedId: string;
   if (tourId) {
-    await firestore()
+    await withFirestoreTimeout(firestore()
       .collection(TOURS_COLLECTION)
       .doc(tourId)
       .set(
@@ -1475,27 +1492,33 @@ export const saveUserTour = async ({
           ...payload,
         },
         { merge: true }
-      );
+      ), 'Saving tour');
     savedId = tourId;
   } else {
-    const docRef = await firestore()
+    const docRef = await withFirestoreTimeout(firestore()
       .collection(TOURS_COLLECTION)
       .add({
         ...payload,
         createdAt: now,
-      });
+      }), 'Saving tour');
     savedId = docRef.id;
   }
 
-  await firestore()
-    .collection(USERS_COLLECTION)
-    .doc(userId)
-    .set(
-      {
-        tours: firestore.FieldValue.arrayUnion(savedId),
-      },
-      { merge: true }
-    );
+  // MyTours reads tour documents by `user_id`, so the primary write above is
+  // sufficient to continue the UI flow. Do not let this legacy user-array
+  // bookkeeping block navigation after the tour has already been saved.
+  void withFirestoreTimeout(
+    firestore()
+      .collection(USERS_COLLECTION)
+      .doc(userId)
+      .set(
+        {
+          tours: firestore.FieldValue.arrayUnion(savedId),
+        },
+        { merge: true }
+      ),
+    'Updating saved tour'
+  ).catch(() => undefined);
 
   return savedId;
 };
@@ -1588,15 +1611,20 @@ export const fetchUserTourById = async (tourId?: string | null) => {
   return parseSavedTour(doc.id, doc.data());
 };
 
-export const fetchUserTours = async (userId?: string): Promise<SavedTour[]> => {
+export const fetchUserTours = async (
+  userId?: string,
+  options?: { serverOnly?: boolean }
+): Promise<SavedTour[]> => {
   if (!userId) {
     return [];
   }
 
-  const snapshot = await firestore()
+  const query = firestore()
     .collection(TOURS_COLLECTION)
-    .where('user_id', '==', userId)
-    .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
+    .where('user_id', '==', userId);
+  const snapshot = (options?.serverOnly
+    ? await query.get({ source: 'server' })
+    : await query.get()) as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
 
   return snapshot.docs
     .map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
@@ -1629,20 +1657,24 @@ export const getActiveTour = async (userId?: string): Promise<SavedTour | null> 
   return tours[0];
 };
 
-/** Reconcile a tour interrupted by removing the Android app from Recents. */
-export const pauseTourAfterTaskRemoval = async (tourId?: string | null) => {
-  if (!tourId) return;
-  await firestore()
+/** Live ids of the user's active tours, from server-confirmed snapshots only. */
+export const subscribeToActiveTourIds = (
+  userId: string,
+  onChange: (tourIds: string[]) => void
+) =>
+  firestore()
     .collection(TOURS_COLLECTION)
-    .doc(tourId)
-    .set(
-      {
-        status: 'paused',
-        updatedAt: new Date().toISOString(),
+    .where('user_id', '==', userId)
+    .where('status', '==', 'active')
+    .onSnapshot(
+      (snapshot: FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>) => {
+        // A cache-only result can be empty or outdated (cold start, offline);
+        // acting on it could stop tracking of a tour that is still active.
+        if (snapshot.metadata.fromCache) return;
+        onChange(snapshot.docs.map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) => doc.id));
       },
-      { merge: true },
+      () => undefined
     );
-};
 
 export const scheduleOtherActiveTours = async ({
   userId,
@@ -1678,7 +1710,7 @@ export const removeTourPlaceFromUserAndRecord = async ({
     return;
   }
 
-  await firestore()
+  await withFirestoreTimeout(firestore()
     .collection('users')
     .doc(userId)
     .set(
@@ -1687,16 +1719,16 @@ export const removeTourPlaceFromUserAndRecord = async ({
         [USER_LEGACY_FAVORITES_FIELD]: firestore.FieldValue.arrayRemove(placeId),
       },
       { merge: true }
-    );
+    ), 'Removing location');
 
   if (tourId) {
-    await firestore()
+    await withFirestoreTimeout(firestore()
       .collection(TOURS_COLLECTION)
       .doc(tourId)
       .set(
         { favorited_place_ids: firestore.FieldValue.arrayRemove(placeId) },
         { merge: true }
-      );
+      ), 'Removing location');
   }
 };
 
@@ -1750,7 +1782,7 @@ export const clearUserFavoritesForDeletedTour = async ({
       firestore.FieldValue.arrayRemove(...placeIds);
   }
 
-  await userRef.set(payload, { merge: true });
+  await withFirestoreTimeout(userRef.set(payload, { merge: true }), 'Removing tour');
 };
 
 export const deleteUserTour = async (
@@ -1764,10 +1796,10 @@ export const deleteUserTour = async (
   let routeId: string | null = null;
   let favoritedPlaceIds: string[] = [];
 
-  const tourDoc = await firestore()
+  const tourDoc = await withFirestoreTimeout(firestore()
     .collection(TOURS_COLLECTION)
     .doc(tourId)
-    .get();
+    .get(), 'Loading tour for deletion');
 
   // A user may only delete their own saved-tour document. Never delete the
   // shared route template from `routes`, and never delete another user's tour.
@@ -1798,16 +1830,22 @@ export const deleteUserTour = async (
       : [];
   }
 
-  await firestore().collection(TOURS_COLLECTION).doc(tourId).delete();
+  await withFirestoreTimeout(
+    firestore().collection(TOURS_COLLECTION).doc(tourId).delete(),
+    'Deleting tour',
+  );
 
   // If a specific user initiated the delete, clean only their favorites.
   if (options?.userId) {
-    await clearUserFavoritesForDeletedTour({
+    // The tour deletion is confirmed at this point. Ancillary denormalized
+    // favorite cleanup must not make the UI report a failed delete after the
+    // document has already been removed.
+    void clearUserFavoritesForDeletedTour({
       userId: options.userId,
       tourId,
       routeId,
       favoritedPlaceIds,
-    });
+    }).catch(() => undefined);
     return;
   }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS } from '../../constants/colors';
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
@@ -8,11 +8,6 @@ import { FONT_FAMILY } from '../../constants/fonts';
 const Conditions = () => {
   return (
     <>
-      <StatusBar
-        translucent
-        backgroundColor="transparent"
-        barStyle="light-content"
-      />
       <SafeAreaView style={styles.container}>
         <View style={styles.top}>
           <ForgeTopHeader title="Terms & Conditions" />

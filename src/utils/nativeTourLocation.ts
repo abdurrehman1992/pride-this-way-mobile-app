@@ -7,11 +7,17 @@ type NativeLocationStatus = {
   latitude?: number;
   longitude?: number;
   accuracy?: number;
+  speed?: number;
   timestamp?: number;
   taskRemovedWhileTracking?: boolean;
   taskRemovedAt?: number;
   taskRemovedTourId?: string;
 };
+
+export type NativeLocationSample = Required<Pick<
+  NativeLocationStatus,
+  'latitude' | 'longitude' | 'accuracy' | 'speed' | 'timestamp'
+>>;
 
 const nativeModule = NativeModules.TourLocation;
 
@@ -61,6 +67,55 @@ export const getNativeTourLocationStatus = async (): Promise<NativeLocationStatu
     return await nativeModule.getStatus();
   } catch {
     return null;
+  }
+};
+
+export const getNativeTourLocationSamples = async (
+  sinceTimestamp: number,
+): Promise<NativeLocationSample[]> => {
+  if (!isNativeTourLocationAvailable || typeof nativeModule?.getRecentLocations !== 'function') return [];
+  try {
+    const samples = await nativeModule.getRecentLocations(sinceTimestamp);
+    return Array.isArray(samples) ? samples : [];
+  } catch {
+    return [];
+  }
+};
+
+export type NativeTrackingSession = {
+  tourId: string;
+  userId: string;
+  sampleIntervalMs: number;
+  sampleMinDistanceMeters: number;
+  heartbeatIntervalMs: number;
+  maxAccuracyMeters: number;
+  backgroundGpsIntervalMs: number;
+  backgroundGpsMinDistanceMeters: number;
+};
+
+// Firestore upload from the native service (TourTrackingUploader.kt). False on
+// iOS and on Android builds made before the uploader existed.
+export const isNativeTrackingAvailable =
+  isNativeTourLocationAvailable && typeof nativeModule?.startTrackingSession === 'function';
+
+export const startNativeTrackingSession = async (
+  session: NativeTrackingSession,
+): Promise<boolean> => {
+  if (!isNativeTrackingAvailable) return false;
+  try {
+    await nativeModule.startTrackingSession(session);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const stopNativeTrackingSession = async (reason: string): Promise<void> => {
+  if (!isNativeTrackingAvailable) return;
+  try {
+    await nativeModule.stopTrackingSession(reason);
+  } catch {
+    // Nothing to stop.
   }
 };
 

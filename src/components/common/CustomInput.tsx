@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import { View, TextInput, StyleSheet, Text, TouchableOpacity } from "react-native";
+import { View, TextInput, StyleSheet, Text } from "react-native";
 import { COLORS } from "../../constants/colors";
-import { EyeIcon } from "../../constants/icons";
+import PasswordVisibilityButton from "./PasswordVisibilityButton";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 interface Props {
   placeholder?: string;
@@ -33,23 +33,20 @@ const CustomInput: React.FC<Props> = ({
           placeholderTextColor={COLORS.TEXT_PRIMARY}
           value={value}
           onChangeText={onChangeText}
-          secureTextEntry={isHidden}
+          secureTextEntry={secureTextEntry && isHidden}
+          autoCorrect={secureTextEntry ? false : undefined}
+          spellCheck={secureTextEntry ? false : undefined}
           style={[styles.input, !editable && styles.inputDisabled]}
           autoCapitalize="none"
           keyboardType={keyboardType}
           editable={editable}
         />
         {secureTextEntry && (
-          <TouchableOpacity
-            onPress={() => setIsHidden(!isHidden)}
-            style={styles.icon}
-          >
-            {isHidden ? (
-              <EyeIcon width={18} height={10} />
-            ) : (
-              <EyeIcon width={18} height={10} />
-            )}
-          </TouchableOpacity>
+          <PasswordVisibilityButton
+            hidden={isHidden}
+            onPress={() => setIsHidden((hidden) => !hidden)}
+            disabled={!editable}
+          />
         )}
       </View>
       {Array.isArray(error) ? (
@@ -93,9 +90,6 @@ const styles = StyleSheet.create({
   },
   inputDisabled: {
     color: COLORS.TEXT_SECONDARY,
-  },
-  icon: {
-    paddingLeft: 10,
   },
   errorText: {
     color: COLORS.LOGOUT_TEXT,

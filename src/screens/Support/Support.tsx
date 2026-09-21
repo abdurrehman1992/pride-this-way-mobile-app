@@ -1,5 +1,6 @@
+import ActionTouchable from "../../components/common/ActionTouchable";
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Linking, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS } from '../../constants/colors';
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
@@ -63,11 +64,6 @@ const Support = () => {
 
   return (
     <>
-      <StatusBar
-        translucent
-        backgroundColor="transparent"
-        barStyle="light-content"
-      />
       <SafeAreaView style={styles.container}>
         <View style={styles.top}>
           <ForgeTopHeader title="Support" />
@@ -80,7 +76,7 @@ const Support = () => {
 
         <View style={styles.buttonContainer}>
           {/* Email Support Row */}
-          <TouchableOpacity
+          <ActionTouchable
             style={styles.button}
             onPress={() => handleContactMethod('email')}
           >
@@ -90,10 +86,10 @@ const Support = () => {
               <Text style={styles.buttonText}>Email Support</Text>
             </View>
             <Arrow width={18.25} />
-          </TouchableOpacity>
+          </ActionTouchable>
 
           {/* WhatsApp Support Row */}
-          <TouchableOpacity
+          <ActionTouchable
             style={styles.button}
             onPress={() => handleContactMethod('whatsapp')}
           >
@@ -102,7 +98,7 @@ const Support = () => {
               <Text style={styles.buttonText}>WhatsApp Support</Text>
             </View>
             <Arrow width={18.25} />
-          </TouchableOpacity>
+          </ActionTouchable>
         </View>
       </SafeAreaView>
     </>

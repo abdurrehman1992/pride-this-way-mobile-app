@@ -151,6 +151,7 @@ const CreateTour: React.FC = () => {
                 tourName: tourNameSnapshot,
                 cityLabel,
                 recommendations: recommendationsSnapshot,
+                selectedTagIds,
             });
         });
     };

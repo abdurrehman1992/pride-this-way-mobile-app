@@ -1,7 +1,10 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { CommonActions } from "@react-navigation/native";
+import {
+  CommonActions,
+  getFocusedRouteNameFromRoute,
+} from "@react-navigation/native";
 import { CustomAlert } from "../utils/CustomAlert";
 import { TabParamList } from "../types/types";
 import { COLORS } from "../constants/colors";
@@ -116,6 +119,14 @@ const TabNavigator: React.FC = () => {
           }
 
           if (targetTab.name === "MyTours") {
+            // Tapping the already-selected tab normally pops its nested stack
+            // to the first MyTour route. After creating a tour that first
+            // route can still be the old "No Tours Yet" screen, while the
+            // current nested route correctly shows the saved card. Keep the
+            // current MyTours route instead of performing that pop.
+            if (currentTab?.name === "MyTours") {
+              event.preventDefault();
+            }
             return;
           }
 
@@ -161,11 +172,17 @@ const TabNavigator: React.FC = () => {
       })}
       screenOptions={({ route }) => {
         const icons = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
+        const focusedNestedRouteName = getFocusedRouteNameFromRoute(route);
+        const hideTabsForTourNavigation =
+          route.name === "MyTours" &&
+          (focusedNestedRouteName === "MyTourStart" || focusedNestedRouteName === "AddLocations");
 
         return {
           headerShown: false,
           tabBarHideOnKeyboard: false,
-          tabBarStyle: styles.tabBar,
+          tabBarStyle: hideTabsForTourNavigation
+            ? styles.hiddenTabBar
+            : styles.tabBar,
           tabBarActiveTintColor: COLORS.BUTTON_COLOR,
           tabBarInactiveTintColor: COLORS.INACTIVE_COLOR,
           tabBarRippleColor: "transparent",
@@ -225,6 +242,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.05,
     shadowRadius: 10,
+  },
+  hiddenTabBar: {
+    display: "none",
   },
   iconWrapper: {
     width: 44,

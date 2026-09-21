@@ -101,7 +101,14 @@ const extractIds = (raw: any): string[] => {
 
 export const FavoritesProvider = ({ children }: any) => {
   const dispatch = useDispatch();
-  const userId = useSelector((state: RootState) => state.auth.user?.id);
+  const rawUserId = useSelector((state: RootState) => state.auth.user?.id);
+  // A previously persisted auth state can contain a malformed ID. Firestore's
+  // collection().doc() forwards that value to its path parser, which crashes
+  // on non-strings instead of returning a useful validation error.
+  const userId =
+    typeof rawUserId === "string" && rawUserId.trim()
+      ? rawUserId.trim()
+      : null;
   const [favorites, setFavorites] = useState<string[]>([]);
   const [favoriteTours, setFavoriteTours] = useState<string[]>([]);
   const [favoriteEvents, setFavoriteEvents] = useState<string[]>([]);

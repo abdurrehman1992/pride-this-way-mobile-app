@@ -1,9 +1,9 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Image,
   ImageBackground,
 } from 'react-native';
@@ -72,10 +72,9 @@ const CustomDrawer = ({ navigation }: any) => {
   }, [getDeepestActiveRoute, navigation]);
 
   const guardActiveTour = useCallback(
-    (proceed: () => void) => {
+    (proceed: () => void | Promise<void>) => {
       if (!hasActiveTour()) {
-        proceed();
-        return;
+        return proceed();
       }
       CustomAlert.alert(
         'Leave Tour?',
@@ -84,7 +83,7 @@ const CustomDrawer = ({ navigation }: any) => {
           { text: 'Stay on Tour', style: 'cancel' },
           {
             text: 'Pause & Leave',
-            onPress: () => {
+            onPress: async () => {
               navigation.dispatch(
                 CommonActions.navigate({
                   name: 'Tabs',
@@ -97,7 +96,8 @@ const CustomDrawer = ({ navigation }: any) => {
                   },
                 })
               );
-              setTimeout(proceed, 350);
+              await new Promise<void>((resolve) => setTimeout(resolve, 350));
+              await proceed();
             },
           },
         ]
@@ -181,7 +181,7 @@ const CustomDrawer = ({ navigation }: any) => {
 );
 
   const handleLogout = useCallback(() => {
-    guardActiveTour(async () => {
+    return guardActiveTour(async () => {
       try {
         await logoutUser();
         dispatch(logout());
@@ -212,7 +212,7 @@ const CustomDrawer = ({ navigation }: any) => {
       >
         <View style={styles.headerRow}>
           <View style={styles.headerContent}>
-            <TouchableOpacity
+            <ActionTouchable
               style={styles.profileBg}
               activeOpacity={0.8}
               onPress={() => navigateTo('Profile')}
@@ -226,9 +226,9 @@ const CustomDrawer = ({ navigation }: any) => {
                 style={styles.profilePhoto}
                 fadeDuration={0}
               />
-            </TouchableOpacity>
+            </ActionTouchable>
 
-            <TouchableOpacity
+            <ActionTouchable
               style={styles.textWrapper}
               activeOpacity={0.8}
               onPress={() => navigateTo('Profile')}
@@ -240,15 +240,15 @@ const CustomDrawer = ({ navigation }: any) => {
               <Text style={styles.email} numberOfLines={1}>
                 {user?.email || 'guest@example.com'}
               </Text>
-            </TouchableOpacity>
+            </ActionTouchable>
           </View>
 
-          <TouchableOpacity
+          <ActionTouchable
             activeOpacity={0.7}
             onPress={navigation.closeDrawer}
           >
             <CloseIcon width={24} height={24} />
-          </TouchableOpacity>
+          </ActionTouchable>
         </View>
       </ImageBackground>
 
@@ -314,7 +314,7 @@ const CustomDrawer = ({ navigation }: any) => {
       </DrawerContentScrollView>
 
       {/* LOGOUT */}
-      <TouchableOpacity
+      <ActionTouchable
         style={[
           styles.logoutBtn,
           {
@@ -332,7 +332,7 @@ const CustomDrawer = ({ navigation }: any) => {
         <Text style={styles.logoutText}>
           Logout
         </Text>
-      </TouchableOpacity>
+      </ActionTouchable>
     </View>
   );
 };

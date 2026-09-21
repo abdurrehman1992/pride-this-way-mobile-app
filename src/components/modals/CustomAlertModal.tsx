@@ -1,9 +1,9 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useState } from 'react';
 import {
     Modal,
     View,
     Text,
-    TouchableOpacity,
     StyleSheet,
     ActivityIndicator,
     Animated,
@@ -150,13 +150,13 @@ const CustomAlertModal: React.FC = () => {
                         </View>
 
                         {showCloseButton && (
-                            <TouchableOpacity
+                            <ActionTouchable
                                 style={styles.closeButton}
                                 onPress={hideAlert}
                                 disabled={loading !== null}
                             >
                                 <CrossIcon width={15} height={15} />
-                            </TouchableOpacity>
+                            </ActionTouchable>
                         )}
 
                         {alert?.title && (
@@ -168,7 +168,7 @@ const CustomAlertModal: React.FC = () => {
 
                         <View style={styles.buttonContainer}>
                             {cancelButton && isDismissible && (
-                                <TouchableOpacity
+                                <ActionTouchable
                                     style={[
                                         styles.actionButton,
                                         shouldShowCancelAsPrimary ? styles.buttonPrimaryWrap : styles.cancelAction,
@@ -187,13 +187,13 @@ const CustomAlertModal: React.FC = () => {
                                             {cancelButton.text}
                                         </Text>
                                     )}
-                                </TouchableOpacity>
+                                </ActionTouchable>
                             )}
 
                             {otherButtons.map((button, index) => {
                                 const isDestructive = button.style === 'destructive';
                                 return (
-                                    <TouchableOpacity
+                                    <ActionTouchable
                                         key={index}
                                         style={[
                                             styles.actionButton,
@@ -215,7 +215,7 @@ const CustomAlertModal: React.FC = () => {
                                                 {button.text}
                                             </Text>
                                         )}
-                                    </TouchableOpacity>
+                                    </ActionTouchable>
                                 );
                             })}
                         </View>

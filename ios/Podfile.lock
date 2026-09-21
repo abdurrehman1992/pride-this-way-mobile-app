@@ -3702,6 +3702,7 @@ DEPENDENCIES:
   - react-native-config (from `../node_modules/react-native-config`)
   - "react-native-geolocation (from `../node_modules/@react-native-community/geolocation`)"
   - react-native-image-picker (from `../node_modules/react-native-image-picker`)
+  - "react-native-netinfo (from `../node_modules/@react-native-community/netinfo`)"
   - react-native-safe-area-context (from `../node_modules/react-native-safe-area-context`)
   - react-native-webview (from `../node_modules/react-native-webview`)
   - React-NativeModulesApple (from `../node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios`)
@@ -3870,6 +3871,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/@react-native-community/geolocation"
   react-native-image-picker:
     :path: "../node_modules/react-native-image-picker"
+  react-native-netinfo:
+    :path: "../node_modules/@react-native-community/netinfo"
   react-native-safe-area-context:
     :path: "../node_modules/react-native-safe-area-context"
   react-native-webview:
@@ -4036,6 +4039,7 @@ SPEC CHECKSUMS:
   react-native-config: 4f33051377d64a12a3fef0e9a2501a2b82d45f17
   react-native-geolocation: c9e2240786b708dd6c7e1b658242bebdd120e912
   react-native-image-picker: 91b5eb7c8fc59d57ad1a88213e906b7589dc4d22
+  react-native-netinfo: c9fa0172bba6414449ea5b67fc92f2c99c20cb1d
   react-native-safe-area-context: 77b4164a2f78aba35dc07956dc448bea7f4bec7f
   react-native-webview: 2ba9d8b5ac7b0c0678b5d255b0c73a5b80bf4677
   React-NativeModulesApple: 892507a94e7cbdf9f28e1c98437d22c358fe93c5

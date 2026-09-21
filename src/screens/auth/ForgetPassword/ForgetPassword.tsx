@@ -4,10 +4,8 @@ import {
     KeyboardAvoidingView,
     Platform,
     ScrollView,
-    ActivityIndicator,
     Keyboard,
-    StatusBar,
-} from "react-native";
+    } from "react-native";
 import React, { useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
@@ -80,11 +78,6 @@ const ForgetPassword = () => {
     };
     return (
         <>
-            <StatusBar
-                translucent
-                backgroundColor="transparent"
-                barStyle="light-content"
-            />
             <SafeAreaView style={styles.container}>
                 <KeyboardAvoidingView
                     style={styles.keyboardAvoidingView}
@@ -101,8 +94,8 @@ const ForgetPassword = () => {
 
                             <View style={styles.inputWrapper}>
                                 <ForgetPasswordInput
-                                    label="Email or Phone Number"
-                                    placeholder="Enter your registered email or phone number"
+                                    label="Email"
+                                    placeholder="Enter your registered email"
                                     value={identifier}
                                     onChangeText={handleChange}
                                     error={error}
@@ -111,19 +104,12 @@ const ForgetPassword = () => {
                             </View>
                         </View>
                         <View style={styles.buttonContainer}>
-                            {loading ? (
-                                <ActivityIndicator
-                                    size="large"
-                                    color="#0286FF"
-                                    style={styles.loader}
-                                />
-                            ) : (
-                                <CustomButton
-                                    title="Send Verification Code"
-                                    onPress={handleForget}
-                                    disabled={!identifier || !!error}
-                                />
-                            )}
+                            <CustomButton
+                                loading={loading}
+                                title="Send Verification Link"
+                                onPress={handleForget}
+                                disabled={!identifier || !!error}
+                            />
                         </View>
                     </ScrollView>
                 </KeyboardAvoidingView>
