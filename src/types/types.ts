@@ -7,19 +7,49 @@ export type AuthStackParamList = {
 };
 
 export type MyTourStackParamList = {
+  CreateTour: undefined;
+  TourSuggestion: {
+    tourName: string;
+    cityLabel: string;
+    recommendations: any[];
+    selectedTagIds?: string[];
+    hasUnsavedChanges?: boolean;
+    addedPlaceId?: string;
+    addedPlaceIds?: string[];
+    timestamp?: number;
+  };
   AddLocations: {
-    tourId?: number;
-    selectedLocation?: string;
+    routeId?: string;
+    cityLabel?: string;
+    fromScreen?: 'MyTour' | 'MyTourStart' | 'TourSuggestion';
+    existingPlaceIds?: string[];
   };
   MyTour: {
-    selectedLocation?: string;
-    tourId?: number;
+    addedPlaceId?: string;
+    routeId?: string;
     timestamp?: number;
-    pendingLocation?: string;
+    pendingCreate?: {
+      status: 'active' | 'saved';
+      scheduledDate: string | null;
+      createdAt: string;
+      tourName: string;
+      recommendations: any[];
+    };
   } | undefined,
   MyTourStart: {
-    tourId?: number;
-    addedStop?: { id: string; title: string; coordinate: [number, number] };
+    routeId?: string;
+    routeName?: string;
+    tourName?: string;
+    cityLabel?: string;
+    selectedTagIds?: string[];
+    addedPlaceId?: string;
+    extraPlaceIds?: string[];
+    removedPlaceIds?: string[];
+    tourId?: string;
+    isEdited?: boolean;
+    autoStart?: boolean;
+    tourActive?: boolean;
+    pauseAndLeave?: number;
   } | undefined,
   RecommendationDetials: undefined
 };
@@ -32,6 +62,16 @@ export type ProfileStackParamList = {
 
 export type FovoritesStackParamList = {
   Favorites: undefined,
+  RecommendationDetials: {
+    item: {
+      id: string;
+      title: string;
+      description: string;
+      rating: string;
+      image: string;
+      category: string;
+    };
+  },
 };
 export type MapStackParamList = {
   Map: undefined,
@@ -48,12 +88,16 @@ export type RewardsStackParamList = {
 };
 export type AppStackParamList = {
   Tabs: undefined;
-  Main: undefined
+  Main: undefined,
+};
+export type SupportParamList = {
+  Help_Support: undefined;
+  Terms_Conditions: undefined,
 };
 
 export type TabParamList = {
   Favorites: undefined;
-  MyTour: undefined;
+  MyTours: undefined;
   ForYou: undefined;
   Map: undefined;
   Profile: undefined;

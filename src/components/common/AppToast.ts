@@ -13,16 +13,16 @@ export const showToast = ({
   type,
   title,
   message,
-  duration = 2000,
+  duration = 5000,
 }: ToastOptions) => {
   Toast.show({
     type,
     text1: title,
     text2: message || "",
-    position: "top",
+    position: "bottom",
     visibilityTime: duration,
     autoHide: true,
-    topOffset: 60,
+    bottomOffset: 30,
   });
 };
 

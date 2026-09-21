@@ -1,6 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { View, StyleSheet, Text, Keyboard } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  CommonActions,
+  getFocusedRouteNameFromRoute,
+} from "@react-navigation/native";
+import { CustomAlert } from "../utils/CustomAlert";
 import { TabParamList } from "../types/types";
 import { COLORS } from "../constants/colors";
 
@@ -21,6 +26,23 @@ import {
 } from "../constants/icons";
 
 const Tab = createBottomTabNavigator<TabParamList>();
+const VALID_TABS = new Set(["MyTours", "Map", "ForYou", "Favorites"]);
+const NoFeedbackTabButton = (props: any) => (
+  <TouchableOpacity {...props} activeOpacity={1} />
+);
+
+const getDeepestActiveRoute = (state: any): any => {
+  if (!state?.routes?.length) {
+    return null;
+  }
+
+  const activeRoute = state.routes[state.index ?? 0];
+  if (activeRoute?.state) {
+    return getDeepestActiveRoute(activeRoute.state);
+  }
+
+  return activeRoute;
+};
 
 const TAB_ICONS = {
   Favorites: {
@@ -31,7 +53,7 @@ const TAB_ICONS = {
     active: BottomActvieForYou,
     inactive: BottomForYouIcon,
   },
-  MyTour: {
+  MyTours: {
     active: BottomActiveMyTours,
     inactive: BottomMyToursIcon,
   },
@@ -43,45 +65,130 @@ const TAB_ICONS = {
 };
 
 const TabNavigator: React.FC = () => {
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", () => {
-      setKeyboardVisible(true);
-    });
-
-    const hide = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardVisible(false);
-    });
-
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
-
   return (
     <Tab.Navigator
-      initialRouteName="MyTour"
+      initialRouteName="MyTours"
       backBehavior="history"
+      screenListeners={({ navigation }) => ({
+        tabPress: (event) => {
+          const state = navigation.getState();
+          const currentTab = state.routes[state.index ?? 0];
+          const targetTab = state.routes.find((route) => route.key === event.target);
+
+          if (!targetTab || !VALID_TABS.has(targetTab.name)) {
+            return;
+          }
+          const activeNestedRoute = getDeepestActiveRoute(currentTab?.state);
+          const tourIsActive =
+            currentTab?.name === "MyTours" &&
+            activeNestedRoute?.name === "MyTourStart" &&
+            activeNestedRoute?.params?.tourActive === true;
+
+          if (tourIsActive) {
+            event.preventDefault();
+            CustomAlert.alert(
+              "Leave Tour?",
+              "Your tour is in progress. Pause it before leaving — you can resume from where you left off.",
+              [
+                { text: "Stay on Tour", style: "cancel" },
+                {
+                  text: "Pause & Leave",
+                  onPress: () => {
+                    // Tell MyTourStart to persist the paused state. Once it
+                    // clears tourActive on its params, the user can navigate
+                    // freely. We re-dispatch the tab press after a beat so
+                    // the pause-save round-trip can finish.
+                    navigation.dispatch(
+                      CommonActions.navigate({
+                        name: "MyTours",
+                        params: {
+                          screen: "MyTourStart",
+                          params: { pauseAndLeave: Date.now() },
+                        },
+                      })
+                    );
+
+                    setTimeout(() => {
+                      navigation.navigate(targetTab.name as never);
+                    }, 350);
+                  },
+                },
+              ]
+            );
+            return;
+          }
+
+          if (targetTab.name === "MyTours") {
+            // Tapping the already-selected tab normally pops its nested stack
+            // to the first MyTour route. After creating a tour that first
+            // route can still be the old "No Tours Yet" screen, while the
+            // current nested route correctly shows the saved card. Keep the
+            // current MyTours route instead of performing that pop.
+            if (currentTab?.name === "MyTours") {
+              event.preventDefault();
+            }
+            return;
+          }
+
+          if (currentTab?.name !== "MyTours") {
+            return;
+          }
+
+          const hasUnsavedTourSuggestion =
+            activeNestedRoute?.name === "TourSuggestion" &&
+            activeNestedRoute?.params?.hasUnsavedChanges;
+
+          if (!hasUnsavedTourSuggestion) {
+            return;
+          }
+
+          event.preventDefault();
+          CustomAlert.alert(
+            "Discard Tour?",
+            "You haven't saved this tour. Leaving will discard it and you'll need to create it again.",
+            [
+              { text: "Stay", style: "cancel" },
+              {
+                text: "Discard",
+                style: "destructive",
+                onPress: () => {
+                  navigation.dispatch(
+                    CommonActions.navigate({
+                      name: "MyTours",
+                      params: {
+                        screen: "CreateTour",
+                      },
+                    })
+                  );
+
+                  requestAnimationFrame(() => {
+                    navigation.navigate(targetTab.name as never);
+                  });
+                },
+              },
+            ]
+          );
+        },
+      })}
       screenOptions={({ route }) => {
         const icons = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
+        const focusedNestedRouteName = getFocusedRouteNameFromRoute(route);
+        const hideTabsForTourNavigation =
+          route.name === "MyTours" &&
+          (focusedNestedRouteName === "MyTourStart" || focusedNestedRouteName === "AddLocations");
 
         return {
           headerShown: false,
-          tabBarBackground: () => (
-            <View style={{backgroundColor:'red'}} />
-          ),
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              display: keyboardVisible ? "none" : "flex",
-            },
-          ],
-
+          tabBarHideOnKeyboard: false,
+          tabBarStyle: hideTabsForTourNavigation
+            ? styles.hiddenTabBar
+            : styles.tabBar,
           tabBarActiveTintColor: COLORS.BUTTON_COLOR,
           tabBarInactiveTintColor: COLORS.INACTIVE_COLOR,
           tabBarRippleColor: "transparent",
+          tabBarActiveBackgroundColor: "transparent",
+          tabBarInactiveBackgroundColor: "transparent",
+          tabBarButton: NoFeedbackTabButton,
 
           tabBarLabel: ({ focused, color }) => (
             <Text
@@ -112,10 +219,10 @@ const TabNavigator: React.FC = () => {
         };
       }}
     >
-      <Tab.Screen name="Favorites" component={FovoritesNavigator} />
-      <Tab.Screen name="ForYou" component={ForYouNavigator} />
-      <Tab.Screen name="MyTour" component={MyTourNavigator} />
+      <Tab.Screen name="MyTours" component={MyTourNavigator} />
       <Tab.Screen name="Map" component={MapNavigator} />
+      <Tab.Screen name="ForYou" component={ForYouNavigator} />
+      <Tab.Screen name="Favorites" component={FovoritesNavigator} />
     </Tab.Navigator>
   );
 };
@@ -135,6 +242,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.05,
     shadowRadius: 10,
+  },
+  hiddenTabBar: {
+    display: "none",
   },
   iconWrapper: {
     width: 44,

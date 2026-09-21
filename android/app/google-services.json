@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "926979233077",
+    "firebase_url": "https://pride-this-way-default-rtdb.firebaseio.com",
+    "project_id": "pride-this-way",
+    "storage_bucket": "pride-this-way.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:926979233077:android:0259486c6a1c69e140a87c",
+        "android_client_info": {
+          "package_name": "com.pridethisway"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDg6iAYqiK3xpiVVStlXGQpXK17YZBh9o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

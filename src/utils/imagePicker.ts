@@ -12,7 +12,7 @@ export const pickImageFromGallery = async () => {
     const uri = result.assets?.[0]?.uri
     return uri || null
   } catch (error) {
-    console.log('Image picker error:', error)
+    // console.log('Image picker error:', error)
     return null
   }
 }

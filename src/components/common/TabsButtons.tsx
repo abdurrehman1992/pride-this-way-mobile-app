@@ -1,5 +1,6 @@
+import ActionTouchable from "./ActionTouchable";
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Arrow } from '../../constants/icons';
 import { COLORS } from '../../constants/colors';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
@@ -10,7 +11,7 @@ interface Props {
 }
 const TabsButtons: React.FC<Props> = ({ onPress, title, Icon }) => {
   return (
-    <TouchableOpacity
+    <ActionTouchable
       style={styles.drawerLinks}
       onPress={onPress}
       activeOpacity={0.7}
@@ -24,7 +25,7 @@ const TabsButtons: React.FC<Props> = ({ onPress, title, Icon }) => {
       </View>
 
       <Arrow width={14} />
-    </TouchableOpacity>
+    </ActionTouchable>
   );
 };
 

@@ -1,4 +1,5 @@
 export { default as BackGroundImage } from "../assets/images/Signup.png";
+export { default as AuthBackGroundImage } from "../assets/images/authBg.png";
 export { default as BgFrame } from "../assets/images/BgFrame.png";
 export { default as NameTourIcon } from "../assets/images/nameTourIcon.png";
 export { default as DetailBackground } from "../assets/images/detailBackground.png";
@@ -11,6 +12,7 @@ export { default as RoundedFrame } from "../assets/images/roundedFrame.png";
 export { default as MapBackground } from "../assets/images/mapBackground.png";
 export { default as GlobeImage } from "../assets/images/globeImage.png";
 export { default as CameraIcon } from "../assets/images/cameraIcon.png";
+
 
 export const PLACES_ARROUND="https://images.unsplash.com/photo-1517713982677-4b66332f98de?q=80&w=2070&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"
 export const RECOMMENDED_IMAGE="https://images.unsplash.com/photo-1760660298735-2a9cede9a964?q=80&w=987&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"

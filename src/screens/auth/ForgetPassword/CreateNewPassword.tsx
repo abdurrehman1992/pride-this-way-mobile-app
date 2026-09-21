@@ -40,6 +40,14 @@ const CreateNewPassword = () => {
     );
   }, [password, confirmPassword]);
 
+  const goToSignIn = () => {
+    setShowModal(false);
+    navigation.reset({
+      index: 0,
+      routes: [{ name: "Login" }],
+    });
+  };
+
   const handleSubmit = () => {
     const passErrors = validatePassword(password);
     const confirmErr = validateConfirmPassword(password, confirmPassword);
@@ -118,7 +126,7 @@ const CreateNewPassword = () => {
             </View>
             <TouchableOpacity
               style={styles.modalClose}
-              onPress={() => setShowModal(false)}
+              onPress={goToSignIn}
             >
               <CrossIcon width={12} height={12} />
             </TouchableOpacity>
@@ -128,15 +136,9 @@ const CreateNewPassword = () => {
             </Text>
             <TouchableOpacity
               style={styles.modalButton}
-              onPress={() => {
-                setShowModal(false);
-                navigation.reset({
-                  index: 0,
-                  routes: [{ name: "Login" }],
-                });
-              }}
+              onPress={goToSignIn}
             >
-              <Text style={styles.buttonText}>Go To Home</Text>
+              <Text style={styles.buttonText}>Go To Sign In</Text>
             </TouchableOpacity>
           </View>
         </View>

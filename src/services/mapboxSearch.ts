@@ -7,6 +7,9 @@ export type PlaceSuggestion = {
     subtitle: string;
     country: string;
     countryCode: string;
+    /** Actual city and administrative region for city-only search results. */
+    city?: string;
+    region?: string;
     coordinates: [number, number];
     placeTypes: string[];
 };
@@ -163,6 +166,15 @@ function featureToSuggestion(
     const { country, countryCode } = parseCountryFromContext(feature);
     const { title, subtitle } = buildLines(feature, country);
     const placeTypes = feature.place_type || [];
+    const cityContext = feature.context?.find(
+        (ctx) => ctx.id.startsWith('place.') || ctx.id.startsWith('locality.')
+    )?.text;
+    const city = placeTypes.includes('place') || placeTypes.includes('locality')
+        ? title || feature.text
+        : cityContext || undefined;
+    const region = feature.context?.find(
+        (ctx) => ctx.id.startsWith('region.')
+    )?.text;
 
     return {
         id: feature.id,
@@ -171,6 +183,8 @@ function featureToSuggestion(
         subtitle,
         country,
         countryCode,
+        city,
+        region,
         coordinates: [lng, lat],
         placeTypes,
     };
@@ -402,6 +416,8 @@ async function fetchGeocodeFeatures(
         bbox?: [number, number, number, number];
         country?: string;
         limit: number;
+        autocomplete?: boolean;
+        fuzzyMatch?: boolean;
     }
 ): Promise<MapboxFeature[]> {
     const token = Config.MAPBOX_TOKEN;
@@ -411,10 +427,10 @@ async function fetchGeocodeFeatures(
 
     const params = new URLSearchParams({
         access_token: token,
-        autocomplete: 'true',
+        autocomplete: options.autocomplete === false ? 'false' : 'true',
         limit: String(options.limit),
         language: 'en',
-        fuzzyMatch: 'true',
+        fuzzyMatch: options.fuzzyMatch === false ? 'false' : 'true',
         types,
     });
 
@@ -512,6 +528,8 @@ export type SearchPlacesOptions = {
     /** Comma-separated ISO 3166-1 alpha-2 (e.g. `pk` or `pk,in`). */
     countries?: string;
     limit?: number;
+    /** Return only Mapbox city (`place`) features; never POIs or areas. */
+    cityOnly?: boolean;
     /**
      * When the query ends with a place name ("… lahore"), resolve that place,
      * bias proximity to it, and run a second search for the leading text
@@ -547,6 +565,7 @@ export async function searchPlaceSuggestions(
     );
 
     const anchorInnerCity = options.anchorInnerCity !== false;
+    const cityOnly = options.cityOnly === true;
     const tokens = tokenizeQuery(q);
     const meaningful = meaningfulTokens(tokens);
     const multi = meaningful.length >= 2;
@@ -557,7 +576,7 @@ export async function searchPlaceSuggestions(
 
     try {
         let anchor: Anchor | undefined;
-        if (trailing) {
+        if (trailing && !cityOnly) {
             anchor = await resolveAnchorFromPlaceName(trailing, {
                 signal: options.signal,
                 userProximity: options.proximity,
@@ -578,7 +597,27 @@ export async function searchPlaceSuggestions(
 
         let merged: MapboxFeature[] = [];
 
-        if (multi) {
+        if (cityOnly) {
+            // Ask Mapbox for city features directly. Filtering after a broad
+            // search is unreliable because area/POI results can consume the
+            // whole limit before the actual city is returned.
+            const cityQuery = q.split(',')[0].trim();
+            merged = await fetchGeocodeFeatures(cityQuery, 'place', {
+                ...sharedFetch,
+                limit: cap,
+                autocomplete: false,
+                fuzzyMatch: false,
+            });
+
+            // Exact geocoding can return nothing for a partial query. Keep
+            // typing usable by falling back to city-only autocomplete.
+            if (merged.length === 0) {
+                merged = await fetchGeocodeFeatures(cityQuery, 'place', {
+                    ...sharedFetch,
+                    limit: cap,
+                });
+            }
+        } else if (multi) {
             const [precise, broad] = await Promise.all([
                 fetchGeocodeFeatures(q, TYPES_PRECISE, {
                     ...sharedFetch,
@@ -597,7 +636,7 @@ export async function searchPlaceSuggestions(
             });
         }
 
-        if (anchorInnerCity && anchor && trailing) {
+        if (!cityOnly && anchorInnerCity && anchor && trailing) {
             const prefix = prefixTokensForTrailing(
                 meaningful,
                 trailing

@@ -1,26 +1,29 @@
-import React from "react";
+import ActionTouchable from "../common/ActionTouchable";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
   StyleSheet,
   Image,
-  TouchableOpacity,
   DimensionValue,
 } from "react-native";
 import { COLORS } from "../../constants/colors";
 import {
   EventIcon,
+  FoodTabIcon,
   HeartIcon,
   LocationIcon,
+  MusicTabIcon,
   RedHeartIcon,
   StarIcon,
   TimeIcon,
-  RouteIcon, 
+  RouteIcon,
+  ForkIcon,
 } from "../../constants/icons";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
-import { PLACES_ARROUND } from "../../constants/images";
 import { useFavorites } from "../../context/FavoritesContext";
 import { showInfo, showSuccess } from "../common/AppToast";
+import { sanitizeImageUrl } from '../../services/aiService';
 
 type PlacesAroundCardProps = {
   id: string;
@@ -33,29 +36,115 @@ type PlacesAroundCardProps = {
   width?: DimensionValue;
   variant?: "default" | "compact";
   category?: string;
+  hideTime?: boolean;
+  hideRating?: boolean;
+  hideLocation?: boolean;
+  hideDivider?: boolean;
+  showFullText?: boolean;
+  timeColor?: string;
+  onPress?: () => void;
 };
 
 const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
   id,
   title = "Live Music Night - Jazz Cafe",
   description = "Experience soulful live music tonight",
-  image = PLACES_ARROUND,
-  rating = "4.5",
+  image,
+  rating = undefined,
   location = "California, USA",
   time = "Today 7PM",
   width,
   variant = "default",
   category = "Event",
+  hideTime = false,
+  hideRating = false,
+  hideLocation = false,
+  hideDivider = false,
+  showFullText = false,
+  timeColor = COLORS.TEXT_GREEN,
+  onPress,
 }) => {
+  const [imageFailed, setImageFailed] = useState(false);
+  const [prefetching, setPrefetching] = useState(false);
   const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
   const favorite = isFavorite(id);
 
-  const handleFavorite = () => {
+  const resolvedImage =
+    imageFailed || !image
+      ? undefined
+      : typeof image === 'string'
+      ? { uri: sanitizeImageUrl(image) || image, cache: 'force-cache' }
+      : image;
+
+  useEffect(() => {
+    let mounted = true;
+    if (typeof image === 'string' && !imageFailed) {
+      setPrefetching(true);
+      // Prefetch to warm Android cache and follow redirects
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { Image } = require('react-native');
+      const tryPrefetch = async (url: string) => {
+        try {
+          const sanitized = sanitizeImageUrl(url) || url;
+          const ok = await Image.prefetch(sanitized);
+          if (ok) return true;
+        } catch (err) {}
+        try {
+          const resp = await fetch(url);
+          const finalUrl = resp.url || url;
+          const sanitized2 = sanitizeImageUrl(finalUrl) || finalUrl;
+          try {
+            const ok2 = await Image.prefetch(sanitized2);
+            if (ok2) return true;
+          } catch (e) {}
+        } catch (e) {}
+        return false;
+      };
+
+      tryPrefetch(image)
+        .then((succeeded) => {
+          if (mounted) {
+            if (!succeeded) setImageFailed(true);
+            setPrefetching(false);
+          }
+        })
+        .catch(() => {
+          if (mounted) {
+            setImageFailed(true);
+            setPrefetching(false);
+          }
+        });
+    }
+    return () => {
+      mounted = false;
+    };
+  }, [image, imageFailed]);
+
+  const badgeCategory = (category || "Place").toString();
+  const normalizedCategory = badgeCategory === "Music" ? "Music" : badgeCategory === "Food" || badgeCategory === "Restaurant" ? "Restaurant" : badgeCategory === "Adventure" || badgeCategory === "Landmark" ? "Place" : badgeCategory;
+
+  const renderBadgeIcon = () => {
+    if (normalizedCategory === "Route") {
+      return <RouteIcon width={12} height={12} />;
+    }
+    if (normalizedCategory === "Restaurant") {
+      return <ForkIcon width={12} height={12} />;
+    }
+    if (normalizedCategory === "Music") {
+      return <MusicTabIcon width={12} height={12} />;
+    }
+    if (normalizedCategory === "Place" || normalizedCategory === "Landmark" || normalizedCategory === "Adventure") {
+      return <LocationIcon width={10} height={12} />;
+    }
+    return <EventIcon width={12} height={14} />;
+  };
+
+  const handleFavorite = async () => {
     if (favorite) {
-      removeFromFavorites(id);
+      await removeFromFavorites(id);
       showInfo('Favorites Removed', "Successfully removed from favorites");
     } else {
-      addToFavorites({
+      await addToFavorites({
         id,
         title,
         description,
@@ -69,49 +158,92 @@ const PlacesArroundCard: React.FC<PlacesAroundCardProps> = ({
     }
   };
 
-  return (
-    <View style={[styles.container, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact]}>
-      <View style={styles.topSection}>
-        <Image source={typeof image === 'string' ? { uri: image } : image} style={styles.image} />
+  const handleHeartPress = (event: any) => {
+    event?.stopPropagation?.();
+    return handleFavorite();
+  };
 
-        <View style={styles.textContainer}>
+  const showRating = Boolean(rating) && !hideRating;
+  const showTime = Boolean(time) && !hideTime;
+  const showLocation = Boolean(location) && !hideLocation;
+  const visibleCount = (showLocation ? 1 : 0) + (showTime ? 1 : 0);
+  const hasBottom = visibleCount > 0;
+  const containerHeight = hasBottom ? 126 : 96;
+  const displayTime = time;
+
+  return (
+    <ActionTouchable
+      activeOpacity={0.9}
+      onPress={onPress}
+      style={[{ ...styles.container, height: containerHeight }, { width: width ?? "100%" }, variant === "compact" && styles.containerCompact, showFullText && styles.fullTextContainer]}
+    >
+      <View style={styles.topSection}>
+        <Image
+          source={resolvedImage}
+          onError={() => setImageFailed(true)}
+          style={styles.image}
+          resizeMode="cover"
+        />
+
+        <View style={[styles.textContainer, showFullText && styles.fullTextContent]}>
           <View style={styles.badge}>
-            {category === "Route" ? (
-              <RouteIcon width={12} height={12} />
-            ) : (
-              <EventIcon width={12} height={14} />
-            )}
+            {renderBadgeIcon()}
             <Text style={styles.badgeText}>
-              {category === "Route" ? "Route" : "Event"}
+              {normalizedCategory === "Route"
+                ? "Route"
+                : normalizedCategory === "Restaurant"
+                ? "Restaurant"
+                : normalizedCategory === "Music"
+                ? "Music"
+                : normalizedCategory === "Place" || normalizedCategory === "Landmark" || normalizedCategory === "Adventure"
+                ? "Place"
+                : normalizedCategory}
             </Text>
           </View>
 
-          <Text style={styles.title} numberOfLines={1}>{title}</Text>
-          <Text style={styles.description} numberOfLines={1}>{description}</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.title} numberOfLines={showFullText ? undefined : 1}>{title}</Text>
+            {showRating ? (
+              <View style={styles.titleRating}>
+                <StarIcon width={12} height={12} />
+                <Text style={styles.titleRatingText}>{rating}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          <Text style={styles.description} numberOfLines={showFullText ? undefined : 1}>{description}</Text>
         </View>
 
-        <TouchableOpacity style={styles.heartIcon} onPress={handleFavorite}>
+        <ActionTouchable style={styles.heartIcon} onPress={handleHeartPress}>
           {favorite ? <RedHeartIcon width={15} height={13} /> : <HeartIcon width={15} height={13} />}
-        </TouchableOpacity>
+        </ActionTouchable>
       </View>
 
-      <View style={styles.divider} />
-      
-      <View style={[styles.bottomSection, variant === "compact" && styles.bottomSectionCompact]}>
-        <View style={styles.infoItem}>
-          <StarIcon width={15} height={14} />
-          <Text style={styles.infoText}>{rating}</Text>
-        </View>
-        <View style={styles.infoItem}>
-          <LocationIcon width={10} height={12} />
-          <Text style={styles.infoText}>{location}</Text>
-        </View>
-        <View style={styles.infoItem}>
-          <TimeIcon width={13} height={13} />
-          <Text style={[styles.infoText, { color: COLORS.TEXT_GREEN }]}>{time}</Text>
-        </View>
-      </View>
-    </View>
+      {!hideDivider && <View style={styles.divider} />}
+
+      {hasBottom ? (
+        (() => {
+          const justify = visibleCount === 1 ? 'flex-start' : 'space-between';
+          return (
+            <View style={[styles.bottomSection, showFullText && styles.fullTextBottomSection, variant === "compact" && styles.bottomSectionCompact, { justifyContent: justify as any }]}>
+                {showLocation ? (
+                <View style={[styles.infoItem, styles.locationInfoItem]}>
+                  <LocationIcon width={10} height={12} />
+                  <Text style={styles.infoText} numberOfLines={showFullText ? undefined : 1} ellipsizeMode="tail">{location}</Text>
+                </View>
+              ) : null}
+
+              {showTime ? (
+                <View style={[styles.infoItem, styles.timeInfoItem]}>
+                  <TimeIcon width={13} height={13} color={timeColor} />
+                  <Text style={[styles.infoText, styles.timeInfoText, { color: timeColor }]}>{displayTime}</Text>
+                </View>
+              ) : null}
+            </View>
+          );
+        })()
+      ) : null}
+    </ActionTouchable>
   );
 };
 
@@ -123,6 +255,18 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.WHITE,
     borderRadius: 14,
     paddingTop: 9,
+  },
+  fullTextContainer: {
+    height: 'auto',
+    minHeight: 96,
+    paddingBottom: 12,
+  },
+  fullTextContent: {
+    paddingRight: 12,
+  },
+  fullTextBottomSection: {
+    height: 'auto',
+    paddingTop: 12,
   },
   containerCompact: {
     paddingHorizontal: 0,
@@ -138,6 +282,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 62,
     borderRadius: 6.71,
+    backgroundColor: COLORS.TEXT_SECONDARY,
   },
 
   textContainer: {
@@ -161,12 +306,35 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.InterTight_Regular,
   },
 
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 6,
+    gap: 8,
+  },
+
   title: {
+    flex: 1,
     fontSize: FONT_SIZE.SMALL_TEXT,
     color: COLORS.TEXT_PRIMARY,
-    marginTop: 6,
     fontFamily: FONT_FAMILY.InterTight_Medium,
   },
+
+  titleRating: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 24,
+    paddingLeft: 4,
+  },
+
+  titleRatingText: {
+    fontSize: FONT_SIZE.CARD_TEXT,
+    color: COLORS.TEXT_PRIMARY,
+    marginLeft: 4,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+  },
+
 
   description: {
     fontSize: FONT_SIZE.CARD_TEXT,
@@ -194,6 +362,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 14,
     height: 43,
+    gap: 8,
   },
 
   bottomSectionCompact: {
@@ -203,6 +372,16 @@ const styles = StyleSheet.create({
   infoItem: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 1,
+    minWidth: 0,
+  },
+
+  locationInfoItem: {
+    flex: 1,
+  },
+
+  timeInfoItem: {
+    flexShrink: 0,
   },
 
   infoText: {
@@ -210,5 +389,10 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     color: COLORS.TEXT_PRIMARY,
     fontFamily: FONT_FAMILY.InterTight_Regular,
+    flexShrink: 1,
+  },
+
+  timeInfoText: {
+    flexShrink: 0,
   },
 });

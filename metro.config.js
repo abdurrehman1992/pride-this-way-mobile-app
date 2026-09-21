@@ -12,7 +12,10 @@
 
 
 
+const path = require("path");
 const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Metro configuration for React Native
@@ -32,6 +35,11 @@ const config = {
       (ext) => ext !== "svg"
     ),
     sourceExts: [...defaultConfig.resolver.sourceExts, "svg"],
+    // Cloud Functions are deployed separately and never part of the app bundle.
+    blockList: [
+      ...[].concat(defaultConfig.resolver.blockList ?? []),
+      new RegExp(`^${escapeRegExp(path.join(__dirname, "functions"))}[\\\\/].*`),
+    ],
   },
 };
 

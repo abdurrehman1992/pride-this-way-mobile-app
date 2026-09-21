@@ -1,13 +1,21 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
+
 interface User {
   id: string;
   name: string;
   email: string;
+  phone?: string | null;
+  profileImage?: string | null;
+  points?: number;
+  favorites?: string[];
+  favoriteTours?: string[];
+  favoriteEvents?: string[];
 }
 interface AuthState {
   user: User | null;
   token: string | null;
   isLoggedIn: boolean;
+  initialized: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -15,6 +23,7 @@ const initialState: AuthState = {
   user: null,
   token: null,
   isLoggedIn: false,
+  initialized: false,
   loading: false,
   error: null,
 };
@@ -33,18 +42,51 @@ const authSlice = createSlice({
       state.user = action.payload.user;
       state.token = action.payload.token;
       state.isLoggedIn = true;
+      state.initialized = true;
       state.loading = false;
+      state.error = null;
     },
     loginFailure: (state, action: PayloadAction<string>) => {
       state.loading = false;
+      state.initialized = true;
       state.error = action.payload;
+    },
+    setAuthInitialized: (state) => {
+      state.initialized = true;
+      state.loading = false;
     },
     logout: (state) => {
       state.user = null;
       state.token = null;
       state.isLoggedIn = false;
+      state.initialized = true;
       state.error = null;
       state.loading = false;
+    },
+    updateUserProfile: (state, action: PayloadAction<Partial<User>>) => {
+      if (state.user) {
+        state.user = { ...state.user, ...action.payload };
+      }
+    },
+    setUserPoints: (state, action: PayloadAction<number>) => {
+      if (state.user) {
+        state.user.points = action.payload;
+      }
+    },
+    setUserFavorites: (state, action: PayloadAction<string[]>) => {
+      if (state.user) {
+        state.user.favorites = action.payload;
+      }
+    },
+    setUserFavoriteTours: (state, action: PayloadAction<string[]>) => {
+      if (state.user) {
+        state.user.favoriteTours = action.payload;
+      }
+    },
+    setUserFavoriteEvents: (state, action: PayloadAction<string[]>) => {
+      if (state.user) {
+        state.user.favoriteEvents = action.payload;
+      }
     },
   },
 });
@@ -52,6 +94,12 @@ export const {
   loginStart,
   loginSuccess,
   loginFailure,
+  setAuthInitialized,
   logout,
+  updateUserProfile,
+  setUserPoints,
+  setUserFavorites,
+  setUserFavoriteTours,
+  setUserFavoriteEvents,
 } = authSlice.actions;
 export default authSlice.reducer;

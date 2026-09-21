@@ -1,19 +1,21 @@
+import { toastConfig } from '../../utils/toastConfig';
+import { checkInternetConnection } from '../../utils/networkStatus';
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
     Modal,
     View,
     Text,
-    TouchableOpacity,
     TextInput,
     StyleSheet,
     ScrollView,
     Keyboard,
     Platform,
     ActivityIndicator,
-    Alert,
     Animated,
     PanResponder,
-    KeyboardAvoidingView
+    KeyboardAvoidingView,
+    StatusBar,
 } from "react-native";
 
 import {
@@ -21,6 +23,9 @@ import {
     getCurrentPosition,
     getAddressFromCoords,
 } from "../../utils/location";
+import { suggestLocations } from "../../services/aiService";
+import { searchLocationSuggestions } from "../../services/myTourService";
+import { CustomAlert } from "../../utils/CustomAlert";
 
 import {
     ModalCloseIcon,
@@ -36,13 +41,18 @@ interface Props {
     visible: boolean;
     onClose: () => void;
     onNext: (location: string) => void;
+    title?: string;
+    locations?: string[];
+    searchValue?: string;
+    onSearchChange?: (value: string) => void;
+    loadingSuggestions?: boolean;
     showActions?: boolean;
     primaryLabel?: string;
     secondaryLabel?: string;
     onSecondaryPress?: () => void;
+    cityOnlyResults?: boolean;
 }
-
-const LOCATION_LIST = [
+const DEFAULT_LOCATION_LIST = [
     "San Diego, CA",
     "San Jose, CA",
     "Fresno, CA",
@@ -53,11 +63,80 @@ const LOCATION_LIST = [
     "Austin, TX",
 ];
 
-const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
-    const [search, setSearch] = useState("");
+// Tour recommendations require a real city, not a neighborhood or housing
+// scheme. Keep the final guard here as well as in the search service so stale
+// or cached suggestions can never reach the selectable list.
+const isCityOnlyLabel = (value: string) => {
+    const parts = value
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    if (parts.length < 3) return false;
+
+    const firstPart = parts[0].toLowerCase();
+    const areaWords = [
+        'bahria',
+        'dha',
+        'defence',
+        'model town',
+        'phase ',
+        'township',
+        'colony',
+        'society',
+        'housing',
+        'sector ',
+        'block ',
+        'village',
+        'neighborhood',
+        'district',
+    ];
+
+    return !areaWords.some((word) => firstPart.includes(word));
+};
+
+const LocationModal: React.FC<Props> = ({
+    visible,
+    onClose,
+    onNext,
+    title = "Select Your Location",
+    locations,
+    searchValue,
+    onSearchChange,
+    loadingSuggestions,
+    cityOnlyResults = false,
+}) => {
+    const [internalSearch, setInternalSearch] = useState("");
     const [selected, setSelected] = useState("");
     const [loadingLocation, setLoadingLocation] = useState(false);
+    const [locationToast, setLocationToast] = useState<{
+        title: string; message: string;
+    } | null>(null);
+
+    useEffect(() => {
+        if (!visible) {
+            setLocationToast(null);
+            return;
+        }
+        if (!locationToast) return;
+        const timer = setTimeout(() => setLocationToast(null), 3500);
+        return () => clearTimeout(timer);
+    }, [visible, locationToast]);
+
+    const showLocationToast = (toastTitle: string, message: string) => {
+        setLocationToast({ title: toastTitle, message });
+    };
+
+    const requireLocationInternet = async () => {
+        if (await checkInternetConnection()) return true;
+        showLocationToast('No internet connection', 'Your internet is off. Please connect and try again.');
+        return false;
+    };
     const [isKeyboardVisible, setKeyboardVisible] = useState(false);
+    const [aiCities, setAiCities] = useState<string[]>([]);
+    const [aiLoading, setAiLoading] = useState(false);
+    const didInitializeOpenRef = useRef(false);
+    const search = searchValue ?? internalSearch;
+    const useExternal = locations !== undefined;
 
     const panY = useRef(new Animated.Value(1000)).current;
     useEffect(() => {
@@ -88,6 +167,56 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
             panY.setValue(1000);
         }
     }, [visible, panY]);
+
+    // Set the initial selection only once per modal opening. Previously this
+    // re-ran after every typed character and treated the query (e.g. "lahore")
+    // as a completed selection, which hides the suggestion list below.
+    useEffect(() => {
+        if (!visible) {
+            didInitializeOpenRef.current = false;
+            return;
+        }
+        if (didInitializeOpenRef.current) return;
+
+        didInitializeOpenRef.current = true;
+        if (useExternal) {
+            setInternalSearch(searchValue || '');
+            setSelected(searchValue || '');
+        } else {
+            setInternalSearch('');
+            setSelected('');
+        }
+    }, [visible, useExternal, searchValue]);
+
+    useEffect(() => {
+        if (useExternal || !visible) return;
+        let cancelled = false;
+
+        setAiLoading(true);
+        const handle = setTimeout(async () => {
+            try {
+                if (search.trim()) {
+                    // Use the same strict city-only geocoder as tour creation.
+                    // The AI autocomplete can return neighborhoods/areas.
+                    const results = await searchLocationSuggestions(search);
+                    if (!cancelled) setAiCities(results.map((item) => item.label));
+                } else {
+                    const cities = await suggestLocations('');
+                    if (!cancelled) setAiCities(cities);
+                }
+            } catch (err) {
+                console.warn("[LocationModal] suggestLocations failed", err);
+                if (!cancelled) setAiCities(DEFAULT_LOCATION_LIST);
+            } finally {
+                if (!cancelled) setAiLoading(false);
+            }
+        }, search.trim() ? 400 : 0);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(handle);
+        };
+    }, [search, visible, useExternal]);
 
     const closeWithAnimation = () => {
         Animated.timing(panY, {
@@ -126,22 +255,65 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                 : "70%";
 
     const filteredLocations = useMemo(() => {
-        if (!search.trim()) return LOCATION_LIST;
-        return LOCATION_LIST.filter((item) =>
-            item.toLowerCase().includes(search.toLowerCase())
-        );
-    }, [search]);
+        if (useExternal) {
+            const rawList = locations as string[];
+            const list = cityOnlyResults ? rawList.filter(isCityOnlyLabel) : rawList;
+            if (!search.trim()) return list;
+            return list.filter((item) =>
+                item.toLowerCase().includes(search.toLowerCase())
+            );
+        }
+        return cityOnlyResults ? aiCities.filter(isCityOnlyLabel) : aiCities;
+    }, [locations, search, useExternal, aiCities, cityOnlyResults]);
+
+    const showLoadingSuggestions = useExternal
+        ? !!loadingSuggestions
+        : aiLoading;
+
+    const normalizeLocationString = (address: string) => {
+        const parts = address
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean);
+
+        if (parts.length === 0) return "";
+
+        const country = parts[parts.length - 1];
+
+        const cleanPart = (part: string) =>
+            part
+                .replace(/\b(City|Tehsil|District|Division|Province|Region|State|County|Municipality|Union Council)\b/gi, "")
+                .replace(/\s+/g, " ")
+                .trim();
+
+        const cleaned = parts.map(cleanPart).filter(Boolean);
+        if (cleaned.length === 1) return cleaned[0];
+
+        for (let i = cleaned.length - 2; i >= 0; i -= 1) {
+            const part = cleaned[i];
+            if (/^\d{3,}$/.test(part)) continue;
+            if (/^(Punjab|Sindh|Balochistan|Khyber Pakhtunkhwa|KP|Gilgit|Azad Kashmir|Islamabad)$/i.test(part)) continue;
+            return `${part}, ${country}`;
+        }
+
+        return `${cleaned[0]}, ${country}`;
+    };
 
     const handleSelect = (item: string) => {
-        setSearch(item);
+        if (onSearchChange) {
+            onSearchChange(item);
+        } else {
+            setInternalSearch(item);
+        }
         setSelected(item);
         Keyboard.dismiss();
     };
 
     const getCurrentLocation = async () => {
+        if (!(await requireLocationInternet())) return;
         const hasPermission = await requestLocationPermission();
         if (!hasPermission) {
-            Alert.alert(
+            CustomAlert.alert(
                 "Permission Required",
                 "Please allow location access in your device settings."
             );
@@ -166,30 +338,61 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                 });
             }
 
+            if (!(await requireLocationInternet())) return;
             const addr = await getAddressFromCoords(
                 pos.coords.latitude,
                 pos.coords.longitude
             );
+            // Connectivity can disappear while GPS or reverse geocoding is running.
+            if (!(await requireLocationInternet())) return;
+            // The shared geocoder falls back to coordinates. This location
+            // picker accepts an address only; leave its selection untouched.
+            if (/^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/.test(addr)) {
+                showLocationToast('Location unavailable', 'Unable to find your address. Please try again.');
+                return;
+            }
+            const normalizedAddress = normalizeLocationString(addr);
 
-            setSearch(addr);
-            setSelected(addr);
-        } catch (error) {
-            console.log("LOCATION ERROR:", error);
-            Alert.alert("Error", "Unable to fetch location");
+            if (onSearchChange) {
+                onSearchChange(normalizedAddress);
+            } else {
+                setInternalSearch(normalizedAddress);
+            }
+            setSelected(normalizedAddress);
+            // console.log("Current location :", normalizedAddress)
+        } catch {
+            if (!(await requireLocationInternet())) return;
+            showLocationToast('Location unavailable', 'Unable to fetch your location. Please try again.');
         } finally {
             setLoadingLocation(false);
         }
     };
 
     return (
-        <Modal visible={visible} transparent animationType="fade" onRequestClose={closeWithAnimation}>
+        <Modal
+            visible={visible}
+            transparent
+            statusBarTranslucent={Platform.OS === 'android'}
+            animationType="fade"
+            onRequestClose={closeWithAnimation}
+        >
+            {visible && Platform.OS === 'android' ? (
+                <StatusBar
+                    translucent
+                    backgroundColor="transparent"
+                    barStyle="light-content"
+                />
+            ) : null}
             <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                // Android's height behavior can leave the transparent modal
+                // viewport shortened after the keyboard is dismissed. That
+                // moves the sheet upward and exposes the tab bar underneath.
+                behavior={Platform.OS === "ios" ? "padding" : undefined}
                 keyboardVerticalOffset={0}
                 style={styles.overlay}
             >
 
-                <TouchableOpacity
+                <ActionTouchable
                     activeOpacity={1}
                     style={StyleSheet.absoluteFill}
                     onPress={closeWithAnimation}
@@ -206,13 +409,13 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                     ]}
                 >
                     <View {...panResponder.panHandlers} style={styles.dragHandle}>
-                        <TouchableOpacity onPress={closeWithAnimation}>
+                        <ActionTouchable onPress={closeWithAnimation}>
                             <ModalCloseIcon width={38} height={12} />
-                        </TouchableOpacity>
+                        </ActionTouchable>
                     </View>
 
                     <Text style={[styles.title, isKeyboardVisible && styles.titleKeyboard]}>
-                        Select Your Location
+                        {title}
                     </Text>
                     <View style={styles.inputBox}>
                         <SelectLocationInput width={25} height={25} />
@@ -221,12 +424,51 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                             placeholderTextColor={COLORS.TEXT_PRIMARY}
                             value={search}
                             onChangeText={(value) => {
-                                setSearch(value);
+                                if (onSearchChange) {
+                                    onSearchChange(value);
+                                } else {
+                                    setInternalSearch(value);
+                                }
                                 setSelected("");
                             }}
                             placeholder="Search location..."
                         />
+                        {!!search && (
+                            <ActionTouchable
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                    if (onSearchChange) {
+                                        onSearchChange("");
+                                    } else {
+                                        setInternalSearch("");
+                                    }
+
+                                    setSelected("");
+                                }}
+                            >
+                                <View style={styles.clearButton}>
+                                    <Text style={styles.clearText}>✕</Text>
+                                </View>
+                            </ActionTouchable>
+                        )}
                     </View>
+                    <ActionTouchable
+                        style={styles.currentLocation}
+                        onPress={() => {
+                            void getCurrentLocation();
+                        }}
+                        disabled={loadingLocation}
+                    >
+                        {loadingLocation ? (
+                            <ActivityIndicator color={COLORS.BUTTON_COLOR} />
+                        ) : (
+                            <CurrentLocationIcon width={36} height={36} />
+                        )}
+
+                        <Text style={styles.secondaryText}>
+                            Use My Current Location
+                        </Text>
+                    </ActionTouchable>
 
                     <ScrollView
                         style={styles.locationList}
@@ -239,73 +481,70 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
                             styles.scrollContentBottom,
                         ]}
                     >
-                        {filteredLocations.length > 0 ? (
+                        {showLoadingSuggestions ? null : filteredLocations.length > 0 && !selected ? ( // Added "&& !selected" here
                             <>
                                 {filteredLocations.map((item, i) => (
-                                    <TouchableOpacity
+                                    <ActionTouchable
                                         key={i}
                                         style={styles.locationItem}
                                         onPress={() => handleSelect(item)}
                                     >
                                         <SelectedLocationIcon width={36} height={36} />
-                                        <Text style={styles.locationText}>{item}</Text>
-                                    </TouchableOpacity>
+                                        <Text
+                                            style={styles.locationText}
+                                            numberOfLines={2}
+                                            ellipsizeMode="tail"
+                                        >
+                                            {item}
+                                        </Text>
+                                    </ActionTouchable>
                                 ))}
-
-                                <TouchableOpacity
-                                    style={styles.currentLocation}
-                                    onPress={getCurrentLocation}
-                                    disabled={loadingLocation}
-                                >
-                                    {loadingLocation ? (
-                                        <ActivityIndicator color={COLORS.BUTTON_COLOR} />
-                                    ) : (
-                                        <CurrentLocationIcon width={36} height={36} />
-                                    )}
-
-                                    <Text style={styles.secondaryText}>
-                                        Use My Current Location
-                                    </Text>
-                                </TouchableOpacity>
                             </>
                         ) : (
-                            <View style={styles.emptyState}>
-                                <Text style={styles.emptyText}>
-                                    No location found
-                                </Text>
-
-                                <TouchableOpacity
-                                    style={styles.currentLocation}
-                                    onPress={getCurrentLocation}
-                                    disabled={loadingLocation}
-                                >
-                                    {loadingLocation ? (
-                                        <ActivityIndicator color={COLORS.BUTTON_COLOR} />
-                                    ) : (
-                                        <CurrentLocationIcon width={36} height={36} />
-                                    )}
-
-                                    <Text style={styles.secondaryText}>
-                                        Use My Current Location
+                            // Only show "No location found" if the user hasn't selected an item yet
+                            !selected && (
+                                <View style={styles.emptyState}>
+                                    <Text style={styles.emptyText}>
+                                        No location found
                                     </Text>
-                                </TouchableOpacity>
-                            </View>
+                                </View>
+                            )
                         )}
                     </ScrollView>
 
-                    {/* BUTTON */}
-                    <TouchableOpacity
+                    <ActionTouchable
                         style={[
                             styles.primaryBtnFull,
-                            (!selected && !search) && styles.primaryBtnDisabled,
+                            (!selected || !selected.trim()) && styles.primaryBtnDisabled,
                         ]}
-                        disabled={!selected && !search}
-                        onPress={() => onNext(selected || search)}
+                        disabled={!selected || !selected.trim()}
+                        onPress={() => {
+                            const value = selected?.trim();
+                            if (!value) {
+                                CustomAlert.alert(
+                                    'Please select a location',
+                                    'Choose a location first before continuing.'
+                                );
+                                return;
+                            }
+
+                            return onNext(value);
+                        }}
                     >
                         <Text style={styles.primaryText}>Next</Text>
-                    </TouchableOpacity>
+                    </ActionTouchable>
 
                 </Animated.View>
+                {visible && locationToast && (
+                    <View
+                        pointerEvents="none"
+                        accessibilityRole="alert"
+                        accessibilityLiveRegion="polite"
+                        style={styles.locationToast}
+                    >
+                        {toastConfig.info({ text1: locationToast.title, text2: locationToast.message })}
+                    </View>
+                )}
             </KeyboardAvoidingView>
         </Modal>
     );
@@ -313,8 +552,18 @@ const LocationModal: React.FC<Props> = ({ visible, onClose, onNext }) => {
 
 export default LocationModal;
 const styles = StyleSheet.create({
+    // Render inside the native modal, above its elevated bottom sheet.
+    locationToast: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 100,
+        zIndex: 1000,
+        elevation: 30,
+    },
     overlay: {
         flex: 1,
+        width: "100%",
         backgroundColor: "rgba(0,0,0,0.5)",
         justifyContent: "flex-end",
     },
@@ -324,6 +573,22 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
         paddingBottom: Platform.OS === "ios" ? 40 : 20,
+        zIndex: 100,
+        elevation: 24,
+    },
+    clearButton: {
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: "#E5E5E5",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+
+    clearText: {
+        fontSize: 11,
+        color: "#666",
+        fontWeight: "700",
     },
     bottomSheetKeyboard: {
         paddingBottom: Platform.OS === "ios" ? 16 : 14,
@@ -337,7 +602,7 @@ const styles = StyleSheet.create({
     },
     scrollContentBottom: {
         flexGrow: 1,
-        justifyContent: "flex-end",
+        justifyContent: "flex-start",
     },
     locationItem: {
         flexDirection: "row",
@@ -387,9 +652,11 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.InterTight_Regular,
     },
     locationText: {
+        flex: 1,
         fontSize: FONT_SIZE.TEXT,
         fontFamily: FONT_FAMILY.InterTight_Medium,
         color: COLORS.TEXT_PRIMARY,
+        lineHeight: 24,
     },
     primaryBtnFull: {
         width: "100%",

@@ -1,5 +1,16 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React from "react";
-import { Modal, View, Text, TouchableOpacity, TextInput, Image, StyleSheet } from "react-native";
+import {
+  Modal,
+  View,
+  Text,
+  TextInput,
+  Image,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from "react-native";
 import { CrossIcon } from "../../constants/icons";
 import { NameTourIcon } from "../../constants/images";
 import { COLORS } from "../../constants/colors";
@@ -10,20 +21,63 @@ interface Props {
   tourName: string;
   setTourName: (val: string) => void;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: (nextName: string) => void;
+  onUpdateLater?: () => void;
 }
 
-const NameTourModal: React.FC<Props> = ({ visible, tourName, setTourName, onClose, onConfirm }) => {
+const NameTourModal: React.FC<Props> = ({
+  visible,
+  tourName,
+  setTourName,
+  onClose,
+  onConfirm,
+  onUpdateLater,
+}) => {
+  const [draftName, setDraftName] = React.useState(tourName);
+
+  React.useEffect(() => {
+    if (visible) {
+      setDraftName(tourName);
+    }
+  }, [visible, tourName]);
+
+  const handleClose = () => {
+    setDraftName(tourName);
+    onClose();
+  };
+
+  const handleConfirm = () => {
+    const nextName = draftName.trim() || tourName;
+    setTourName(nextName);
+    return onConfirm(nextName);
+  };
+
+  const handleUpdateLaterPress = () => {
+    setDraftName(tourName);
+    return onUpdateLater?.();
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="fade">
-      <View style={styles.centerOverlay}>
-        <View style={styles.nameModalPopup}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        // keyboardVerticalOffset={keyboardOffset}
+      >
+        <ScrollView contentContainerStyle={styles.centerOverlay} keyboardShouldPersistTaps="handled">
+          <View style={styles.nameModalPopup}>
           <View style={styles.floatingImageWrapper}>
             <Image source={NameTourIcon} style={styles.floatingImage} />
           </View>
-          <TouchableOpacity style={styles.nameModalClose} onPress={onClose}>
+          <ActionTouchable style={styles.nameModalClose} onPress={handleClose}>
             <CrossIcon width={12} height={12} />
-          </TouchableOpacity>
+          </ActionTouchable>
           <Text style={styles.nameModalTitle}>Name this Tour</Text>
           <Text style={styles.nameModalDesc}>Give your adventure a catchy name to save it to your list and easily find it later.</Text>
 
@@ -31,20 +85,35 @@ const NameTourModal: React.FC<Props> = ({ visible, tourName, setTourName, onClos
             placeholder="e.g. Weekend in USA, Food Walk, etc."
             style={styles.nameInput}
             placeholderTextColor={COLORS.TEXT_PRIMARY}
-            value={tourName}
-            onChangeText={setTourName}
+            value={draftName}
+            onChangeText={setDraftName}
+            numberOfLines={1}
+            multiline={false}
+            textAlignVertical="center"
+            ellipsizeMode="tail"
+            adjustsFontSizeToFit
+            minimumFontScale={0.85}
           />
 
           <View style={styles.nameModalButtonRow}>
-            <TouchableOpacity style={styles.updateLaterBtn} onPress={onClose}>
+            <ActionTouchable
+              testID="name-tour-update-later"
+              style={styles.updateLaterBtn}
+              onPress={handleUpdateLaterPress}
+            >
               <Text style={styles.updateLaterText}>Update this Later</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmTourBtn} onPress={onConfirm}>
+            </ActionTouchable>
+            <ActionTouchable
+              testID="name-tour-confirm"
+              style={styles.confirmTourBtn}
+              onPress={handleConfirm}
+            >
               <Text style={styles.btnText}>Confirm</Text>
-            </TouchableOpacity>
+            </ActionTouchable>
           </View>
-        </View>
-      </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -59,7 +128,8 @@ const styles = StyleSheet.create({
         backgroundColor: "rgba(0,0,0,0.4)", // optional but recommended for modal UX
     },
     nameModalPopup: {
-        width: "85%",
+        width: "88%",
+        maxWidth: 360,
         backgroundColor: COLORS.WHITE,
         borderRadius: 19,
         padding: 24,
@@ -106,12 +176,14 @@ const styles = StyleSheet.create({
         width: "100%",
         height: 47,
         marginBottom: 24,
-        paddingHorizontal: 16,
+        paddingHorizontal: 14,
         borderWidth: 1,
         borderRadius: 12,
         borderColor: COLORS.MODAL_INPUT_COLOR,
-        fontSize: FONT_SIZE.TEXT,
+        fontSize: 15,
+        fontFamily: FONT_FAMILY.InterTight_Regular,
         color: COLORS.TEXT_PRIMARY,
+        includeFontPadding: false,
     },
     nameModalButtonRow: {
         flexDirection: "row",

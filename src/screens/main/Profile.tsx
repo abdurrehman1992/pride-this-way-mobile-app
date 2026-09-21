@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native'
+import ActionTouchable from "../../components/common/ActionTouchable";
+import { View, Text, StyleSheet, Image } from 'react-native'
 import React from 'react'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { COLORS } from '../../constants/colors'
@@ -7,60 +8,76 @@ import { PROFILE_IMAGE } from '../../constants/images'
 import { Arrow, ChangePasswordIcon, EditProfileIcon, LogoutIcon } from '../../constants/icons'
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts'
 import { logout } from "../../Redux/slices/authSlice";
-import { useDispatch } from "react-redux";
+import { RootState } from "../../Redux/store";
+import { useDispatch, useSelector } from "react-redux";
 import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { ProfileStackParamList } from '../../types/types'
+import { logoutUser } from '../../services/authService';
+import { showError, showSuccess } from '../../components/common/AppToast';
 type NavigationProp = NativeStackNavigationProp<ProfileStackParamList, "EditProfile">;
 
 const Profile = () => {
   const navigation = useNavigation<NavigationProp>();
   const dispatch = useDispatch();
+  const user = useSelector((state: RootState) => state.auth.user);
+ // console.log(user)
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+      dispatch(logout());
+      showSuccess('You have logged out successfully')
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to logout.";
+      showError("Logout Failed", message);
+    }
+  };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.top}>
-        <ForgeTopHeader title="Profile" />
-      </View>
-      <View style={styles.profileContainer}>
-        <Image
-          source={{
-            uri: PROFILE_IMAGE
-          }}
-          style={styles.profileImage}
-        />
-        <Text style={styles.name}>Michael Smith</Text>
-        <Text style={styles.email}>michaelsmith@gmail.com</Text>
-      </View>
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity style={styles.button}
-          onPress={() => navigation.navigate('EditProfile')}
+    <>
+      <SafeAreaView style={styles.container}>
+        <View style={styles.top}>
+          <ForgeTopHeader title="Profile" />
+        </View>
+        <View style={styles.profileContainer}>
+          <Image
+            source={{
+              uri: user?.profileImage || 'https://res.cloudinary.com/demo/image/upload/w_200,c_fill,g_face,r_max/avatar.png'
+            }}
+            style={styles.profileImage}
+          />
+          <Text style={styles.name}>{user?.name || "Guest User"}</Text>
+          <Text style={styles.email}>{user?.email || "guest@example.com"}</Text>
+        </View>
+        <View style={styles.buttonContainer}>
+          <ActionTouchable style={styles.button}
+            onPress={() => navigation.navigate('EditProfile')}
+          >
+            <View style={styles.left}>
+              <EditProfileIcon width={46.94} height={46.94} />
+              <Text style={styles.buttonText}>Edit Profile</Text>
+            </View>
+            <Arrow width={18.25} />
+          </ActionTouchable>
+          <ActionTouchable style={styles.button}
+            onPress={() => navigation.navigate('ChangePassword')}
+          >
+            <View style={styles.left}>
+              <ChangePasswordIcon width={46.94} height={46.94} />
+              <Text style={styles.buttonText}>Change Password</Text>
+            </View>
+            <Arrow width={18.25} />
+          </ActionTouchable>
+        </View>
+        <ActionTouchable style={styles.logoutBtn}
+          onPress={handleLogout}
         >
-          <View style={styles.left}>
-            <EditProfileIcon width={46.94} height={46.94} />
-            <Text style={styles.buttonText}>Edit Profile</Text>
-          </View>
-          <Arrow width={18.25} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.button}
-        onPress={()=>navigation.navigate('ChangePassword')}
-        >
-          <View style={styles.left}>
-            <ChangePasswordIcon width={46.94} height={46.94} />
-            <Text style={styles.buttonText}>Change Password</Text>
-          </View>
-          <Arrow width={18.25} />
-        </TouchableOpacity>
-      </View>
-      <TouchableOpacity style={styles.logoutBtn}
-        onPress={() => dispatch(
-          logout()
-        )}
-      >
-        <LogoutIcon width={36} height={36} />
-        <Text style={styles.logoutText}>Logout</Text>
-      </TouchableOpacity>
-    </SafeAreaView>
+          <LogoutIcon width={36} height={36} />
+          <Text style={styles.logoutText}>Logout</Text>
+        </ActionTouchable>
+      </SafeAreaView>
+    </>
   )
 }
 
@@ -96,14 +113,14 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 20,
     color: COLORS.TEXT_PRIMARY,
-    fontFamily:FONT_FAMILY.Poppins_SemiBold,
+    fontFamily: FONT_FAMILY.Poppins_SemiBold,
     // marginBottom: 6,
   },
 
   email: {
     fontSize: 14,
     color: COLORS.TEXT_PRIMARY,
-    fontFamily:FONT_FAMILY.Poppins_Regular
+    fontFamily: FONT_FAMILY.Poppins_Regular
   },
   button: {
     flexDirection: 'row',

@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect } from "react";
+import { StatusBar } from "react-native";
 import { Provider } from "react-redux";
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { store, persistor } from "./Redux/store";
@@ -7,19 +8,33 @@ import { PersistGate } from "redux-persist/integration/react";
 import Toast from "react-native-toast-message";
 import { toastConfig } from "./utils/toastConfig";
 import { FavoritesProvider } from "./context/FavoritesContext";
+import { AlertProvider } from "./context/AlertContext";
+import CustomAlertModal from "./components/modals/CustomAlertModal";
+import { initializeMapbox } from './services/mapboxConfig';
+
 const App = () => {
+  useEffect(() => {
+    initializeMapbox().catch(() => {
+      // Map screens render their fallback state if Mapbox cannot initialize.
+    });
+  }, []);
+
   return (
     <SafeAreaProvider>
-      <FavoritesProvider>
-        <Provider store={store}>
-          <PersistGate loading={null} persistor={persistor}>
-            <SafeAreaProvider>
-              <RootNavigator />
-              <Toast config={toastConfig} />
-            </SafeAreaProvider>
-          </PersistGate>
-        </Provider>
-      </FavoritesProvider>
+      <StatusBar hidden={false} translucent backgroundColor="transparent" barStyle="light-content" />
+      <Provider store={store}>
+        <PersistGate loading={null} persistor={persistor}>
+          <FavoritesProvider>
+            <AlertProvider>
+              <SafeAreaProvider>
+                <RootNavigator />
+                <CustomAlertModal />
+                <Toast config={toastConfig} />
+              </SafeAreaProvider>
+            </AlertProvider>
+          </FavoritesProvider>
+        </PersistGate>
+      </Provider>
     </SafeAreaProvider>
   );
 };

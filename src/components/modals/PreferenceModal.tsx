@@ -1,9 +1,9 @@
+import ActionTouchable from "../common/ActionTouchable";
 import React, { useRef, useEffect } from "react";
 import {
     Modal,
     View,
     Text,
-    TouchableOpacity,
     StyleSheet,
     Animated,
     PanResponder,
@@ -13,11 +13,11 @@ import {
 } from "react-native";
 
 import {
-    ModalCloseIcon,
     AddPreferenceIcon,
     PreferenceIcon,
 } from "../../constants/icons";
 
+import { CustomAlert } from "../../utils/CustomAlert";
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 
@@ -29,6 +29,7 @@ interface Props {
     togglePreference: (item: string) => void;
     clearAll: () => void;
     onClose: () => void;
+    preferences?: string[];
     mode?: ModalMode;
     onPrimary?: () => void;
     onSecondary?: () => void;
@@ -43,6 +44,7 @@ const PreferenceModal: React.FC<Props> = ({
     togglePreference,
     clearAll,
     onClose,
+    preferences = ["Food", "Adventure", "History", "Shopping"],
     mode = "myTour",
     onPrimary,
     onSecondary,
@@ -64,7 +66,7 @@ const PreferenceModal: React.FC<Props> = ({
         } else {
             panY.setValue(1000);
         }
-    }, [visible]);
+    }, [panY, visible]);
 
     const panResponder = useRef(
         PanResponder.create({
@@ -90,8 +92,7 @@ const PreferenceModal: React.FC<Props> = ({
 
     const secondaryText =
         secondaryLabel || (mode === "forYou" ? "Cancel" : "Back");
-
-    const preferences = ["Food", "Adventure", "History", "Shopping"];
+    const hasSelection = selectedPrefs.length > 0;
 
     return (
         <Modal visible={visible} transparent animationType="fade">
@@ -108,9 +109,7 @@ const PreferenceModal: React.FC<Props> = ({
 
                     {/* DRAG HANDLE */}
                     <View {...panResponder.panHandlers} style={styles.dragHandle}>
-                        <TouchableOpacity onPress={onClose}>
-                            <ModalCloseIcon width={38} height={12} />
-                        </TouchableOpacity>
+                        <View style={styles.handleBar} />
                     </View>
 
                     {/* HEADER */}
@@ -119,20 +118,20 @@ const PreferenceModal: React.FC<Props> = ({
                             Select Preferences
                         </Text>
 
-                        <TouchableOpacity onPress={clearAll}>
+                        <ActionTouchable onPress={clearAll}>
                             <Text style={styles.clearText}>
                                 Clear All
                             </Text>
-                        </TouchableOpacity>
+                        </ActionTouchable>
                     </View>
 
                     {/* LIST */}
-                    <ScrollView style={{ maxHeight: 300 }}>
+                    <ScrollView style={styles.scrollArea}>
                         {preferences.map((item, i) => {
                             const isLast = i === preferences.length - 1;
 
                             return (
-                                <TouchableOpacity
+                                <ActionTouchable
                                     key={i}
                                     style={[
                                         styles.prefItem,
@@ -150,7 +149,7 @@ const PreferenceModal: React.FC<Props> = ({
                                             {item}
                                         </Text>
                                     </View>
-                                </TouchableOpacity>
+                                </ActionTouchable>
                             );
                         })}
                     </ScrollView>
@@ -159,23 +158,36 @@ const PreferenceModal: React.FC<Props> = ({
                     {showTwoButtons && (
                         <View style={styles.rowButtons}>
 
-                            <TouchableOpacity
+                            <ActionTouchable
                                 style={styles.secondaryBtnSmall}
                                 onPress={onSecondary}
                             >
                                 <Text style={styles.secondaryText}>
                                     {secondaryText}
                                 </Text>
-                            </TouchableOpacity>
+                            </ActionTouchable>
 
-                            <TouchableOpacity
-                                style={styles.primaryBtnSmall}
-                                onPress={onPrimary}
+                            <ActionTouchable
+                                style={[styles.primaryBtnSmall, !hasSelection && styles.primaryBtnSmallDisabled]}
+                                disabled={!hasSelection}
+                                onPress={() => {
+                                    if (!selectedPrefs.length) {
+                                        const alertMessage =
+                                            mode === 'forYou'
+                                                ? 'Please select at least one preference to see recommendations.'
+                                                : 'Please choose at least one preference before continuing.';
+
+                                        CustomAlert.alert('Select a preference', alertMessage, [{ text: 'OK', style: 'cancel' }]);
+                                        return;
+                                    }
+
+                                    return onPrimary?.();
+                                }}
                             >
-                                <Text style={styles.primaryText}>
+                                <Text style={[styles.primaryText, !hasSelection && styles.primaryTextDisabled]}>
                                     {primaryText}
                                 </Text>
-                            </TouchableOpacity>
+                            </ActionTouchable>
 
                         </View>
                     )}
@@ -206,6 +218,13 @@ const styles = StyleSheet.create({
     dragHandle: {
         alignItems: "center",
         paddingTop: 12,
+    },
+
+    handleBar: {
+        width: 52,
+        height: 6,
+        borderRadius: 999,
+        backgroundColor: "#D0D0D0",
     },
 
     header: {
@@ -254,6 +273,9 @@ const styles = StyleSheet.create({
         marginTop: 16
 
     },
+    scrollArea: {
+        maxHeight: 300,
+    },
 
     secondaryBtnSmall: {
         flex: 1,
@@ -273,6 +295,9 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
     },
+    primaryBtnSmallDisabled: {
+        backgroundColor: '#D9D9D9',
+    },
 
     secondaryText: {
         color: COLORS.TEXT_PRIMARY,
@@ -284,5 +309,8 @@ const styles = StyleSheet.create({
         color: COLORS.WHITE,
         fontFamily: FONT_FAMILY.InterTight_SemiBold,
         fontSize: FONT_SIZE.TEXT,
+    },
+    primaryTextDisabled: {
+        color: '#A8A8A8',
     },
 });

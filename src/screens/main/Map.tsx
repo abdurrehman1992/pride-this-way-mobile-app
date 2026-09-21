@@ -1,320 +1,1550 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import {
-    View,
-    Text,
-    StyleSheet,
-    Image,
-    TouchableOpacity,
-} from "react-native";
-import React, { useEffect, useMemo, useState } from "react";
-import Mapbox, { type FillLayerStyle, type LineLayerStyle } from "@rnmapbox/maps";
-import Config from "react-native-config";
-import type { FeatureCollection, LineString, Polygon } from "geojson";
-import TopHeader from "../../components/Home/TopHeader";
-import CustomSearchInput from "../../components/Home/CustomSearchInput";
-import { COLORS } from "../../constants/colors";
-import { FilterIcon } from "../../constants/images";
-import { BlueMapIcon, DropdownIcon, SelectedLocationIcon } from "../../constants/icons";
-import { FONT_FAMILY } from "../../constants/fonts";
+  Dimensions,
+  Keyboard,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import Mapbox, {
+  type FillLayerStyle,
+  type LineLayerStyle,
+  type SymbolLayerStyle,
+} from '@rnmapbox/maps';
+import Config from 'react-native-config';
+import type { FeatureCollection, Point, Polygon } from 'geojson';
+import EventDetailModal from '../../components/modals/EventDetailModal';
+import TopHeader from '../../components/Home/TopHeader';
+import { COLORS } from '../../constants/colors';
+import { FONT_FAMILY } from '../../constants/fonts';
+import {
+  CrossIcon,
+  DropdownIcon,
+  SearchIcon,
+  BlueMapIcon,
+  PodcastEvent,
+  PrideEvent,
+  CalendarIcon,
+  CreatedTourLocationIcon,
+} from '../../constants/icons';
+import {
+  fetchMapEvents,
+  searchLocationSuggestions,
+  type FirebaseEvent,
+  type LocationSuggestion,
+} from '../../services/myTourService';
+import { isPodcastEvent } from '../../utils/eventHelpers';
 
-// ─── Seamless edge color ──────────────────────────────────────────────────────
-// Bridges the screen background into the globe's ocean blue so the globe rim
-// fades cleanly into the page (no hard ring between sphere and screen).
-const BG_MATCH = "#7AB4DC";
+const BG_MATCH = '#8ECAE6';
+const INITIAL_CAMERA_CENTER: [number, number] = [-18, 18];
+const INITIAL_CAMERA_ZOOM = 0.8;
+const SEARCH_DEBOUNCE_MS = 350;
 
-const MAP_STOPS = [
-    { id: "los-angeles", title: "Los Angeles", coordinate: [-118.2437,  34.0522] },
-    { id: "new-york",    title: "New York",    coordinate: [ -74.006,   40.7128] },
-    { id: "london",      title: "London",      coordinate: [  -0.1276,  51.5072] },
-    { id: "cairo",       title: "Cairo",       coordinate: [  31.2357,  30.0444] },
-    { id: "dubai",       title: "Dubai",       coordinate: [  55.2708,  25.2048] },
-    { id: "mumbai",      title: "Mumbai",      coordinate: [  72.8777,  19.076 ] },
-    { id: "nairobi",     title: "Nairobi",     coordinate: [  36.8219,  -1.2921] },
-    { id: "rio",         title: "Rio",         coordinate: [ -43.1729, -22.9068] },
-] as const;
+const MAX_FIT_ZOOM = 16;
+const MIN_FIT_ZOOM = 2.5;
+const SINGLE_EVENT_ZOOM = 14.5;
+const EVENT_FOCUS_ZOOM = 16.5;
+const FIT_PADDING = { top: 100, right: 80, bottom: 150, left: 80 };
+const MARKER_SEPARATION_PX = 70;
+const MIN_DECLUSTER_ZOOM = 6.5;
 
-const routeLineLayerStyle: LineLayerStyle = {
-    lineColor:     COLORS.WHITE,
-    lineWidth:     3,
-    lineOpacity:   0.9,
-    lineDasharray: [2, 1.4],
-    lineCap:       "round",
-    lineJoin:      "round",
+type DateField = 'start' | 'end';
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
+const WORLD_TILE_SIZE = 512;
+
+const latRadians = (lat: number) => {
+  const sin = Math.sin((lat * Math.PI) / 180);
+  const radX2 = Math.log((1 + sin) / (1 - sin)) / 2;
+  return Math.max(Math.min(radX2, Math.PI), -Math.PI) / 2;
 };
 
-const roadCasingStyle: LineLayerStyle = {
-    lineColor:   "#FFFFFF",
-    lineWidth:   ["interpolate", ["linear"], ["zoom"], 5, 0.5, 12, 2, 16, 6],
-    lineOpacity: 0.9,
-    lineCap:     "round",
-    lineJoin:    "round",
+const getBoundsZoom = (
+  ne: { lat: number; lng: number },
+  sw: { lat: number; lng: number },
+  viewWidth: number,
+  viewHeight: number
+) => {
+  const latFraction = (latRadians(ne.lat) - latRadians(sw.lat)) / Math.PI;
+  const lngDiff = ne.lng - sw.lng;
+  const lngFraction = (lngDiff < 0 ? lngDiff + 360 : lngDiff) / 360;
+
+  // A zero fraction means a single point (or a single line) — let the caller's
+  // clamp decide the final zoom instead of producing Infinity.
+  const latZoom = latFraction > 0 ? Math.log2(viewHeight / WORLD_TILE_SIZE / latFraction) : MAX_FIT_ZOOM;
+  const lngZoom = lngFraction > 0 ? Math.log2(viewWidth / WORLD_TILE_SIZE / lngFraction) : MAX_FIT_ZOOM;
+
+  return Math.min(latZoom, lngZoom);
+};
+const computeFitCamera = (
+  coordinates: [number, number][],
+  viewWidth: number,
+  viewHeight: number
+): { center: [number, number]; zoom: number } => {
+  const lngs = coordinates.map((c) => c[0]);
+  const lats = coordinates.map((c) => c[1]);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const center: [number, number] = [(minLng + maxLng) / 2, (minLat + maxLat) / 2];
+
+  if (coordinates.length === 1) {
+    return { center, zoom: SINGLE_EVENT_ZOOM };
+  }
+
+  const availableWidth = Math.max(viewWidth - FIT_PADDING.left - FIT_PADDING.right, 1);
+  const availableHeight = Math.max(viewHeight - FIT_PADDING.top - FIT_PADDING.bottom, 1);
+  const zoom = clamp(
+    getBoundsZoom(
+      { lat: maxLat, lng: maxLng },
+      { lat: minLat, lng: minLng },
+      availableWidth,
+      availableHeight
+    ),
+    MIN_FIT_ZOOM,
+    MAX_FIT_ZOOM
+  );
+  return { center, zoom };
 };
 
-const roadFillStyle: LineLayerStyle = {
-    lineColor:   "#0000FF",
-    lineWidth:   ["interpolate", ["linear"], ["zoom"], 5, 0.3, 12, 1.4, 16, 4],
-    lineOpacity: 1,
-    lineCap:     "round",
-    lineJoin:    "round",
-};
-
-// ─── Pride rainbow longitude bands ───────────────────────────────────────────
-// Vertical stripes painted below the water layer so only land shows color.
-// Colors and band edges tuned to match the reference screenshot
-// (Americas = warm reds/oranges, Africa/Europe = yellow→green, Asia = teal→blue).
 const PRIDE_BANDS: { color: string; minLon: number; maxLon: number }[] = [
-    { color: "#D85B2B", minLon: -180, maxLon: -120 }, // red-orange  (Pacific NW / Alaska)
-    { color: "#E8772E", minLon: -120, maxLon:  -60 }, // orange      (N. America)
-    { color: "#F0A93C", minLon:  -60, maxLon:  -20 }, // amber       (Atlantic / Greenland / S. America east)
-    { color: "#F0DC4A", minLon:  -20, maxLon:   20 }, // yellow      (W. Europe / Sahara)
-    { color: "#9CC73C", minLon:   20, maxLon:   60 }, // yellow-green(E. Europe / central Africa / Middle East)
-    { color: "#4FA85E", minLon:   60, maxLon:  100 }, // green       (Central Asia / India)
-    { color: "#3F8FA3", minLon:  100, maxLon:  140 }, // teal        (E. Asia)
-    { color: "#3F6CA7", minLon:  140, maxLon:  180 }, // blue        (Far east / Pacific)
+  { color: '#FF5C0A', minLon: -180, maxLon: -120 },
+  { color: '#F39A22', minLon: -120, maxLon: -60 },
+  { color: '#FFE100', minLon: -60, maxLon: -20 },
+  { color: '#95D600', minLon: -20, maxLon: 20 },
+  { color: '#31C93A', minLon: 20, maxLon: 60 },
+  { color: '#249D78', minLon: 60, maxLon: 100 },
+  { color: '#3367CC', minLon: 100, maxLon: 140 },
+  { color: '#A11FD6', minLon: 140, maxLon: 180 },
 ];
 
 const prideStripes: FeatureCollection<Polygon> = {
-    type: "FeatureCollection",
-    features: PRIDE_BANDS.map((b) => ({
-        type: "Feature",
-        properties: { color: b.color },
-        geometry: {
-            type:        "Polygon",
-            coordinates: [[
-                [b.minLon, -90],
-                [b.maxLon, -90],
-                [b.maxLon,  90],
-                [b.minLon,  90],
-                [b.minLon, -90],
-            ]],
-        },
-    })),
+  type: 'FeatureCollection',
+  features: PRIDE_BANDS.map((band) => ({
+    type: 'Feature',
+    properties: { color: band.color },
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[
+        [band.minLon, -90],
+        [band.maxLon, -90],
+        [band.maxLon, 90],
+        [band.minLon, 90],
+        [band.minLon, -90],
+      ]],
+    },
+  })),
 };
 
 const prideFillStyle: FillLayerStyle = {
-    fillColor:   ["get", "color"],
-    fillOpacity: 1,
+  fillColor: ['get', 'color'],
+  fillOpacity: 1,
 };
 
-// Ocean / lake / river fill — overrides the pale Light-style default with a
-// richer, more saturated blue so the rainbow land reads against the water.
+const landFillStyle: FillLayerStyle = {
+  fillColor: '#F4F6F8',
+  fillOpacity: 1,
+};
+
 const waterFillStyle: FillLayerStyle = {
-    fillColor:   "#1E88E5",
-    fillOpacity: 1,
+  fillColor: '#5BA4D4',
+  fillOpacity: 1,
 };
 
-// All three atmosphere tones = BG_MATCH so the canvas around the globe is
-// the exact same color as the screen bg. No lighter halo, no visible ring
-// where the globe canvas meets the page.
+const roadCasingStyle: LineLayerStyle = {
+  lineColor: '#FFFFFF',
+  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.8, 10, 2.5, 14, 5, 18, 10],
+  lineOpacity: 1,
+  lineCap: 'round',
+  lineJoin: 'round',
+};
+
+const roadFillStyle: LineLayerStyle = {
+  lineColor: '#C5CDD6',
+  lineWidth: ['interpolate', ['linear'], ['zoom'], 5, 0.4, 10, 1.6, 14, 3.2, 18, 7],
+  lineOpacity: 1,
+  lineCap: 'round',
+  lineJoin: 'round',
+};
+
+const placeLabelStyle: SymbolLayerStyle = {
+  textField: ['coalesce', ['get', 'name_en'], ['get', 'name'], ['get', 'name_fr']],
+  textSize: ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 12, 10, 14, 14, 16],
+  textColor: '#1E293B',
+  textHaloColor: '#FFFFFF',
+  textHaloWidth: 2.5,
+  textHaloBlur: 0.35,
+  textAnchor: 'center',
+  textAllowOverlap: false,
+  textOptional: true,
+  textFont: ['DIN Pro Medium', 'Arial Unicode MS Regular'],
+  symbolSortKey: ['get', 'symbolrank'],
+};
+
 const atmosphereStyle = {
-    color:         BG_MATCH,
-    highColor:     BG_MATCH,
-    horizonBlend:  0,
-    spaceColor:    BG_MATCH,
-    starIntensity: 0,
+  color: BG_MATCH,
+  highColor: BG_MATCH,
+  horizonBlend: 0,
+  spaceColor: BG_MATCH,
+  starIntensity: 0,
+};
+
+const normalizeText = (value?: string | null) => (value || '').trim().toLowerCase();
+
+const eventMatchesFilter = (event: FirebaseEvent, filterLabel: string) => {
+  const normalizedFilter = normalizeText(filterLabel);
+  if (!normalizedFilter) {
+    return true;
+  }
+
+  // Mapbox suggestions may include a region between the city and country
+  // (for example, "Kansas City, Missouri, United States"), while events in
+  // Firestore commonly only store city_name and country. Matching the full
+  // label therefore incorrectly hides valid events for the selected city.
+  const locationParts = normalizedFilter
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const requestedCity = locationParts[0] || normalizedFilter;
+  const requestedCountry = locationParts.length > 1
+    ? locationParts[locationParts.length - 1]
+    : '';
+  const eventCity = normalizeText(event.city_name);
+  const eventCountry = normalizeText(event.country);
+
+  const cityMatches = eventCity
+    ? eventCity === requestedCity ||
+      eventCity.includes(requestedCity) ||
+      requestedCity.includes(eventCity)
+    : normalizeText(event.address).includes(requestedCity);
+
+  if (!cityMatches) {
+    return false;
+  }
+
+  // If the event has no country, keep the city match usable. Otherwise use
+  // the selected country's last comma-separated part to avoid same-name city
+  // collisions across countries.
+  return !requestedCountry || !eventCountry ||
+    eventCountry === requestedCountry ||
+    eventCountry.includes(requestedCountry) ||
+    requestedCountry.includes(eventCountry);
+};
+
+const eventCoordinate = (event: FirebaseEvent): [number, number] => [
+  Number(event.coordinates?.longitude || 0),
+  Number(event.coordinates?.latitude || 0),
+];
+
+type EventMarker = { event: FirebaseEvent; coordinate: [number, number] };
+
+const projectToPixels = (lng: number, lat: number, zoom: number) => {
+  const scale = WORLD_TILE_SIZE * Math.pow(2, zoom);
+  const clampedLat = Math.max(Math.min(lat, 85.05112878), -85.05112878);
+  const sin = Math.sin((clampedLat * Math.PI) / 180);
+  return {
+    x: ((lng + 180) / 360) * scale,
+    y: (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale,
+  };
+};
+
+const unprojectFromPixels = (x: number, y: number, zoom: number): [number, number] => {
+  const scale = WORLD_TILE_SIZE * Math.pow(2, zoom);
+  const lng = (x / scale) * 360 - 180;
+  const n = Math.PI - (2 * Math.PI * y) / scale;
+  const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+  return [lng, lat];
+};
+const declusterMarkers = (
+  list: FirebaseEvent[],
+  zoom: number,
+  separation: number
+): EventMarker[] => {
+  const points = list.map((event, index) => {
+    const [lng, lat] = eventCoordinate(event);
+    const projected = projectToPixels(lng, lat, zoom);
+    return {
+      event,
+      x: projected.x + ((index % 7) - 3) * 0.01,
+      y: projected.y + ((index % 5) - 2) * 0.01,
+    };
+  });
+
+  // Two markers can only collide if they are within `separation` px, i.e. within
+  // one grid cell of that size. So each pass we only compare a marker against the
+  // handful in its own and the 8 neighbouring cells — this keeps the whole thing
+  // near-linear and able to handle thousands of points instead of O(n²).
+  const cellSize = separation;
+  const cellKey = (x: number, y: number) =>
+    `${Math.floor(x / cellSize)}:${Math.floor(y / cellSize)}`;
+
+  const maxIterations = 60;
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const grid = new globalThis.Map<string, number[]>();
+    points.forEach((point, index) => {
+      const key = cellKey(point.x, point.y);
+      const bucket = grid.get(key);
+      if (bucket) {
+        bucket.push(index);
+      } else {
+        grid.set(key, [index]);
+      }
+    });
+
+    let moved = false;
+    for (let i = 0; i < points.length; i += 1) {
+      const baseCellX = Math.floor(points[i].x / cellSize);
+      const baseCellY = Math.floor(points[i].y / cellSize);
+      for (let gx = -1; gx <= 1; gx += 1) {
+        for (let gy = -1; gy <= 1; gy += 1) {
+          const candidates = grid.get(`${baseCellX + gx}:${baseCellY + gy}`);
+          if (!candidates) continue;
+          for (const j of candidates) {
+            if (j <= i) continue;
+            let dx = points[j].x - points[i].x;
+            let dy = points[j].y - points[i].y;
+            let distance = Math.hypot(dx, dy);
+            if (distance < separation) {
+              if (distance === 0) {
+                dx = Math.cos(i);
+                dy = Math.sin(i);
+                distance = 1;
+              }
+              const shift = (separation - distance) / 2;
+              const nx = dx / distance;
+              const ny = dy / distance;
+              points[i].x -= nx * shift;
+              points[i].y -= ny * shift;
+              points[j].x += nx * shift;
+              points[j].y += ny * shift;
+              moved = true;
+            }
+          }
+        }
+      }
+    }
+    if (!moved) {
+      break;
+    }
+  }
+
+  return points.map((point) => ({
+    event: point.event,
+    coordinate: unprojectFromPixels(point.x, point.y, zoom),
+  }));
+};
+
+const EventMarkerIcon = ({
+  event,
+  size = 71,
+}: {
+  event: FirebaseEvent;
+  size?: number;
+}) =>
+  isPodcastEvent(event) ? (
+    <PodcastEvent width={size} height={size} />
+  ) : (
+    <PrideEvent width={size} height={size} />
+  );
+
+const formatDateValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const buildCalendarDays = (monthDate: Date) => {
+  const start = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+  const daysInMonth = end.getDate();
+  const firstWeekday = start.getDay();
+  const cells: Array<Date | null> = [];
+
+  for (let index = 0; index < firstWeekday; index += 1) {
+    cells.push(null);
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), day));
+  }
+
+  while (cells.length % 7 !== 0) {
+    cells.push(null);
+  }
+
+  return cells;
+};
+
+const parseDateOnly = (value?: string | null) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+};
+
+const eventMatchesDateRange = (
+  event: FirebaseEvent,
+  startDateFilter: string,
+  endDateFilter: string
+) => {
+  const filterStart = parseDateOnly(startDateFilter);
+  const filterEnd = parseDateOnly(endDateFilter);
+
+  if (!filterStart && !filterEnd) {
+    return true;
+  }
+
+  const eventStart = parseDateOnly(event.startDate) || parseDateOnly(event.endDate);
+  const eventEnd = parseDateOnly(event.endDate) || eventStart;
+
+  if (!eventStart && !eventEnd) {
+    return false;
+  }
+
+  const rangeStart = eventStart || eventEnd;
+  const rangeEnd = eventEnd || eventStart;
+
+  if (filterStart && rangeEnd && rangeEnd < filterStart) {
+    return false;
+  }
+
+  if (filterEnd && rangeStart && rangeStart > filterEnd) {
+    return false;
+  }
+
+  return true;
 };
 
 const Map = () => {
-    const [mapReady, setMapReady] = useState(false);
+  const bottomTabBarHeight = useBottomTabBarHeight();
+  const cameraRef = useRef<Mapbox.Camera>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(INITIAL_CAMERA_ZOOM);
+  const [mapLayout, setMapLayout] = useState({ width: 0, height: 0 });
+  const [events, setEvents] = useState<FirebaseEvent[]>([]);
+  const [searchText, setSearchText] = useState('');
+  const [selectedLocation, setSelectedLocation] = useState<LocationSuggestion | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<FirebaseEvent | null>(null);
+  const [searchSuggestions, setSearchSuggestions] = useState<LocationSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [startDateFilter, setStartDateFilter] = useState('');
+  const [endDateFilter, setEndDateFilter] = useState('');
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [activeDateField, setActiveDateField] = useState<DateField>('start');
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
 
-    useEffect(() => {
-        let isMounted = true;
-        if (!Config.MAPBOX_TOKEN) return undefined;
+  useEffect(() => {
+    let isMounted = true;
+    if (!Config.MAPBOX_TOKEN) return undefined;
 
-        Mapbox.setAccessToken(Config.MAPBOX_TOKEN)
-            .then(() => { if (isMounted) setMapReady(true);  })
-            .catch(() => { if (isMounted) setMapReady(false); });
+    Mapbox.setAccessToken(Config.MAPBOX_TOKEN)
+      .then(() => {
+        if (isMounted) {
+          setMapReady(true);
+          setZoomLevel(INITIAL_CAMERA_ZOOM);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setMapReady(false);
+        }
+      });
 
-        return () => { isMounted = false; };
-    }, []);
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
-    const routeLine = useMemo<FeatureCollection<LineString>>(
-        () => ({
-            type: "FeatureCollection",
-            features: [{
-                type:       "Feature",
-                properties: {},
-                geometry: {
-                    type:        "LineString",
-                    coordinates: MAP_STOPS.map((s) => [...s.coordinate]),
-                },
-            }],
-        }),
-        []
+  useEffect(() => {
+    let isMounted = true;
+
+    fetchMapEvents()
+      .then((response) => {
+        if (isMounted) {
+          setEvents(response);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setEvents([]);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedLocation || searchText.trim().length < 2) {
+      setSearchSuggestions([]);
+      return undefined;
+    }
+
+    const timeoutId = setTimeout(() => {
+      searchLocationSuggestions(searchText)
+        .then((results) => {
+          setSearchSuggestions(results);
+          setShowSuggestions(true);
+        })
+        .catch(() => {
+          setSearchSuggestions([]);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchText, selectedLocation]);
+
+  const filteredEvents = useMemo(() => {
+    const filterLabel = selectedLocation?.label || '';
+    return events.filter(
+      (event) =>
+        eventMatchesFilter(event, filterLabel) &&
+        eventMatchesDateRange(event, startDateFilter, endDateFilter)
+    );
+  }, [endDateFilter, events, selectedLocation, startDateFilter]);
+
+  // The camera target for the focused city. Computed once per
+  // search/filter/layout change — NOT on every zoom frame — so it stays stable.
+  const cityFit = useMemo(() => {
+    if (!selectedLocation || filteredEvents.length === 0) {
+      return null;
+    }
+    const width = mapLayout.width || Dimensions.get('window').width;
+    const height = mapLayout.height || Dimensions.get('window').height * 0.5;
+    return computeFitCamera(filteredEvents.map(eventCoordinate), width, height);
+  }, [filteredEvents, selectedLocation, mapLayout]);
+
+  const mapEventMarkers = useMemo(() => {
+    // Only declutter once the user has focused a city. On the global globe view
+    // markers should stay in their real countries (and pushing hundreds apart by
+    // a pixel gap would scatter them across continents and be expensive).
+    if (!selectedLocation) {
+      return filteredEvents.map((event) => ({
+        event,
+        coordinate: eventCoordinate(event),
+      }));
+    }
+    // If the user has zoomed out past the decluster threshold, render true
+    // coordinates (they'll overlap) instead of running the declusterer which
+    // can scatter points across the globe at very low zooms.
+    if (zoomLevel <= MIN_DECLUSTER_ZOOM) {
+      return filteredEvents.map((event) => ({ event, coordinate: eventCoordinate(event) }));
+    }
+
+    // Let the decluster zoom follow whichever zoom is larger: the live
+    // camera zoom (so markers converge as you zoom in) or the stable city-fit
+    // zoom (so positions remain stable while panning). Clamp into a safe range
+    // to avoid globe-scattering at very low zooms.
+    const rawDeclusterZoom = Math.max(zoomLevel, cityFit?.zoom ?? SINGLE_EVENT_ZOOM);
+    const declusterZoom = clamp(rawDeclusterZoom, MIN_DECLUSTER_ZOOM, MAX_FIT_ZOOM);
+
+    const declustered = declusterMarkers(filteredEvents, declusterZoom, MARKER_SEPARATION_PX);
+
+    // Decluttering spreads co-located markers apart for visibility, which moves
+    // them off their true coordinate. So the marker the user has tapped is
+    // pinned back to its EXACT real location — tapping always reveals the true
+    // spot, while the rest stay spread out.
+    if (!selectedEvent) {
+      return declustered;
+    }
+    return declustered.map((marker) =>
+      marker.event.id === selectedEvent.id
+        ? { event: marker.event, coordinate: eventCoordinate(marker.event) }
+        : marker
+    );
+  }, [filteredEvents, selectedLocation, cityFit, selectedEvent, zoomLevel]);
+
+
+
+  const focusLocation = useCallback((location: LocationSuggestion) => {
+    if (!location.coordinates) {
+      return;
+    }
+
+    const matchingEvents = events.filter(
+      (event) =>
+        eventMatchesFilter(event, location.label) &&
+        eventMatchesDateRange(event, startDateFilter, endDateFilter)
     );
 
-    return (
-        <View style={styles.container}>
-            <TopHeader title="Map" />
+    // CASE 1: No events → just move camera to the city itself.
+    if (matchingEvents.length === 0) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: location.coordinates,
+        zoomLevel: 4.5,
+        pitch: 0,
+        heading: 0,
+        animationDuration: 1200,
+        animationMode: 'flyTo',
+      });
+      setZoomLevel(4.5);
+      return;
+    }
 
-            <View style={styles.search}>
-                <CustomSearchInput rightIcon={<Image source={FilterIcon} />} />
-            </View>
+    // CASE 2: One or more events → compute the exact zoom that fits every marker
+    // inside the visible map area (minus padding for icons + floating controls).
+    // Uses the SAME helper that the markers are declustered with, so the camera
+    // and the marker layout always agree. Shows them all at once without any
+    // hiding behind the others, and never zooms uncomfortably close or far.
+    const width = mapLayout.width || Dimensions.get('window').width;
+    const height = mapLayout.height || Dimensions.get('window').height * 0.5;
+    const { center, zoom } = computeFitCamera(
+      matchingEvents.map(eventCoordinate),
+      width,
+      height
+    );
 
-            <View style={styles.globe}>
-                <View style={styles.topSection}>
-                    <TouchableOpacity style={styles.dropdown}>
-                        <Text style={styles.dropdownText}>California, USA</Text>
-                        <DropdownIcon width={11} height={6} />
-                    </TouchableOpacity>
-                </View>
+    cameraRef.current?.setCamera({
+      centerCoordinate: center,
+      zoomLevel: zoom,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 1300,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(zoom);
+  }, [events, startDateFilter, endDateFilter, mapLayout]);
+  const openCalendar = useCallback((field: DateField) => {
+    const currentValue = field === 'start' ? startDateFilter : endDateFilter;
+    const parsed = parseDateOnly(currentValue) || new Date();
+    setActiveDateField(field);
+    setCalendarMonth(new Date(parsed.getFullYear(), parsed.getMonth(), 1));
+    setCalendarVisible(true);
+  }, [endDateFilter, startDateFilter]);
 
-                <View style={styles.globeContainer}>
-                    {Config.MAPBOX_TOKEN && mapReady ? (
-                        <Mapbox.MapView
-                            style={styles.map}
-                            styleURL={Mapbox.StyleURL.Light}
-                            projection="globe"
-                            logoEnabled={false}
-                            attributionEnabled={false}
-                            compassEnabled={false}
-                            scaleBarEnabled={false}
-                            rotateEnabled
-                            pitchEnabled
-                            scrollEnabled
-                            zoomEnabled
-                            surfaceView={false}
-                        >
-                            <Mapbox.Camera
-                                centerCoordinate={[-18, 18]}
-                                zoomLevel={0.8}
-                                pitch={0}
-                                heading={0}
-                            />
-                            <Mapbox.Atmosphere style={atmosphereStyle} />
-                            <Mapbox.ShapeSource id="prideStripes" shape={prideStripes}>
-                                <Mapbox.FillLayer
-                                    id="prideStripesFill"
-                                    style={prideFillStyle}
-                                    belowLayerID="water"
-                                />
-                            </Mapbox.ShapeSource>
-                            <Mapbox.VectorSource
-                                id="composite"
-                                url="mapbox://mapbox.mapbox-streets-v8"
-                                existing
-                            >
-                                <Mapbox.FillLayer
-                                    id="customWaterFill"
-                                    sourceID="composite"
-                                    sourceLayerID="water"
-                                    style={waterFillStyle}
-                                />
-                                <Mapbox.LineLayer
-                                    id="customRoadCasing"
-                                    sourceID="composite"
-                                    sourceLayerID="road"
-                                    style={roadCasingStyle}
-                                />
-                                <Mapbox.LineLayer
-                                    id="customRoadFill"
-                                    sourceID="composite"
-                                    sourceLayerID="road"
-                                    style={roadFillStyle}
-                                    aboveLayerID="customRoadCasing"
-                                />
-                            </Mapbox.VectorSource>
-                            <Mapbox.ShapeSource id="mapRouteLine" shape={routeLine}>
-                                <Mapbox.LineLayer
-                                    id="mapRouteLineLayer"
-                                    style={routeLineLayerStyle}
-                                />
-                            </Mapbox.ShapeSource>
-                            {MAP_STOPS.map((stop) => (
-                                <Mapbox.MarkerView
-                                    key={stop.id}
-                                    id={stop.id}
-                                    coordinate={[...stop.coordinate]}
-                                    anchor={{ x: 0.5, y: 1 }}
-                                >
-                                    <View style={styles.markerTapArea}>
-                                        <BlueMapIcon width={40} height={40} />
-                                    </View>
-                                </Mapbox.MarkerView>
-                            ))}
-                        </Mapbox.MapView>
-                    ) : (
-                        <View style={styles.mapFallback}>
-                            <Text style={styles.mapFallbackText}>
-                                {Config.MAPBOX_TOKEN ? "Loading map..." : "Mapbox token missing"}
-                            </Text>
-                        </View>
-                    )}
-                </View>
-            </View>
+  const closeCalendar = useCallback(() => {
+    setCalendarVisible(false);
+  }, []);
+
+  const handleCalendarDateSelect = useCallback((date: Date) => {
+    const nextValue = formatDateValue(date);
+    if (activeDateField === 'start') {
+      setStartDateFilter(nextValue);
+    } else {
+      setEndDateFilter(nextValue);
+    }
+    setCalendarVisible(false);
+  }, [activeDateField]);
+
+  const handleSuggestionPress = useCallback(
+    (suggestion: LocationSuggestion) => {
+      setSelectedLocation(suggestion);
+      setSearchText(suggestion.label);
+      setShowSuggestions(false);
+      setSearchSuggestions([]);
+      Keyboard.dismiss();
+      focusLocation(suggestion);
+    },
+    [focusLocation]
+  );
+
+  useEffect(() => {
+    if (!selectedLocation) {
+      return;
+    }
+
+    focusLocation(selectedLocation);
+  }, [selectedLocation, startDateFilter, endDateFilter, focusLocation]);
+
+  const handleClearFilter = useCallback(() => {
+    setSelectedLocation(null);
+    setSearchText('');
+    setSearchSuggestions([]);
+    setShowSuggestions(false);
+    setStartDateFilter('');
+    setEndDateFilter('');
+    cameraRef.current?.setCamera({
+      centerCoordinate: INITIAL_CAMERA_CENTER,
+      zoomLevel: INITIAL_CAMERA_ZOOM,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 1400,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(INITIAL_CAMERA_ZOOM);
+  }, []);
+
+  const handleSearchTextChange = useCallback((text: string) => {
+    setSearchText(text);
+    // Clearing the field should not discard the city currently shown on the
+    // map. It keeps the all-events overview (and its pin button) available.
+    // Entering a new query does start a new city search, so clear the old one.
+    if (!text.trim()) {
+      setSearchSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    setSelectedLocation(null);
+    setShowSuggestions(true);
+  }, []);
+
+  const handleClearSearch = useCallback(() => {
+    setSearchText('');
+    setSearchSuggestions([]);
+    setShowSuggestions(false);
+  }, []);
+
+  const calendarDays = useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
+  const activeDateValue = activeDateField === 'start' ? startDateFilter : endDateFilter;
+  const selectedCalendarValue = parseDateOnly(activeDateValue);
+
+  const handleMarkerPress = useCallback(
+    (event: FirebaseEvent) => {
+      setSelectedEvent(event);
+      // Google-Maps style: fly to the event's EXACT real coordinate (not the
+      // decluttered/spread position) and zoom hard onto it. The marker itself is
+      // simultaneously pinned back to this true coordinate in mapEventMarkers, so
+      // the pin and the camera centre line up on the real location.
+      const target = eventCoordinate(event);
+      const nextZoom = Math.max(zoomLevel, EVENT_FOCUS_ZOOM);
+      cameraRef.current?.setCamera({
+        centerCoordinate: target,
+        zoomLevel: nextZoom,
+        pitch: 0,
+        heading: 0,
+        animationDuration: 800,
+        animationMode: 'flyTo',
+      });
+      setZoomLevel(nextZoom);
+    },
+    [zoomLevel]
+  );
+
+  const restoreCityOverview = useCallback(() => {
+    setSelectedEvent(null);
+    if (!selectedLocation) return;
+
+    // Restore the same stable city-fit camera that was calculated when the
+    // location was selected, so all currently filtered events are visible
+    // again after focusing an individual marker.
+    setSelectedEvent(null);
+    if (!cityFit) {
+      focusLocation(selectedLocation);
+      return;
+    }
+
+    cameraRef.current?.setCamera({
+      centerCoordinate: cityFit.center,
+      zoomLevel: cityFit.zoom,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 900,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(cityFit.zoom);
+  }, [cityFit, focusLocation, selectedLocation]);
+
+  const handleCloseSelectedEvent = useCallback(() => {
+    // Closing the details should return to the same all-events camera view
+    // that was active before the marker was focused.
+    restoreCityOverview();
+  }, [restoreCityOverview]);
+
+  const handleReturnToCityOverview = restoreCityOverview;
+
+
+  const handleZoom = useCallback((direction: 'in' | 'out') => {
+    const nextZoom =
+      direction === 'in'
+        ? Math.min(zoomLevel + 0.8, 18)
+        : Math.max(zoomLevel - 0.8, 0.8);
+
+    cameraRef.current?.setCamera({
+      zoomLevel: nextZoom,
+      animationDuration: 450,
+    });
+    setZoomLevel(nextZoom);
+  }, [zoomLevel]);
+
+  return (
+    <View style={styles.container}>
+      <TopHeader title="Map" />
+      <View style={styles.controlsWrap}>
+        <View style={styles.inlineFilterHeader}>
+          <Text style={styles.controlsTitle}>Explore By City</Text>
+          {selectedLocation ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleClearFilter}
+              style={styles.resetPill}
+            >
+              <Text style={styles.resetPillText}>Clear</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
-    );
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.quickCitiesContent}
+        >
+          {/* {QUICK_CITIES.map((city) => {
+            const isActive = selectedLocation?.id === city.id;
+            return (
+              <TouchableOpacity
+                key={city.id}
+                activeOpacity={0.85}
+                style={[styles.quickCityChip, isActive && styles.quickCityChipActive]}
+                onPress={() => handleQuickCityPress(city)}
+              >
+                <Text
+                  style={[
+                    styles.quickCityChipText,
+                    isActive && styles.quickCityChipTextActive,
+                  ]}
+                >
+                  {city.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })} */}
+        </ScrollView>
+
+        <View style={styles.searchBlock}>
+          <View style={styles.citySearchWrap}>
+            <View style={styles.citySearchInputWrap}>
+              <SearchIcon width={18} height={18} />
+              <TextInput
+                value={searchText}
+                onChangeText={handleSearchTextChange}
+                placeholder="Search any city in the world"
+                placeholderTextColor="#66717B"
+                style={styles.citySearchInput}
+                onFocus={() => setShowSuggestions(true)}
+              />
+            </View>
+            {searchText ? (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                onPress={handleClearSearch}
+              >
+                <CrossIcon width={12} height={12} />
+              </TouchableOpacity>
+            ) : (
+              ""
+              // <DropdownIcon width={11} height={6} />
+            )}
+          </View>
+
+          {showSuggestions && searchSuggestions.length > 0 ? (
+            <View style={styles.suggestionsCard}>
+              <ScrollView
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                style={styles.suggestionsScroll}
+              >
+                {searchSuggestions.map((suggestion, index) => (
+                  <TouchableOpacity
+                    key={suggestion.id}
+                    activeOpacity={0.85}
+                    style={[
+                      styles.suggestionRow,
+                      index === searchSuggestions.length - 1 && styles.suggestionRowLast,
+                    ]}
+                    onPress={() => handleSuggestionPress(suggestion)}
+                  >
+                    <Text style={styles.suggestionTitle}>{suggestion.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.dateFiltersRow}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.dateInputWrap}
+            onPress={() => openCalendar('start')}
+          >
+            <View style={styles.dateFieldRow}>
+              <Text style={[styles.dateInputText, !startDateFilter && styles.datePlaceholderText]}>
+                {startDateFilter || 'From date'}
+              </Text>
+              <View style={styles.dateFieldActions}>
+                <CalendarIcon width={22} height={22} />
+                {startDateFilter ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      setStartDateFilter('');
+                    }}
+                  >
+                    <CrossIcon width={12} height={12} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.dateInputWrap}
+            onPress={() => openCalendar('end')}
+          >
+            <View style={styles.dateFieldRow}>
+              <Text style={[styles.dateInputText, !endDateFilter && styles.datePlaceholderText]}>
+                {endDateFilter || 'To date'}
+              </Text>
+              <View style={styles.dateFieldActions}>
+                <CalendarIcon width={22} height={22} />
+                {endDateFilter ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      setEndDateFilter('');
+                    }}
+                  >
+                    <CrossIcon width={12} height={12} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.mapSection}>
+        <View style={styles.globeContainer}>
+          {Config.MAPBOX_TOKEN && mapReady ? (
+            <View
+              style={styles.mapShell}
+              onLayout={(event) => {
+                const { width, height } = event.nativeEvent.layout;
+                setMapLayout((prev) =>
+                  prev.width === width && prev.height === height
+                    ? prev
+                    : { width, height }
+                );
+              }}
+            >
+              <Mapbox.MapView
+                style={styles.map}
+                styleURL={Mapbox.StyleURL.Light}
+                projection="globe"
+                logoEnabled={false}
+                attributionEnabled={false}
+                compassEnabled={false}
+                scaleBarEnabled={false}
+                rotateEnabled
+                pitchEnabled={false}
+                scrollEnabled
+                zoomEnabled
+                surfaceView={false}
+                onCameraChanged={(state: any) => {
+                  const z = state?.properties?.zoom;
+                  if (typeof z === 'number') setZoomLevel(z);
+                }}
+                onPress={() => {
+                  setShowSuggestions(false);
+                  setSelectedEvent(null);
+                }}
+              >
+                <Mapbox.Camera
+                  ref={cameraRef}
+                  defaultSettings={{
+                    centerCoordinate: INITIAL_CAMERA_CENTER,
+                    zoomLevel: INITIAL_CAMERA_ZOOM,
+                    pitch: 0,
+                    heading: 0,
+                  }}
+                />
+                <Mapbox.Atmosphere style={atmosphereStyle} />
+                <Mapbox.ShapeSource id="prideStripes" shape={prideStripes}>
+                  <Mapbox.FillLayer
+                    id="prideStripesFill"
+                    style={prideFillStyle}
+                    belowLayerID="water"
+                  />
+                </Mapbox.ShapeSource>
+                <Mapbox.VectorSource
+                  id="composite"
+                  url="mapbox://mapbox.mapbox-streets-v8"
+                  existing
+                >
+                  <Mapbox.FillLayer
+                    id="customLandFill"
+                    sourceID="composite"
+                    sourceLayerID="landuse"
+                    style={landFillStyle}
+                    filter={['==', ['geometry-type'], 'Polygon']}
+                  />
+                  <Mapbox.FillLayer
+                    id="customWaterFill"
+                    sourceID="composite"
+                    sourceLayerID="water"
+                    style={waterFillStyle}
+                  />
+                  <Mapbox.LineLayer
+                    id="customRoadCasing"
+                    sourceID="composite"
+                    sourceLayerID="road"
+                    style={roadCasingStyle}
+                  />
+                  <Mapbox.LineLayer
+                    id="customRoadFill"
+                    sourceID="composite"
+                    sourceLayerID="road"
+                    style={roadFillStyle}
+                    aboveLayerID="customRoadCasing"
+                  />
+                  <Mapbox.SymbolLayer
+                    id="customPlaceLabels"
+                    sourceID="composite"
+                    sourceLayerID="place_label"
+                    style={placeLabelStyle}
+                    aboveLayerID="customRoadFill"
+                  />
+                </Mapbox.VectorSource>
+
+                {mapEventMarkers.map(({ event, coordinate }) => (
+                  <Mapbox.MarkerView
+                    key={event.id}
+                    id={`map-event-${event.id}`}
+                    coordinate={coordinate}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Show ${isPodcastEvent(event) ? 'podcast' : 'pride'} event ${event.title}`}
+                      onPress={() => handleMarkerPress(event)}
+                      style={styles.eventMapMarker}
+                    >
+                      <EventMarkerIcon event={event} size={48} />
+                    </TouchableOpacity>
+                  </Mapbox.MarkerView>
+                ))}
+              </Mapbox.MapView>
+
+              <View style={[styles.zoomControls]}>
+                {selectedLocation ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.cityOverviewButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Show all events in the selected city"
+                    onPress={handleReturnToCityOverview}
+                  >
+                    <CreatedTourLocationIcon width={28} height={28} />
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[styles.zoomButton, styles.zoomButtonTop]}
+                  onPress={() => handleZoom('in')}
+                >
+                  <Text style={styles.zoomButtonText}>+</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.zoomButton}
+                  onPress={() => handleZoom('out')}
+                >
+                  <Text style={styles.zoomButtonText}>-</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.mapFallback}>
+              <Text style={styles.mapFallbackText}>
+                {Config.MAPBOX_TOKEN ? 'Loading map...' : 'Mapbox token missing'}
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+
+      <View style={[styles.legendCard, { marginBottom: 5, }]}>
+        <View style={styles.legendRow}>
+          <PrideEvent width={24} height={24}/>
+          <Text style={styles.legendText}>Purple markers show Pride events.</Text>
+        </View>
+        <View style={styles.legendRow}>
+          <PodcastEvent height={24} width={24}/>
+          <Text style={styles.legendText}>
+            Blue markers show Podcast events.
+          </Text>
+        </View>
+      </View>
+
+      <EventDetailModal
+        visible={Boolean(selectedEvent)}
+        event={selectedEvent}
+        onClose={handleCloseSelectedEvent}
+        variant="compact"
+      />
+
+      <Modal
+        visible={calendarVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeCalendar}
+      >
+        <Pressable style={styles.calendarOverlay} onPress={closeCalendar}>
+          <Pressable style={styles.calendarCard} onPress={() => { }}>
+            <View style={styles.calendarHeader}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() =>
+                  setCalendarMonth(
+                    new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1)
+                  )
+                }
+              >
+                <Text style={styles.calendarNavText}>{'<'}</Text>
+              </TouchableOpacity>
+              <Text style={styles.calendarTitle}>
+                {calendarMonth.toLocaleDateString('en-US', {
+                  month: 'long',
+                  year: 'numeric',
+                })}
+              </Text>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() =>
+                  setCalendarMonth(
+                    new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1)
+                  )
+                }
+              >
+                <Text style={styles.calendarNavText}>{'>'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.calendarWeekRow}>
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+                <Text key={`${day}-${index}`} style={styles.calendarWeekday}>
+                  {day}
+                </Text>
+              ))}
+            </View>
+
+            <View style={styles.calendarGrid}>
+              {calendarDays.map((date, index) => {
+                const isSelected =
+                  Boolean(date) &&
+                  Boolean(selectedCalendarValue) &&
+                  formatDateValue(date as Date) === formatDateValue(selectedCalendarValue as Date);
+
+                return (
+                  <TouchableOpacity
+                    key={`${date ? formatDateValue(date) : 'empty'}-${index}`}
+                    activeOpacity={0.85}
+                    disabled={!date}
+                    style={[
+                      styles.calendarDayCell,
+                      isSelected && styles.calendarDayCellSelected,
+                      !date && styles.calendarDayCellEmpty,
+                    ]}
+                    onPress={() => date && handleCalendarDateSelect(date)}
+                  >
+                    <Text
+                      style={[
+                        styles.calendarDayText,
+                        isSelected && styles.calendarDayTextSelected,
+                        !date && styles.calendarDayTextEmpty,
+                      ]}
+                    >
+                      {date ? date.getDate() : ''}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
 };
 
 export default Map;
 
+
 const styles = StyleSheet.create({
-    container: {
-        flex:            1,
-        backgroundColor: BG_MATCH, // fallback while image loads
-    },
-    search: {
-        marginHorizontal: 24,
-    },
-    globe: {
-        flex: 1,
-    },
-    topSection: {
-        marginTop:         20,
-        paddingHorizontal: 24,
-        alignItems:        "flex-start",
-        zIndex:            10,
-    },
-    dropdown: {
-        flexDirection: "row",
-        gap:               10,
-        paddingHorizontal: 16,
-        alignItems:        "center",
-        justifyContent:    "center",
-        backgroundColor:   COLORS.WHITE,
-        height:            32,
-        width:             134,
-        borderRadius:      16,
-        elevation:         3,
-        shadowColor:       "#000",
-        shadowOffset:      { width: 0, height: 2 },
-        shadowOpacity:     0.1,
-        shadowRadius:      4,
-    },
-    dropdownText: {
-        fontSize:   12,
-        color:      COLORS.TEXT_PRIMARY,
-        fontFamily: FONT_FAMILY.InterTight_Medium,
-    },
-    globeContainer: {
-        flex:              1,
-        justifyContent:    "center",
-        alignItems:        "center",
-        paddingHorizontal: 16,
-        paddingVertical:   24,
-        overflow:          "hidden",
-        // Same BG_MATCH on both platforms — no MapBackground image is rendered,
-        // so any difference vs the screen bg would show as a seam at the
-        // globeContainer edge.
-        backgroundColor:   BG_MATCH,
-    },
-    map: {
-        width:  "120%",
-        height: "120%",
-    },
-    mapFallback: {
-        flex:           1,
-        alignItems:     "center",
-        justifyContent: "center",
-    },
-    mapFallbackText: {
-        color:      COLORS.TEXT_PRIMARY,
-        fontFamily: FONT_FAMILY.InterTight_Medium,
-        fontSize:   13,
-    },
-    markerTapArea: {
-        width:          48,
-        height:         48,
-        alignItems:     "center",
-        justifyContent: "center",
-    },
+  container: {
+    flex: 1,
+    backgroundColor: BG_MATCH,
+  },
+  eventMapMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapSection: {
+    flex: 1,
+  },
+  controlsWrap: {
+    marginHorizontal: 20,
+    marginTop: 6,
+    zIndex: 50,
+    elevation: 20,
+  },
+  inlineFilterHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  controlsTitle: {
+    color: COLORS.WHITE,
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  resetPill: {
+    height: 32,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  resetPillText: {
+    color: COLORS.WHITE,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  quickCitiesContent: {
+    paddingRight: 8,
+    gap: 10,
+  },
+  quickCityChip: {
+    height: 38,
+    paddingHorizontal: 16,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickCityChipActive: {
+    backgroundColor: COLORS.WHITE,
+    borderColor: COLORS.WHITE,
+  },
+  quickCityChipText: {
+    color: COLORS.WHITE,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  quickCityChipTextActive: {
+    color: COLORS.PRIMARY || '#1888E7',
+  },
+  citySearchWrap: {
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: COLORS.WHITE,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#0B2A45',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  searchBlock: {
+    marginTop: 8,
+    position: 'relative',
+    zIndex: 60,
+  },
+  dateFiltersRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginVertical: 8,
+  },
+  dateInputWrap: {
+    flex: 1,
+    height: 44,
+    borderRadius: 18,
+    backgroundColor: COLORS.WHITE,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    shadowColor: '#0B2A45',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  dateInputText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+  },
+  dateFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  dateFieldActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  datePlaceholderText: {
+    color: '#66717B',
+  },
+  citySearchInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  citySearchInput: {
+    flex: 1,
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 15,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    paddingVertical: 0,
+  },
+  suggestionsCard: {
+    position: 'absolute',
+    // Account for the card's rounded edge/shadow so it clears the 52px
+    // search field without leaving a visible gap.
+    top: 53,
+    left: 0,
+    right: 0,
+    borderRadius: 22,
+    backgroundColor: COLORS.WHITE,
+    paddingVertical: 8,
+    shadowColor: '#0B2A45',
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 7,
+    maxHeight: 220,
+    zIndex: 70,
+  },
+  suggestionsScroll: {
+    maxHeight: 220,
+  },
+  suggestionRow: {
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EFF3F7',
+  },
+  suggestionRowLast: {
+    borderBottomWidth: 0,
+  },
+  suggestionTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 15,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  globeContainer: {
+    flex: 1,
+    overflow: 'hidden',
+  },
+  mapShell: {
+    flex: 1,
+  },
+  map: {
+    flex: 1,
+  },
+  zoomControls: {
+    position: 'absolute',
+    right: 18,
+    bottom: 40,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    shadowColor: '#0A1B2A',
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  cityOverviewButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E6EDF3',
+  },
+  zoomButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  zoomButtonTop: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E6EDF3',
+  },
+  zoomButtonText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 24,
+    lineHeight: 28,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  groupMarkerTapArea: {
+    minWidth: 24,
+    height: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  groupMarkerRow: {
+    height: 24,
+    justifyContent: 'center',
+  },
+  groupMarkerBubble: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 3,
+    borderColor: COLORS.WHITE,
+    shadowColor: '#0A1B2A',
+    shadowOpacity: 0.24,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 7,
+  },
+  mapFallback: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mapFallbackText: {
+    color: COLORS.WHITE,
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  legendCard: {
+    marginTop: 12,
+    marginHorizontal: 20,
+    paddingHorizontal: 18,
+
+    borderRadius: 24,
+
+  },
+  legendTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 18,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    marginBottom: 12,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    // gap: 6
+  },
+  legendDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginTop: 3,
+    marginRight: 10,
+  },
+  legendDotRed: {
+    backgroundColor: '#F04452',
+  },
+  legendDotBlue: {
+    backgroundColor: '#1B84FF',
+  },
+  legendText: {
+    flex: 1,
+    // color: '#56616C',
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+  },
+  calendarOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  calendarCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 24,
+    backgroundColor: COLORS.WHITE,
+    padding: 18,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  calendarNavText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 22,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    width: 28,
+    textAlign: 'center',
+  },
+  calendarTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 17,
+    fontFamily: FONT_FAMILY.InterTight_SemiBold,
+  },
+  calendarWeekRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  calendarWeekday: {
+    flex: 1,
+    textAlign: 'center',
+    color: '#66717B',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarDayCell: {
+    width: '14.2857%',
+    aspectRatio: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 18,
+  },
+  calendarDayCellSelected: {
+    backgroundColor: COLORS.BUTTON_COLOR,
+  },
+  calendarDayCellEmpty: {
+    opacity: 0,
+  },
+  calendarDayText: {
+    color: COLORS.TEXT_PRIMARY,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+  },
+  calendarDayTextSelected: {
+    color: COLORS.WHITE,
+  },
+  calendarDayTextEmpty: {
+    color: 'transparent',
+  },
 });

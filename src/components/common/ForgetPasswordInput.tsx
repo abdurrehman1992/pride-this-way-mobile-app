@@ -1,10 +1,10 @@
 import React, { useState } from "react";
+import PasswordVisibilityButton from "./PasswordVisibilityButton";
 import {
   View,
   TextInput,
   StyleSheet,
   Text,
-  TouchableOpacity,
 } from "react-native";
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
@@ -35,16 +35,37 @@ const ForgetPasswordInput: React.FC<Props> = ({
       {label && <Text style={styles.label}>{label}</Text>}
 
       <View style={styles.inputWrapper}>
+        {!value && placeholder ? (
+          <View pointerEvents="none" style={[styles.placeholderOverlay, secureTextEntry && styles.passwordPlaceholder]}>
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              style={styles.placeholder}
+            >
+              {placeholder}
+            </Text>
+          </View>
+        ) : null}
         <TextInput
-          placeholder={placeholder}
-          placeholderTextColor={COLORS.FORGOT_PLACEHOLDER}
+          placeholder=""
           value={value}
           onChangeText={onChangeText}
-          secureTextEntry={isHidden}
+          secureTextEntry={secureTextEntry && isHidden}
+          autoCorrect={secureTextEntry ? false : undefined}
+          spellCheck={secureTextEntry ? false : undefined}
           style={styles.input}
           autoCapitalize="none"
           keyboardType={keyboardType}
+          multiline={false}
+          numberOfLines={1}
+          textAlignVertical="center"
         />
+        {secureTextEntry && (
+          <PasswordVisibilityButton
+            hidden={isHidden}
+            onPress={() => setIsHidden((hidden) => !hidden)}
+          />
+        )}
       </View>
 
       {Array.isArray(error) ? (
@@ -74,6 +95,7 @@ const styles = StyleSheet.create({
   },
 
   inputWrapper: {
+    position: "relative",
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "none",
@@ -85,10 +107,34 @@ const styles = StyleSheet.create({
 
   input: {
     flex: 1,
-    height: 48,
+    height: 56,
+    // Android adds a small default horizontal inset to TextInput. Explicitly
+    // reset it so the caret aligns with the custom placeholder's left edge.
+    paddingHorizontal: 0,
+    paddingVertical: 0,
     color: COLORS.TEXT_PRIMARY,
     fontSize: FONT_SIZE.SMALL_TEXT,
+    lineHeight: 20,
     fontFamily: FONT_FAMILY.PlusJakartaSans_Regular,
+    includeFontPadding: false,
+  },
+  placeholderOverlay: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
+  },
+  passwordPlaceholder: {
+    right: 60,
+  },
+  placeholder: {
+    color: COLORS.FORGOT_PLACEHOLDER,
+    fontSize: FONT_SIZE.SMALL_TEXT,
+    lineHeight: 20,
+    fontFamily: FONT_FAMILY.PlusJakartaSans_Regular,
+    includeFontPadding: false,
   },
   errorText: {
     color: COLORS.LOGOUT_TEXT,

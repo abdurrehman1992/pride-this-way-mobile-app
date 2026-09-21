@@ -19,6 +19,7 @@ export { default as SearchIcon } from '../assets/icons/SearchIcon.svg';
 export { default as FilterIcon } from '../assets/icons/FilterIcon.svg';
 export { default as HeartIcon } from '../assets/icons/HeartIcon.svg';
 export { default as EventIcon } from '../assets/icons/EventIcon.svg';
+export { default as EventTabIconActive } from '../assets/icons/eventTabIconActive.svg';
 export { default as StarIcon } from '../assets/icons/StarIcon.svg';
 export { default as LocationIcon } from '../assets/icons/LocationIcon.svg';
 export { default as TimeIcon } from '../assets/icons/TimeIcon.svg';
@@ -47,6 +48,7 @@ export { default as IconUp } from '../assets/icons/iconUp.svg';
 export { default as TourLocationIcon } from '../assets/icons/tourLocationIcon.svg';
 export { default as EarnedPointIcon } from '../assets/icons/earnedPointIcon.svg';
 export { default as TourDateIcon } from '../assets/icons/tourDateIcon.svg';
+export { default as CalendarIcon } from '../assets/icons/calendarIcon.svg';
 export { default as CreatedTourLocationIcon } from '../assets/icons/createdTourLocationIcon.svg';
 export { default as IconPlus } from '../assets/icons/iconPlus.svg';
 export { default as Map } from '../assets/icons/Map.svg';
@@ -54,8 +56,11 @@ export { default as SelectLocationInput } from '../assets/icons/selectLocationIn
 export { default as SelectedLocationIcon } from '../assets/icons/selectedLocationIcon.svg';
 export { default as CrossItemIcon } from '../assets/icons/crossItemIcon.svg';
 export { default as DetailsBackIcon } from '../assets/icons/detailsBackIcon.svg';
+export { default as DetailsBackDarkIcon } from '../assets/icons/detailsBackDarkIcon.svg';
 export { default as DetailsFavoriteIcon } from '../assets/icons/detailsFavoriteIcon.svg';
+export { default as DetailsFavoriteDarkIcon } from '../assets/icons/detailsFavoriteDarkIcon.svg';
 export { default as DetailsShareIcon } from '../assets/icons/detailsShareIcon.svg';
+export { default as DetailsShareDarkIcon } from '../assets/icons/detailsShareDarkIcon.svg';
 export { default as MiniMapIcon } from '../assets/icons/miniMapIcon.svg';
 export { default as RoofTopIcon } from '../assets/icons/roofTopIcon.svg';
 export { default as GetDirectionIcon } from '../assets/icons/getDirectionIcon.svg';
@@ -64,6 +69,10 @@ export { default as EditProfileIcon } from '../assets/icons/editProfileIcon.svg'
 export { default as ChangePasswordIcon } from '../assets/icons/changePasswordIcon.svg';
 export { default as CameraIcon } from '../assets/icons/cameraIcon.svg';
 export { default as FavoriteScreenIcon } from '../assets/icons/favoriteScreenIcon.svg';
+export { default as PlaceTabIcon } from '../assets/icons/placeTabIcon.svg';
+export { default as PlaceTabIconActive } from '../assets/icons/placeTabIconActive.svg';
+export { default as TourTabIcon } from '../assets/icons/tourTabIcon.svg';
+export { default as TourTabIconActive } from '../assets/icons/tourTabIconActive.svg';
 export { default as FoodTabIcon } from '../assets/icons/foodTabIcon.svg';
 export { default as MusicTabIcon } from '../assets/icons/musicTabIcon.svg';
 export { default as RedHeartIcon } from '../assets/icons/redHeartIcon.svg';
@@ -77,3 +86,12 @@ export { default as RouteIcon } from '../assets/icons/routeIcon.svg';
 export { default as VisionCameraIcon } from '../assets/icons/visionCameraIcon.svg';
 export { default as DownArrow } from '../assets/icons/arrowDown.svg';
 export {default as BlueMapIcon} from '../assets/icons/blueMapIcon.svg'
+export {default as GrayMapIcon} from '../assets/icons/grayMapIcon.svg'
+export {default as AppLogo} from '../assets/icons/appLogo.svg'
+export {default as WhiteFork} from '../assets/icons/whiteFork.svg'
+export {default as RoundedCross} from '../assets/icons/roundedCross.svg'
+export {default as EmailIcon} from '../assets/icons/emailIcon.svg'
+export {default as WhatsappIcon} from '../assets/icons/whatsappIcon.svg'
+export {default as PodcastEvent} from '../assets/icons/podcastEvents.svg'
+export {default as PrideEvent} from '../assets/icons/prideEvent.svg'
+export {default as AddCircle} from '../assets/icons/add-circle.svg'

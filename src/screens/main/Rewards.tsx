@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,11 @@ import {
   TouchableOpacity,
   ScrollView,
   Image,
-} from 'react-native';
+  RefreshControl,
+  } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { useSelector } from 'react-redux';
 
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
 import { COLORS } from '../../constants/colors';
@@ -24,52 +27,49 @@ import {
 } from '../../constants/icons';
 
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
+import { fetchRewardsSummary } from '../../services/myTourService';
+import { RootState } from '../../Redux/store';
 
 const Rewards = () => {
+  const userId = useSelector((state: RootState) => state.auth.user?.id);
   const [showAll, setShowAll] = useState(false);
+  const [totalPoints, setTotalPoints] = useState(0);
+  const [rewards, setRewards] = useState<any[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [rewards, setRewards] = useState([
-    {
-      id: 1,
-      name: 'City Explorer Tour',
-      points: 75,
-      totalLocations: 5,
-      date: 'Apr 15, 2026',
-      isOpen: true,
-    },
-    {
-      id: 2,
-      name: 'Food Adventure Tour is now working',
-      points: 120,
-      totalLocations: 8,
-      date: 'Apr 18, 2026',
-      isOpen: false,
-    },
-    {
-      id: 3,
-      name: 'Historical Walk',
-      points: 90,
-      totalLocations: 6,
-      date: 'Apr 20, 2026',
-      isOpen: false,
-    },
-    {
-      id: 4,
-      name: 'Beach Explorer',
-      points: 60,
-      totalLocations: 4,
-      date: 'Apr 22, 2026',
-      isOpen: false,
-    },
-    {
-      id: 5,
-      name: 'Mountain Adventure',
-      points: 150,
-      totalLocations: 10,
-      date: 'Apr 25, 2026',
-      isOpen: false,
-    },
-  ]);
+  const loadRewards = useCallback(async () => {
+    const summary = await fetchRewardsSummary(userId);
+    setTotalPoints(summary.totalPoints);
+    setRewards(
+      summary.tours.map((tour, index) => ({
+        id: tour.id,
+        name: tour.title,
+        points: tour.points,
+        totalLocations: tour.totalLocations,
+        date: tour.date ? new Date(tour.date).toDateString().slice(4) : 'Active',
+        isOpen: index === 0,
+        places: tour.places,
+      }))
+    );
+  }, [userId]);
+
+  const nextUnlock = Math.max(1500, totalPoints + 250);
+  const progressRatio = nextUnlock > 0 ? Math.min(1, totalPoints / nextUnlock) : 0;
+
+  useFocusEffect(
+    useCallback(() => {
+      loadRewards().catch(() => { });
+    }, [loadRewards])
+  );
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadRewards();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadRewards]);
 
   const toggleCard = (id: number) => {
     setRewards(prev =>
@@ -82,128 +82,145 @@ const Rewards = () => {
   const visibleRewards = showAll ? rewards : rewards.slice(0, 2);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={styles.up}>
-          <ForgeTopHeader title="Rewards" />
-        </View>
-        <ImageBackground source={RewardsBackground} style={styles.bg}>
-          <View style={styles.contentTop}>
-            <RewardIcon width={33} height={33} />
-            <Text style={styles.cardTitle}>1,250 Points</Text>
+    <>
+      <SafeAreaView style={styles.container}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={COLORS.BUTTON_COLOR}
+            />
+          }
+        >
+          <View style={styles.up}>
+            <ForgeTopHeader title="Rewards" />
           </View>
+          <ImageBackground source={RewardsBackground} style={styles.bg}>
+            <View style={styles.contentTop}>
+              <RewardIcon width={33} height={33} />
+              <Text style={styles.cardTitle}>{totalPoints.toLocaleString()} Points</Text>
+            </View>
 
-          <Text style={styles.textCongrats}>
-            Great job! Explore more tours to earn additional rewards.
-          </Text>
-
-          <View style={styles.progressOuter}>
-            <View style={styles.progressInner} />
-          </View>
-
-          <Text style={styles.textCongrats}>
-            Next Reward Unlock at 1,500 Points.
-          </Text>
-        </ImageBackground>
-        <View style={styles.pointsTitleCont}>
-          <Text style={styles.pointsTitle} numberOfLines={2}>
-            Your Tours & Rewards
-          </Text>
-
-          <TouchableOpacity
-            onPress={() => setShowAll(!showAll)}
-            style={styles.seeAllButton}
-          >
-            <Text style={styles.seeAll}>
-              {showAll ? 'Show Less' : 'See All'}
+            <Text style={styles.textCongrats}>
+              {rewards.length > 0
+                ? 'Great job! Explore more tours to earn additional rewards.'
+                : 'Start a tour to begin earning rewards — your rewards will appear here after you start.'}
             </Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.listContainer}>
-          {visibleRewards.map(item => (
-            <View key={item.id} style={styles.card}>
+
+            <View style={styles.progressOuter}>
+              <View style={[styles.progressInner, { width: `${Math.round(progressRatio * 100)}%` }]} />
+            </View>
+
+            <Text style={styles.textCongrats}>
+              Next Reward Unlock at {Math.max(1500, totalPoints + 250).toLocaleString()} Points.
+            </Text>
+          </ImageBackground>
+          <View style={styles.pointsTitleCont}>
+            <Text style={styles.pointsTitle} numberOfLines={2}>
+              Your Tours & Rewards
+            </Text>
+
+            {rewards.length > 2 ? (
               <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => toggleCard(item.id)}
-                style={styles.cardTop}
+                onPress={() => setShowAll(!showAll)}
+                style={styles.seeAllButton}
               >
-                <Image
-                  source={{ uri: PLACES_ARROUND }}
-                  style={styles.imagePlaceholder}
-                />
-
-                <View style={styles.cardInfo}>
-                  <View style={styles.titleRow}>
-                    <Text style={styles.tourTittle} numberOfLines={2}>
-                      {item.name}
-                    </Text>
-
-                    <View style={styles.expandIcon}>
-                      {item.isOpen ? (
-                        <IconUp width={10.95} height={6.31} />
-                      ) : (
-                        <DownArrow width={16} height={16} />
-                      )}
-                    </View>
-                  </View>
-
-                  <View style={styles.metaInfoRow}>
-                    <View style={styles.metaInfoItem}>
-                      <TourLocationIcon height={20} width={20} />
-                      <Text style={styles.textInfo}>
-                        Visit {item.totalLocations} Locations
-                      </Text>
-                    </View>
-
-                    <View style={styles.metaInfoItem}>
-                      <TourDateIcon height={20} width={20} />
-                      <Text style={styles.textInfo}>{item.date}</Text>
-                    </View>
-                  </View>
-
-                  {/* POINTS */}
-                  <View style={styles.metaInfoItem}>
-                    <EarnedPointIcon height={20} width={20} />
-                    <Text style={styles.textInfo}>
-                      Earn <Text style={styles.textGreen}>+{item.points}</Text>{' '}
-                      Points
-                    </Text>
-                  </View>
-                </View>
+                <Text style={styles.seeAll}>
+                  {showAll ? 'Show Less' : 'See All'}
+                </Text>
               </TouchableOpacity>
+            ) : null}
+          </View>
+          <View style={styles.listContainer}>
+            {visibleRewards.length === 0 ? (
+              <Text style={styles.emptyText}>No rewards earned yet.</Text>
+            ) : visibleRewards.map(item => (
+              <View key={item.id} style={styles.card}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => toggleCard(item.id)}
+                  style={styles.cardTop}
+                >
+                  <Image
+                    source={{ uri: PLACES_ARROUND }}
+                    style={styles.imagePlaceholder}
+                  />
 
-              {item.isOpen && (
-                <View style={styles.cardBottom}>
-                  <Text style={styles.breakDownTitle}>Points Breakdown</Text>
+                  <View style={styles.cardInfo}>
+                    <View style={styles.titleRow}>
+                      <Text style={styles.tourTittle} numberOfLines={2}>
+                        {item.name}
+                      </Text>
 
-                  {[1, 2, 3, 4, 5].map((_, i) => (
-                    <View key={i} style={styles.locationCont}>
-                      <View style={styles.locationRow}>
-                        <CreatedTourLocationIcon width={18} height={18} />
-                        <Text style={styles.locationText}>
-                          Location {i + 1}
+                      <View style={styles.expandIcon}>
+                        {item.isOpen ? (
+                          <IconUp width={16} height={16} />
+                        ) : (
+                          <DownArrow width={16} height={16} />
+                        )}
+                      </View>
+                    </View>
+
+                    <View style={styles.metaInfoRow}>
+                      <View style={styles.metaInfoItem}>
+                        <TourLocationIcon height={20} width={20} />
+                        <Text style={styles.textInfo}>
+                          Visit {item.totalLocations} Locations
                         </Text>
                       </View>
-                      <Text style={styles.arrow}>{`---->`}</Text>
-                      <Text style={styles.pointsText}>+10 Points</Text>
+
+                      <View style={styles.metaInfoItem}>
+                        <TourDateIcon height={20} width={20} />
+                        <Text style={styles.textInfo}>{item.date}</Text>
+                      </View>
                     </View>
-                  ))}
 
-                  <View style={styles.divider} />
-
-                  <View style={styles.totalRow}>
-                    <Text style={styles.totalText}>Total Points</Text>
-                    <Text style={styles.totalPoints}>
-                      +{item.points} Points
-                    </Text>
+                    {/* POINTS */}
+                    <View style={styles.metaInfoItem}>
+                      <EarnedPointIcon height={20} width={20} />
+                      <Text style={styles.textInfo}>
+                        Earn <Text style={styles.textGreen}>+{item.points}</Text>{' '}
+                        Points
+                      </Text>
+                    </View>
                   </View>
-                </View>
-              )}
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+                </TouchableOpacity>
+
+                {item.isOpen && (
+                  <View style={styles.cardBottom}>
+                    <Text style={styles.breakDownTitle}>Points Breakdown</Text>
+
+                    {(item.places || []).map((place: any) => (
+                      <View key={place.id} style={styles.locationCont}>
+                        <View style={styles.locationRow}>
+                          <CreatedTourLocationIcon width={18} height={18} />
+                          <Text style={styles.locationText}>{place.name}</Text>
+                        </View>
+                        <Text style={styles.arrow}>→</Text>
+                        <Text style={styles.pointsText} numberOfLines={1}>
+                          +{place.points} Points
+                        </Text>
+                      </View>
+                    ))}
+
+                    <View style={styles.divider} />
+
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalText}>Total Points</Text>
+                      <Text style={styles.totalPoints}>
+                        +{item.points} Points
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </>
   );
 };
 
@@ -229,6 +246,9 @@ const styles = StyleSheet.create({
   },
   arrow: {
     color: COLORS.CLEAR_ALL,
+    width: 28,
+    flexShrink: 0,
+    textAlign: 'center',
   },
   up: {
     marginTop: 16,
@@ -405,6 +425,8 @@ const styles = StyleSheet.create({
   },
 
   locationRow: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
@@ -412,19 +434,32 @@ const styles = StyleSheet.create({
   },
 
   locationText: {
+    flex: 1,
+    flexShrink: 1,
     fontSize: FONT_SIZE.TEXT,
     fontFamily: FONT_FAMILY.InterTight_Regular,
     color: COLORS.TEXT_PRIMARY,
   },
   pointsText: {
+    width: 82,
+    flexShrink: 0,
+    textAlign: 'right',
     color: COLORS.TEXT_GREEN,
     fontFamily: FONT_FAMILY.Poppins_Medium,
     fontSize: FONT_SIZE.CARD_TEXT,
   },
+  emptyText: {
+    textAlign: 'center',
+    color: COLORS.TEXT_SECONDARY,
+    fontSize: FONT_SIZE.TEXT,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    paddingVertical: 24,
+  },
   locationCont: {
+    width: '100%',
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 6,
   },
   breakDownTitle: {
     fontFamily: FONT_FAMILY.Poppins_Medium,

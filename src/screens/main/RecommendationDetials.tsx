@@ -1,4 +1,5 @@
-import React, { useMemo } from "react";
+import ActionTouchable from "../../components/common/ActionTouchable";
+import React, { useEffect, useState } from "react";
 import {
     View,
     Text,
@@ -6,7 +7,6 @@ import {
     StyleSheet,
     ScrollView,
     Image,
-    TouchableOpacity,
     ActivityIndicator,
     Share,
     Platform,
@@ -18,28 +18,45 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { COLORS } from "../../constants/colors";
 import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
-import { DetailBackground, MAP_IMAGE } from "../../constants/images";
+import { DetailBackground } from "../../constants/images";
 
 import CustomButton from "../../components/common/CustomButton";
 
 import {
     DetailsBackIcon,
+    DetailsBackDarkIcon,
     DetailsFavoriteIcon,
+    DetailsFavoriteDarkIcon,
     DetailsShareIcon,
+    DetailsShareDarkIcon,
     DetailsFavoriteWhite,
     ForkIcon,
     StarIcon,
     TimeIcon,
     MiniMapIcon,
     RoofTopIcon,
-    GetDirectionIcon,
 } from "../../constants/icons";
 
 import { useFavorites } from "../../context/FavoritesContext";
 import { showInfo, showSuccess } from "../../components/common/AppToast";
+import { sanitizeImageUrl } from '../../services/aiService';
+import { distanceLabelBetween, getPlaceOpenStatus } from '../../services/aiService';
+import { getCurrentPosition } from '../../utils/location';
 
 const FALLBACK_IMAGE =
     "https://fastly.picsum.photos/id/1/800/600.jpg?hmac=jH5bDkLr6Tgy3oAg5khKCHeunZMHq0ehBZr6vGifPLY";
+
+const resolveImageSource = (image: any) => {
+    if (!image) {
+        return DetailBackground;
+    }
+
+    if (typeof image === "string") {
+        return { uri: image, cache: 'force-cache' };
+    }
+
+    return image;
+};
 
 const RecommendationDetials = () => {
 
@@ -47,8 +64,36 @@ const RecommendationDetials = () => {
     const navigation = useNavigation();
 
     const item = route?.params?.item;
+    const headerImageCandidate = item?.imageUrl || item?.image;
+    const [headerImageLoaded, setHeaderImageLoaded] = useState(false);
+    const [currentCoordinates, setCurrentCoordinates] = useState<{ latitude: number; longitude: number }>();
+    const [now, setNow] = useState(() => new Date());
 
-    const { addToFavorites, removeFromFavorites, isFavorite, favorites } = useFavorites();
+    useEffect(() => {
+        setHeaderImageLoaded(false);
+    }, [headerImageCandidate]);
+
+    useEffect(() => {
+        let mounted = true;
+        getCurrentPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 })
+            .then((position) => {
+                if (mounted && position?.coords) {
+                    setCurrentCoordinates({
+                        latitude: Number(position.coords.latitude),
+                        longitude: Number(position.coords.longitude),
+                    });
+                }
+            })
+            .catch(() => {});
+        return () => { mounted = false; };
+    }, []);
+
+    useEffect(() => {
+        const timer = setInterval(() => setNow(new Date()), 60 * 1000);
+        return () => clearInterval(timer);
+    }, []);
+
+    const { addToFavorites, removeFromFavorites, isFavorite } = useFavorites();
 
     if (!item) {
         return (
@@ -58,27 +103,111 @@ const RecommendationDetials = () => {
         );
     }
 
-    const {
+        const {
         id,
         title = "No Title",
         description = "No Description",
         rating = "4.5",
         image,
+        imageUrl,
         category = "Restaurant",
+        location,
+        address,
+        about,
+        highlights = [],
+        gallery = [],
+        reviews = [],
     } = item;
+    const availability = getPlaceOpenStatus(item, now);
+    const actualDistance = distanceLabelBetween(currentCoordinates, item.coordinates);
 
-    const favorite = useMemo(() => {
-        return id ? isFavorite(id) : false;
-    }, [id, favorites]);
+        const originalPlace = (item as any)?.originalPlace;
 
-    const handleFavorite = () => {
+        // Prefer original place fields when available.
+        const displayAddress = originalPlace?.formatted_address || address || item?.address || location || originalPlace?.vicinity || '';
+        const displayLocation = displayAddress;
+
+        // If `originalPlace.photos` already contains usable http(s) URLs, use them; otherwise skip.
+        const galleryFromOriginal = Array.isArray(originalPlace?.photos)
+            ? originalPlace.photos
+                    .filter((p: any) => typeof p === 'string' && (p.startsWith('http://') || p.startsWith('https://')))
+                    .map((p: any) => String(p))
+            : [];
+
+    const imageKeywordFromItem = (itemData: any) => {
+        return itemData?.imageKeyword || itemData?.gallery?.[0] || itemData?.title || 'travel';
+    };
+
+    const rawImageSource = headerImageCandidate || FALLBACK_IMAGE;
+    const imageSource = sanitizeImageUrl(rawImageSource) || rawImageSource;
+    const useLightHeaderControls = Boolean(headerImageCandidate && headerImageLoaded);
+
+    const safeHighlights: string[] = highlights.length ? highlights : ['Scenic views', 'Great local vibes'];
+        const safeGallery: string[] = galleryFromOriginal.length
+            ? galleryFromOriginal
+            : gallery.length
+            ? gallery.filter((entry: unknown) => typeof entry === 'string' && (entry.startsWith('http') || entry.startsWith('data:')))
+            : typeof imageSource === 'string' && imageSource
+            ? [imageSource]
+            : [];
+    const safeReviews = reviews.length ? reviews : [
+        {
+            author: 'Local traveler',
+            location: location || 'Local area',
+            rating,
+            comment: description,
+        },
+    ];
+
+    const favorite = id ? isFavorite(id) : false;
+
+    // Prefetch main image and gallery on mount to improve Android loading
+    useEffect(() => {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { Image } = require('react-native');
+            const tryPrefetch = async (url: string) => {
+                try {
+                    const ok = await Image.prefetch(url);
+                    if (ok) return true;
+                } catch (err) {}
+                try {
+                    const resp = await fetch(url);
+                    const finalUrl = resp.url || url;
+                    try {
+                        const ok2 = await Image.prefetch(finalUrl);
+                        if (ok2) return true;
+                    } catch (e) {}
+                } catch (e) {}
+                return false;
+            };
+
+            if (imageSource && typeof imageSource === 'string') {
+                tryPrefetch(imageSource).catch(() => {});
+            }
+
+            safeGallery.forEach((g) => {
+                try {
+                    const raw = g;
+                    const sanitized = sanitizeImageUrl(raw) || raw;
+                    tryPrefetch(sanitized).catch(() => {});
+                } catch (e) {
+                    // ignore
+                }
+            });
+        } catch (e) {
+            // ignore
+        }
+    }, [imageSource, safeGallery]);
+
+    const handleFavorite = async () => {
         if (!id) return;
 
         if (favorite) {
-            removeFromFavorites(id);
+            await removeFromFavorites(id);
             showInfo("Removed", "Removed from favorites");
         } else {
-            addToFavorites({ id, title, description, rating, image, category });
+                await addToFavorites({ id, title, description, rating, image, category, originalPlace: item.originalPlace });
             showSuccess("Added", "Added to favorites");
         }
     };
@@ -86,56 +215,55 @@ const RecommendationDetials = () => {
     const handleShare = async () => {
         try {
             await Share.share({
-                message: `${title}\n\n${description}\n\nRating: ${rating} ⭐`,
+                message: `${title}\n\n${about || description}\n\nRating: ${rating} ⭐`,
                 title,
             });
         } catch (e) {
-            console.log("Share error:", e);
+            // console.log("Share error:", e);
         }
     };
-    const gallery = [
-        {
-            id: 1,
-            name: 'Interior'
-        },
-        {
-            id: 2,
-            name: 'Food'
-        },
-        {
-            id: 3,
-            name: 'Roof'
-        },
-    ]
+
     return (
         <ScrollView style={styles.mainContainer} showsVerticalScrollIndicator={false}>
 
             {/* ================= HEADER ================= */}
             <ImageBackground
-                source={image ? { uri: image } : DetailBackground}
+                source={resolveImageSource(imageSource)}
                 style={styles.background}
                 imageStyle={styles.bgImage}
+                onLoad={() => setHeaderImageLoaded(true)}
+                onError={() => setHeaderImageLoaded(false)}
             >
                 <SafeAreaView style={styles.safeArea}>
 
                     {/* TOP BAR */}
                     <View style={styles.topBar}>
-                        <TouchableOpacity onPress={() => navigation.goBack()}>
-                            <DetailsBackIcon height={43} width={43} />
-                        </TouchableOpacity>
+                        <ActionTouchable style={{shadowColor: 'black', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }} onPress={() => navigation.goBack()}>
+                            {useLightHeaderControls ? (
+                                <DetailsBackIcon height={43} width={43} />
+                            ) : (
+                                <DetailsBackDarkIcon height={43} width={43} />
+                            )}
+                        </ActionTouchable>
 
                         <View style={styles.rightIcons}>
-                            <TouchableOpacity onPress={handleFavorite}>
+                            <ActionTouchable onPress={handleFavorite}>
                                 {favorite ? (
                                     <DetailsFavoriteIcon height={43} width={43} />
-                                ) : (
+                                ) : useLightHeaderControls ? (
                                     <DetailsFavoriteWhite height={43} width={43} />
+                                ) : (
+                                    <DetailsFavoriteDarkIcon height={43} width={43} />
                                 )}
-                            </TouchableOpacity>
+                            </ActionTouchable>
 
-                            <TouchableOpacity onPress={handleShare}>
-                                <DetailsShareIcon height={43} width={43} />
-                            </TouchableOpacity>
+                            <ActionTouchable onPress={handleShare}>
+                                {useLightHeaderControls ? (
+                                    <DetailsShareIcon height={43} width={43} />
+                                ) : (
+                                    <DetailsShareDarkIcon height={43} width={43} />
+                                )}
+                            </ActionTouchable>
                         </View>
                     </View>
 
@@ -175,8 +303,7 @@ const RecommendationDetials = () => {
                             <View style={styles.textContainer}>
                                 <Text style={styles.cardTitle}>{title}</Text>
                                 <Text style={styles.cardDesc} numberOfLines={2}>
-                                    {/* {description} */}
-                                    California, USA
+                                    {displayLocation || 'Local destination'}
                                 </Text>
                             </View>
 
@@ -189,14 +316,20 @@ const RecommendationDetials = () => {
 
             {/* ================= MINI INFO ================= */}
             <View style={styles.miniContainer}>
-                <View style={styles.miniBtn}>
-                    <TimeIcon width={16} height={16} />
-                    <Text style={styles.miniText}>Open Now</Text>
+                <View style={[styles.miniBtn, availability.isOpen === false && styles.miniBtnClosed, availability.isOpen === null && styles.miniBtnUnavailable]}>
+                    <TimeIcon
+                        width={16}
+                        height={16}
+                        color={availability.isOpen === true ? COLORS.TEXT_GREEN : availability.isOpen === false ? COLORS.LOGOUT_TEXT : COLORS.TEXT_SECONDARY}
+                    />
+                    <Text style={[styles.miniText, availability.isOpen === false && styles.miniTextClosed, availability.isOpen === null && styles.miniTextUnavailable]}>
+                        {availability.label}
+                    </Text>
                 </View>
 
                 <View style={styles.miniBtnWhite}>
                     <MiniMapIcon width={16} height={16} />
-                    <Text style={styles.miniTextDark}>2.3 km away</Text>
+                    <Text style={styles.miniTextDark}>{actualDistance}</Text>
                 </View>
             </View>
 
@@ -204,8 +337,7 @@ const RecommendationDetials = () => {
             <View style={styles.section}>
                 <Text style={styles.titleText}>About This Place</Text>
                 <Text style={styles.descText}>
-                    {/* {description} */}
-                    A premium rooftop restaurant offering panoramic city views, live music, & a curated dining experience. Perfect for romantic evenings, social gatherings, and special occasions.
+                    {about || description}
                 </Text>
             </View>
 
@@ -214,60 +346,43 @@ const RecommendationDetials = () => {
                 <Text style={styles.titleText}>What You’ll Love</Text>
 
                 <View style={styles.featuresRow}>
-                    <View style={styles.featureCard}>
-                        <RoofTopIcon width={24} height={24} />
-                        <Text style={styles.featureText}>Scenic rooftop views</Text>
-                    </View>
-
-                    <View style={styles.featureCard}>
-                        <RoofTopIcon width={24} height={24} />
-                        <Text style={styles.featureText}>Live music nights</Text>
-                    </View>
+                    {safeHighlights.slice(0, 2).map((highlight: string, index: number) => (
+                        <View key={`${highlight}-${index}`} style={styles.featureCard}>
+                            <RoofTopIcon width={24} height={24} />
+                            <Text style={styles.featureText}>{highlight}</Text>
+                        </View>
+                    ))}
                 </View>
             </View>
-            <View style={[styles.section]}>
-                <Text style={[styles.titleText, { marginBottom: 16 }]}>Gallery</Text>
+            <View style={styles.section}>
+                <Text style={styles.galleryTitle}>Gallery</Text>
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    {gallery.map((i) => (
-                        <ImageBackground
-                            // source={}
-                            key={i.id}
-                            source={{ uri: image || FALLBACK_IMAGE }}
-                            style={styles.galleryImage}
-                        >
-                            <Text style={{ color: COLORS.WHITE, fontFamily: FONT_FAMILY.InterTight_Medium, fontSize: FONT_SIZE.SMALL_TEXT }}>
-                                {i.name}
-                            </Text>
-                        </ImageBackground>
-                    ))}
+                    {safeGallery.map((galleryItem: string, index: number) => {
+                        const raw = galleryItem;
+                        const sanitized = sanitizeImageUrl(String(raw)) || String(raw);
+                        return (
+                            <ImageBackground
+                                key={`${String(raw)}-${index}`}
+                                source={resolveImageSource(sanitized)}
+                                style={styles.galleryImage}
+                                imageStyle={styles.galleryImageRadius}
+                            >
+                                <Text style={{ color: COLORS.WHITE, fontFamily: FONT_FAMILY.InterTight_Medium, fontSize: FONT_SIZE.SMALL_TEXT }}>
+                                    {index === 0 ? 'Main' : index === 1 ? 'View' : 'Spot'}
+                                </Text>
+                            </ImageBackground>
+                        );
+                    })}
                 </ScrollView>
             </View>
 
-            {/* ================= LOCATION ================= */}
-            <View style={styles.locationContainer}>
-                <Text style={styles.titleText}>Location & Distance</Text>
-
-                <View style={styles.locationBox}>
-                    <Image style={styles.map} source={{ uri: MAP_IMAGE }} />
-                    <View style={styles.locationFooter}>
-                        <Text style={styles.distanceText}>
-                            2.3 km from your current location
-                        </Text>
-
-                        <TouchableOpacity style={styles.getDirection}>
-                            <GetDirectionIcon width={12.97} height={12.97} />
-                            <Text style={styles.getDirectionText}>Get Direction</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
             <View style={styles.section}>
                 <Text style={styles.titleText}>Reviews</Text>
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.reviewScroll}>
-                    {[1, 2, 3].map((i) => (
-                        <View key={i} style={styles.reviewCard}>
+                    {safeReviews.slice(0, 3).map((review: any, index: number) => (
+                        <View key={`${review.author}-${index}`} style={styles.reviewCard}>
                             <View style={styles.starRow}>
                                 {[1, 2, 3, 4, 5].map((s) => (
                                     <StarIcon key={s} width={14} height={14} />
@@ -275,14 +390,14 @@ const RecommendationDetials = () => {
                             </View>
 
                             <Text style={styles.reviewComment}>
-                                Amazing place with great vibes!
+                                {review.comment || 'A great experience overall.'}
                             </Text>
 
                             <View style={styles.userRow}>
-                                <Image source={{ uri: image || FALLBACK_IMAGE }} style={styles.avatar} />
+                                <Image source={{ uri: review.avatar || imageSource || FALLBACK_IMAGE }} style={styles.avatar} />
                                 <View>
-                                    <Text style={styles.userName}>Emma Roberts</Text>
-                                    <Text style={styles.userSub}>– New York, USA</Text>
+                                    <Text style={styles.userName}>{review.author || 'Traveler'}</Text>
+                                    <Text style={styles.userSub}>– {review.location || location || 'Local area'}</Text>
                                 </View>
                             </View>
                         </View>
@@ -291,7 +406,7 @@ const RecommendationDetials = () => {
             </View>
             {/* ================= BUTTON ================= */}
             <View style={styles.footerButton}>
-                <CustomButton title="Start Route" />
+                {/* <CustomButton title="Start Route" /> */}
             </View>
 
         </ScrollView>
@@ -433,6 +548,14 @@ const styles = StyleSheet.create({
         gap: 6,
     },
 
+    miniBtnClosed: {
+        backgroundColor: '#FEE2E2',
+    },
+
+    miniBtnUnavailable: {
+        backgroundColor: '#E5E7EB',
+    },
+
     miniBtnWhite: {
         flexDirection: "row",
         alignItems: "center",
@@ -450,6 +573,14 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.InterTight_Medium,
     },
 
+    miniTextClosed: {
+        color: COLORS.LOGOUT_TEXT,
+    },
+
+    miniTextUnavailable: {
+        color: COLORS.TEXT_SECONDARY,
+    },
+
     miniTextDark: {
         color: COLORS.TEXT_PRIMARY,
         fontSize: FONT_SIZE.CARD_TEXT,
@@ -462,6 +593,12 @@ const styles = StyleSheet.create({
     },
 
     titleText: {
+        fontSize: FONT_SIZE.LARGE_TEXT,
+        color: COLORS.TEXT_PRIMARY,
+        fontFamily: FONT_FAMILY.Poppins_SemiBold,
+    },
+    galleryTitle: {
+        marginBottom: 16,
         fontSize: FONT_SIZE.LARGE_TEXT,
         color: COLORS.TEXT_PRIMARY,
         fontFamily: FONT_FAMILY.Poppins_SemiBold,
@@ -511,6 +648,9 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
         alignItems: 'center',
         paddingBottom: 17
+    },
+    galleryImageRadius: {
+        borderRadius: 16,
     },
 
     locationContainer: {
@@ -613,4 +753,5 @@ const styles = StyleSheet.create({
         marginHorizontal: 24,
         marginVertical: 30,
     },
+
 });
