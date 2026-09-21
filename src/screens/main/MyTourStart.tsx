@@ -910,7 +910,7 @@ const MyTourStart = () => {
       }
       setLocationStatusChecked(true);
 
-      await startNativeTourLocation();
+      await startNativeTourLocation(tourIdRef.current);
       if (cancelled) return;
 
       const status = await getNativeTourLocationStatus();
@@ -967,7 +967,7 @@ const MyTourStart = () => {
         nativeLocationDisabledRef.current = false;
         if (wasBlockedOnEntry) {
           locationBlockedOnEntryRef.current = false;
-          await startNativeTourLocation();
+          await startNativeTourLocation(tourIdRef.current);
           if (!cancelled) {
             setLocationUnavailable(false);
           }
@@ -4662,7 +4662,7 @@ const MyTourStart = () => {
           locationBlockedOnEntryRef.current = false;
           setLocationStatusChecked(true);
           setLocationUnavailable(false);
-          await startNativeTourLocation();
+          await startNativeTourLocation(tourIdRef.current);
 
           // A running tour is paused while its required GPS service is off.
           // Returning from Location Settings with GPS enabled resumes only
