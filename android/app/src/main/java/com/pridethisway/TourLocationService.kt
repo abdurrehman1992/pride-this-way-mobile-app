@@ -62,6 +62,7 @@ class TourLocationService : Service() {
         .putLong("timestamp", now)
         .apply()
       appendTracePoint(location, now)
+      checkDestinationProximity(location)
 
       emitLocation(
         type = "update",
@@ -364,6 +365,32 @@ class TourLocationService : Service() {
       .apply { launchAppIntent()?.let(::setContentIntent) }
       .build()
     getSystemService(NotificationManager::class.java).notify(ALERT_NOTIFICATION_ID, notification)
+  }
+
+  private fun checkDestinationProximity(location: Location) {
+    val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+    if (!preferences.contains("notificationDestinationLatitude") ||
+      !preferences.contains("notificationDestinationLongitude") ||
+      preferences.getBoolean("notificationDestinationEntered", false)
+    ) {
+      return
+    }
+
+    val destination = Location("tour-destination").apply {
+      latitude = preferences.getString("notificationDestinationLatitude", null)?.toDoubleOrNull() ?: return
+      longitude = preferences.getString("notificationDestinationLongitude", null)?.toDoubleOrNull() ?: return
+    }
+    val distanceMeters = location.distanceTo(destination)
+    if (distanceMeters > 100f) return
+
+    val title = preferences.getString("notificationDestinationTitle", null)
+      ?.takeIf { it.isNotBlank() }
+      ?: "your destination"
+    preferences.edit().putBoolean("notificationDestinationEntered", true).apply()
+    showTourAlert(
+      "You can verify your visit",
+      "$title is within 100 meters. You can scan and verify it now.",
+    )
   }
 
   override fun onDestroy() {

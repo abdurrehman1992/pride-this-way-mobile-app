@@ -85,6 +85,9 @@ import { requestLocationPermission } from '../../utils/location';
 import {
   getNativeTourLocationSamples,
   getNativeTourLocationStatus,
+  clearTourNotificationDestination,
+  setTourNotificationDestination,
+  showDestinationReadyNotification,
   startNativeTourLocation,
   stopNativeTourLocation,
   subscribeToNativeTourLocation,
@@ -290,6 +293,10 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const NAVIGATION_CAMERA_PITCH = 42;
 const NAVIGATION_FOLLOW_ZOOM = 17.2;
 const NAVIGATION_SUMMARY_HEIGHT = 176;
+// Keep the user pin visually smooth without changing the raw GPS position
+// used by navigation, route progress, or visit verification.
+const USER_MARKER_SMOOTHING_FACTOR = 0.16;
+const USER_MARKER_SMOOTHING_INTERVAL_MS = 100;
 const NAVIGATION_BANNER_SAFE_HEIGHT = 108;
 const NAVIGATION_ACCESS_CONNECTOR_MIN_METERS = 8;
 const DETAIL_CARD_WIDTH = 260;
@@ -701,6 +708,8 @@ const MyTourStart = () => {
   );
   const currentLocationRef = useRef<[number, number] | null>(null);
   const currentLocationAccuracyRef = useRef<number>(MAX_ACCEPTED_GPS_ACCURACY_METERS);
+  const [displayedUserLocation, setDisplayedUserLocation] = useState<[number, number] | null>(null);
+  const displayedUserLocationRef = useRef<[number, number] | null>(null);
   const lastAcceptedLocationFixRef = useRef<{
     coordinate: [number, number];
     timestamp: number;
@@ -719,6 +728,33 @@ const MyTourStart = () => {
   useEffect(() => {
     currentLocationRef.current = currentLocation;
   }, [currentLocation]);
+
+  useEffect(() => {
+    if (!currentLocation || displayedUserLocationRef.current) return;
+    displayedUserLocationRef.current = currentLocation;
+    setDisplayedUserLocation(currentLocation);
+  }, [currentLocation]);
+
+  // Move only the visible marker gradually toward the latest GPS fix. The
+  // actual currentLocation remains immediate for all navigation calculations.
+  useEffect(() => {
+    const smoothingTimer = setInterval(() => {
+      const target = currentLocationRef.current;
+      const displayed = displayedUserLocationRef.current;
+      if (!target || !displayed) return;
+
+      const next: [number, number] = [
+        displayed[0] + (target[0] - displayed[0]) * USER_MARKER_SMOOTHING_FACTOR,
+        displayed[1] + (target[1] - displayed[1]) * USER_MARKER_SMOOTHING_FACTOR,
+      ];
+      const closeEnough = distanceMetersBetween(next, target) < 0.5;
+      const nextLocation = closeEnough ? target : next;
+      displayedUserLocationRef.current = nextLocation;
+      setDisplayedUserLocation(nextLocation);
+    }, USER_MARKER_SMOOTHING_INTERVAL_MS);
+
+    return () => clearInterval(smoothingTimer);
+  }, []);
 
   const applyLiveLocationFix = useCallback((
     coordinate: [number, number],
@@ -2580,6 +2616,22 @@ const MyTourStart = () => {
     return orderedRemainingStops[0] || null;
   }, [optimizedOrder, orderingAnchor, orderedRemainingStops, tourStarted]);
 
+  // Keep the native background geofence focused on the current next stop.
+  // This does not change verification; it only enables an arrival reminder.
+  useEffect(() => {
+    if (!tourStarted || !nearestPendingStop) {
+      clearTourNotificationDestination();
+      return;
+    }
+
+    setTourNotificationDestination({
+      id: nearestPendingStop.id,
+      latitude: nearestPendingStop.coordinate[1],
+      longitude: nearestPendingStop.coordinate[0],
+      title: nearestPendingStop.title,
+    });
+  }, [nearestPendingStop, tourStarted]);
+
   const selectedStopIsNearestPending = useMemo(() => {
     if (!selectedStop || isStopComplete(selectedStop)) {
       return false;
@@ -2595,6 +2647,27 @@ const MyTourStart = () => {
       NEAREST_STOP_TOLERANCE_METERS
     );
   }, [isStopComplete, nearestPendingStop, selectedStop]);
+
+  const destinationNotificationStopRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    if (!tourStarted || !nearestPendingStop || !currentLocation) {
+      destinationNotificationStopRef.current = null;
+      return;
+    }
+
+    const distance = distanceMetersBetween(currentLocation, nearestPendingStop.coordinate);
+    if (distance <= VISIT_DISTANCE_THRESHOLD_METERS &&
+      destinationNotificationStopRef.current !== nearestPendingStop.id) {
+      destinationNotificationStopRef.current = nearestPendingStop.id;
+      showDestinationReadyNotification(nearestPendingStop.title);
+    } else if (
+      distance > VISIT_DISTANCE_THRESHOLD_METERS + 30 &&
+      destinationNotificationStopRef.current === nearestPendingStop.id
+    ) {
+      destinationNotificationStopRef.current = null;
+    }
+  }, [currentLocation, nearestPendingStop, tourStarted]);
 
   // Continuous GPS tracking — runs while the screen is mounted.
   useEffect(() => {
@@ -3877,7 +3950,7 @@ const MyTourStart = () => {
   // Draw the accepted breadcrumb itself, rather than a prefix of the current
   // suggestion. It therefore survives every reroute and also records a road
   // or street taken in the wrong direction.
-  const actualTravelledRouteLine = useMemo<FeatureCollection<LineString>>(
+  useMemo<FeatureCollection<LineString>>(
     () => {
       let coordinates = actualTravelledCoordinates;
       if (isRenderableRouteSegment(tourOriginAccessSegment)) {
@@ -3915,7 +3988,6 @@ const MyTourStart = () => {
           ? [snappedRoadEntry, ...coordinates.slice(roadEntryIndex)]
           : [];
       }
-
       return {
         type: 'FeatureCollection',
         features: isRenderableRouteSegment(coordinates)
@@ -5530,12 +5602,6 @@ const MyTourStart = () => {
                 </Mapbox.ShapeSource>
               )}
 
-              {actualTravelledRouteLine.features.length > 0 && (
-                <Mapbox.ShapeSource id="actualTravelledRouteLine" shape={actualTravelledRouteLine}>
-                  <Mapbox.LineLayer id="actualTravelledRouteLineLayer" style={completedRouteLineLayerStyle} />
-                </Mapbox.ShapeSource>
-              )}
-
               {actualTravelledOffRoadDots.features.length > 0 && (
                 <Mapbox.ShapeSource id="actualTravelledOffRoadDots" shape={actualTravelledOffRoadDots}>
                   <Mapbox.CircleLayer
@@ -5702,7 +5768,9 @@ const MyTourStart = () => {
               {currentLocation && currentMarkerNeedsStandalonePin ? (
                 <Mapbox.MarkerView
                   id="currentUserLocationMarker"
-                  coordinate={[...currentLocation]}
+                  coordinate={[
+                    ...(displayedUserLocation || currentLocation),
+                  ]}
                   anchor={{ x: 0.5, y: 0.5 }}
                   allowOverlap
                   allowOverlapWithPuck

@@ -16,6 +16,7 @@
 		71B2F47EF99B44FC86371E89 /* Poppins-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 36BF1FB499CC45AAA74FFC16 /* Poppins-Regular.ttf */; };
 		71DF3B2B8632468EB8960E06 /* InterTight-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 873C2C5C4EA746998D67914A /* InterTight-Bold.ttf */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
+		9A4D4A6D2B6B4A1E9E1D7F01 /* TourLocalNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4D4A6C2B6B4A1E9E1D7F01 /* TourLocalNotification.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		93BB7960CBBF4274A7514002 /* PlusJakartaSans-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 24027199351140B0A6A97BF6 /* PlusJakartaSans-Medium.ttf */; };
 		CAA0D0D9FA4343289BE95DA4 /* InterTight-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DCE1BC253EA84E09A41866D3 /* InterTight-Medium.ttf */; };
@@ -37,6 +38,7 @@
 		5DCABF47C3AFCAF925A6778D /* Pods_PridethisWay.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_PridethisWay.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		65158C152FD97C4000B778CD /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = PridethisWay/AppDelegate.swift; sourceTree = "<group>"; };
+		9A4D4A6C2B6B4A1E9E1D7F01 /* TourLocalNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TourLocalNotification.swift; path = PridethisWay/TourLocalNotification.swift; sourceTree = "<group>"; };
 		77E1663C630D4089967BF8DB /* PlusJakartaSans-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "PlusJakartaSans-Regular.ttf"; path = "../src/assets/fonts/PlusJakartaSans-Regular.ttf"; sourceTree = "<group>"; };
 		7FB92BF7CA004346A86271BD /* InterTight-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "InterTight-Regular.ttf"; path = "../src/assets/fonts/InterTight-Regular.ttf"; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = PridethisWay/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -67,6 +69,7 @@
 				65158C152FD97C4000B778CD /* GoogleService-Info.plist */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
+				9A4D4A6C2B6B4A1E9E1D7F01 /* TourLocalNotification.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
@@ -313,6 +316,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
+				9A4D4A6D2B6B4A1E9E1D7F01 /* TourLocalNotification.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

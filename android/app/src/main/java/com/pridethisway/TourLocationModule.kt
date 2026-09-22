@@ -100,6 +100,54 @@ class TourLocationModule(
   }
 
   @ReactMethod
+  fun setNotificationDestination(
+    destinationId: String?,
+    latitude: Double,
+    longitude: Double,
+    title: String?,
+    promise: Promise,
+  ) {
+    try {
+      val preferences = reactContext.getSharedPreferences(
+        TourLocationService.PREFS_NAME,
+        Context.MODE_PRIVATE,
+      )
+      val previousId = preferences.getString("notificationDestinationId", null)
+      preferences.edit()
+        .putString("notificationDestinationId", destinationId.orEmpty())
+        .putString("notificationDestinationLatitude", latitude.toString())
+        .putString("notificationDestinationLongitude", longitude.toString())
+        .putString("notificationDestinationTitle", title.orEmpty())
+        .putBoolean(
+          "notificationDestinationEntered",
+          previousId == destinationId && preferences.getBoolean("notificationDestinationEntered", false),
+        )
+        .apply()
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("TOUR_DESTINATION_NOTIFICATION_FAILED", error)
+    }
+  }
+
+  @ReactMethod
+  fun clearNotificationDestination(promise: Promise) {
+    try {
+      reactContext
+        .getSharedPreferences(TourLocationService.PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .remove("notificationDestinationId")
+        .remove("notificationDestinationLatitude")
+        .remove("notificationDestinationLongitude")
+        .remove("notificationDestinationTitle")
+        .remove("notificationDestinationEntered")
+        .apply()
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("TOUR_DESTINATION_NOTIFICATION_CLEAR_FAILED", error)
+    }
+  }
+
+  @ReactMethod
   fun clearTaskRemovalState(promise: Promise) {
     try {
       reactContext

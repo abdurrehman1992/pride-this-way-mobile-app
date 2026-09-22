@@ -17,6 +17,7 @@ import Mapbox, {
   type LineLayerStyle,
   type SymbolLayerStyle,
 } from '@rnmapbox/maps';
+import Geolocation, { type GeolocationResponse } from '@react-native-community/geolocation';
 import Config from 'react-native-config';
 import type { FeatureCollection, Point, Polygon } from 'geojson';
 import EventDetailModal from '../../components/modals/EventDetailModal';
@@ -40,8 +41,9 @@ import {
   type LocationSuggestion,
 } from '../../services/myTourService';
 import { isPodcastEvent } from '../../utils/eventHelpers';
+import { requestLocationPermission } from '../../utils/location';
 
-const BG_MATCH = '#8ECAE6';
+const BG_MATCH = '#DCEAF7';
 const INITIAL_CAMERA_CENTER: [number, number] = [-18, 18];
 const INITIAL_CAMERA_ZOOM = 0.8;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -431,7 +433,9 @@ const Map = () => {
   const bottomTabBarHeight = useBottomTabBarHeight();
   const cameraRef = useRef<Mapbox.Camera>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [nativeMapReady, setNativeMapReady] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(INITIAL_CAMERA_ZOOM);
+  const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(null);
   const [mapLayout, setMapLayout] = useState({ width: 0, height: 0 });
   const [events, setEvents] = useState<FirebaseEvent[]>([]);
   const [searchText, setSearchText] = useState('');
@@ -447,6 +451,45 @@ const Map = () => {
     const today = new Date();
     return new Date(today.getFullYear(), today.getMonth(), 1);
   });
+  const hasFocusedUserLocationRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let watchId: number | null = null;
+
+    (async () => {
+      if (!(await requestLocationPermission()) || cancelled) return;
+
+      const handlePosition = (position: GeolocationResponse) => {
+        const longitude = Number(position.coords.longitude);
+        const latitude = Number(position.coords.latitude);
+        if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
+        setCurrentLocation([longitude, latitude]);
+      };
+
+      Geolocation.getCurrentPosition(
+        handlePosition,
+        () => undefined,
+        { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 },
+      );
+      watchId = Geolocation.watchPosition(
+        handlePosition,
+        () => undefined,
+        {
+          enableHighAccuracy: true,
+          distanceFilter: 10,
+          maximumAge: 30_000,
+          interval: 5_000,
+          fastestInterval: 2_000,
+        },
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+      if (watchId !== null) Geolocation.clearWatch(watchId);
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -620,6 +663,25 @@ const Map = () => {
     });
     setZoomLevel(zoom);
   }, [events, startDateFilter, endDateFilter, mapLayout]);
+
+  useEffect(() => {
+    if (!mapReady || !nativeMapReady || !currentLocation || selectedLocation || hasFocusedUserLocationRef.current) {
+      return;
+    }
+
+    hasFocusedUserLocationRef.current = true;
+    cameraRef.current?.setCamera({
+      centerCoordinate: currentLocation,
+      // Keep the complete globe visible on first open; only rotate its
+      // center toward the user's area instead of zooming into the city.
+      zoomLevel: INITIAL_CAMERA_ZOOM,
+      pitch: 0,
+      heading: 0,
+      animationDuration: 1100,
+      animationMode: 'flyTo',
+    });
+    setZoomLevel(INITIAL_CAMERA_ZOOM);
+  }, [currentLocation, mapReady, nativeMapReady, selectedLocation]);
   const openCalendar = useCallback((field: DateField) => {
     const currentValue = field === 'start' ? startDateFilter : endDateFilter;
     const parsed = parseDateOnly(currentValue) || new Date();
@@ -670,7 +732,7 @@ const Map = () => {
     setStartDateFilter('');
     setEndDateFilter('');
     cameraRef.current?.setCamera({
-      centerCoordinate: INITIAL_CAMERA_CENTER,
+      centerCoordinate: currentLocation ?? INITIAL_CAMERA_CENTER,
       zoomLevel: INITIAL_CAMERA_ZOOM,
       pitch: 0,
       heading: 0,
@@ -678,7 +740,7 @@ const Map = () => {
       animationMode: 'flyTo',
     });
     setZoomLevel(INITIAL_CAMERA_ZOOM);
-  }, []);
+  }, [currentLocation]);
 
   const handleSearchTextChange = useCallback((text: string) => {
     setSearchText(text);
@@ -952,6 +1014,7 @@ const Map = () => {
                 scrollEnabled
                 zoomEnabled
                 surfaceView={false}
+                onDidFinishLoadingMap={() => setNativeMapReady(true)}
                 onCameraChanged={(state: any) => {
                   const z = state?.properties?.zoom;
                   if (typeof z === 'number') setZoomLevel(z);
@@ -1036,6 +1099,24 @@ const Map = () => {
                     </TouchableOpacity>
                   </Mapbox.MarkerView>
                 ))}
+
+                {currentLocation ? (
+                  <Mapbox.MarkerView
+                    id="currentUserLocationMarker"
+                    coordinate={currentLocation}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    allowOverlap
+                    allowOverlapWithPuck
+                    isSelected
+                  >
+                    <View style={styles.currentLocationMarker} pointerEvents="none">
+                      <View style={styles.currentLocationAvatar}>
+                        <View style={styles.currentLocationAvatarHead} />
+                        <View style={styles.currentLocationAvatarBody} />
+                      </View>
+                    </View>
+                  </Mapbox.MarkerView>
+                ) : null}
               </Mapbox.MapView>
 
               <View style={[styles.zoomControls]}>
@@ -1192,12 +1273,51 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  currentLocationMarker: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currentLocationAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.BUTTON_COLOR,
+    borderWidth: 3,
+    borderColor: COLORS.WHITE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: COLORS.PRIMARY,
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  currentLocationAvatarHead: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: COLORS.WHITE,
+    marginTop: 1,
+  },
+  currentLocationAvatarBody: {
+    width: 16,
+    height: 8,
+    borderTopLeftRadius: 9,
+    borderTopRightRadius: 9,
+    borderBottomLeftRadius: 4,
+    borderBottomRightRadius: 4,
+    backgroundColor: COLORS.WHITE,
+    marginTop: 2,
+  },
   mapSection: {
     flex: 1,
+    backgroundColor: BG_MATCH,
   },
   controlsWrap: {
     marginHorizontal: 20,
-    marginTop: 6,
+    marginTop: 12,
     zIndex: 50,
     elevation: 20,
   },
@@ -1208,20 +1328,23 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   controlsTitle: {
-    color: COLORS.WHITE,
-    fontSize: 16,
+    color: COLORS.BUTTON_COLOR,
+    fontSize: 21,
+    lineHeight: 27,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },
   resetPill: {
     height: 32,
     paddingHorizontal: 14,
     borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: COLORS.WHITE,
+    borderWidth: 1,
+    borderColor: COLORS.BORDER,
     justifyContent: 'center',
     alignItems: 'center',
   },
   resetPillText: {
-    color: COLORS.WHITE,
+    color: COLORS.PRIMARY,
     fontSize: 13,
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },

@@ -57,12 +57,12 @@ const NavigationSummaryCard: React.FC<Props> = ({
           <Text style={styles.summaryHeading}>TOTAL TOUR REMAINING</Text>
           <View style={styles.metricsRow}>
             <View style={styles.metricBlock}>
-              <Text style={styles.metricLabel}>TIME LEFT</Text>
+              <Text style={styles.metricLabel}>TOTAL TIME LEFT</Text>
               <Text style={styles.duration}>{formatDuration(remainingDurationSeconds)}</Text>
             </View>
             <View style={styles.metricDivider} />
             <View style={styles.metricBlock}>
-              <Text style={styles.metricLabel}>DISTANCE LEFT</Text>
+              <Text style={styles.metricLabel}>TOTAL DISTANCE LEFT</Text>
               <Text style={styles.distanceValue}>{formatDistance(remainingDistanceMeters)}</Text>
             </View>
           </View>

@@ -20,6 +20,7 @@ export type NativeLocationSample = Required<Pick<
 >>;
 
 const nativeModule = NativeModules.TourLocation;
+const localNotificationModule = NativeModules.TourLocalNotification;
 
 export const isNativeTourLocationAvailable = Platform.OS === 'android' && Boolean(nativeModule);
 
@@ -59,6 +60,40 @@ export const stopNativeTourLocation = async (): Promise<void> => {
   } catch {
     // The service may already have stopped during process teardown.
   }
+};
+
+export const setTourNotificationDestination = async (destination: {
+  id: string;
+  latitude: number;
+  longitude: number;
+  title: string;
+}): Promise<void> => {
+  if (Platform.OS === 'android' && typeof nativeModule?.setNotificationDestination === 'function') {
+    await nativeModule.setNotificationDestination(
+      destination.id,
+      destination.latitude,
+      destination.longitude,
+      destination.title,
+    ).catch(() => undefined);
+  }
+};
+
+export const clearTourNotificationDestination = async (): Promise<void> => {
+  if (Platform.OS === 'android' && typeof nativeModule?.clearNotificationDestination === 'function') {
+    await nativeModule.clearNotificationDestination().catch(() => undefined);
+  }
+};
+
+export const showDestinationReadyNotification = async (title: string): Promise<void> => {
+  if (Platform.OS !== 'ios' || typeof localNotificationModule?.showNotification !== 'function') {
+    return;
+  }
+  await localNotificationModule
+    .showNotification(
+      'You can verify your visit',
+      `${title} is within 100 meters. You can scan and verify it now.`,
+    )
+    .catch(() => undefined);
 };
 
 export const getNativeTourLocationStatus = async (): Promise<NativeLocationStatus | null> => {
