@@ -1,4 +1,5 @@
 import ActionTouchable from "../common/ActionTouchable";
+import LoadingCards from '../common/LoadingCards';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -53,7 +54,7 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
   const prevPrefsRef = useRef<string[] | null>(null);
   const [data, setData] = useState<AIRecommendations | null>(null);
   const [allPreferences, setAllPreferences] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(location));
   const [error, setError] = useState(false);
   const [errorReason, setErrorReason] = useState('');
   const [quotaWarning, setQuotaWarning] = useState(false);
@@ -295,7 +296,7 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
   return (
     <View style={styles.container}>
       <FlatList
-        data={displayedData}
+        data={loading || error ? [] : displayedData}
         keyExtractor={item => item.id}
         showsVerticalScrollIndicator={false}
         renderItem={renderRecommendedItem}
@@ -350,10 +351,13 @@ const ForYouContent: React.FC<Props> = ({ location, prefs, onReset }) => {
 
             {loading && (
               <View style={styles.loadingWrap}>
-                <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
-                <Text style={styles.loadingText}>
-                  Finding the best spots for you…
-                </Text>
+                <View style={styles.loadingStatus}>
+                  <ActivityIndicator size="small" color={COLORS.BUTTON_COLOR} />
+                  <Text style={styles.loadingText}>
+                    Finding the best spots for you…
+                  </Text>
+                </View>
+                <LoadingCards count={2} variant="image" />
               </View>
             )}
 
@@ -592,9 +596,15 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.InterTight_SemiBold,
   },
   loadingWrap: {
-    paddingVertical: 60,
+    paddingVertical: 24,
+    paddingHorizontal: 24,
+    gap: 18,
+  },
+  loadingStatus: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'center',
+    gap: 10,
   },
   loadingText: {
     color: COLORS.TEXT_SECONDARY,

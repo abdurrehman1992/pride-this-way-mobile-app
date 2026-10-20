@@ -1,5 +1,5 @@
 import ActionTouchable from "../common/ActionTouchable";
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -30,11 +30,12 @@ import {
 
 import { useDispatch, useSelector } from 'react-redux';
 
-import { logout } from '../../Redux/slices/authSlice';
+import { logout, logoutFailure, logoutStart } from '../../Redux/slices/authSlice';
 import { RootState } from '../../Redux/store';
 import { logoutUser } from '../../services/authService';
 import { showError, showSuccess } from '../common/AppToast';
 import { useDrawerRewardsRefresh } from '../../hooks/useDrawerRewardsRefresh';
+import { requestDrawerTourPause } from '../../utils/drawerTourPause';
 
 import TabsButtons from '../common/TabsButtons';
 
@@ -43,7 +44,12 @@ const CustomDrawer = ({ navigation }: any) => {
 
   const insets = useSafeAreaInsets();
   const user = useSelector((state: RootState) => state.auth.user);
-  const { rewardPoints, visitedPlacesCount } = useDrawerRewardsRefresh(user?.id);
+  const { rewardPoints, visitedPlacesCount } = useDrawerRewardsRefresh(
+    user?.id,
+    user?.points ?? 0,
+    navigation
+  );
+  const logoutInFlightRef = useRef(false);
   const getDeepestActiveRoute = useCallback((state: any): any => {
     if (!state?.routes?.length) {
       return null;
@@ -72,7 +78,11 @@ const CustomDrawer = ({ navigation }: any) => {
   }, [getDeepestActiveRoute, navigation]);
 
   const guardActiveTour = useCallback(
-    (proceed: () => void | Promise<void>) => {
+    (
+      proceed: () => void | Promise<void>,
+      onPauseConfirmed?: () => void,
+      onPauseFailed?: () => void,
+    ) => {
       if (!hasActiveTour()) {
         return proceed();
       }
@@ -84,6 +94,8 @@ const CustomDrawer = ({ navigation }: any) => {
           {
             text: 'Pause & Leave',
             onPress: async () => {
+              onPauseConfirmed?.();
+              const pause = requestDrawerTourPause();
               navigation.dispatch(
                 CommonActions.navigate({
                   name: 'Tabs',
@@ -91,12 +103,16 @@ const CustomDrawer = ({ navigation }: any) => {
                     screen: 'MyTours',
                     params: {
                       screen: 'MyTourStart',
-                      params: { pauseAndLeave: Date.now() },
+                      params: { pauseAndLeave: pause.requestId },
                     },
                   },
                 })
               );
-              await new Promise<void>((resolve) => setTimeout(resolve, 350));
+              if (!await pause.completed) {
+                onPauseFailed?.();
+                showError('Unable to pause tour', 'Please try again.');
+                return;
+              }
               await proceed();
             },
           },
@@ -123,12 +139,13 @@ const CustomDrawer = ({ navigation }: any) => {
   const navigateTo = useCallback(
     (screen: string, params?: any) => {
       guardActiveTour(() => {
-        const finishNavigation = () => {
+        const finishNavigation = (discardUnsaved = false) => {
+          if (discardUnsaved) resetMyToursToCreateTour();
+          const state = navigation.getState();
+          const currentScreen = state.routes[state.index ?? 0]?.name;
+          // DrawerRouter closes itself when the selected drawer route changes.
           navigation.navigate(screen, params);
-
-          requestAnimationFrame(() => {
-            navigation.closeDrawer();
-          });
+          if (currentScreen === screen) navigation.closeDrawer();
         };
 
         if (!hasUnsavedTourSuggestion()) {
@@ -144,10 +161,7 @@ const CustomDrawer = ({ navigation }: any) => {
             {
               text: 'Discard',
               style: 'destructive',
-              onPress: () => {
-                resetMyToursToCreateTour();
-                requestAnimationFrame(finishNavigation);
-              },
+              onPress: () => finishNavigation(true),
             },
           ]
         );
@@ -155,33 +169,13 @@ const CustomDrawer = ({ navigation }: any) => {
     },
     [guardActiveTour, hasUnsavedTourSuggestion, navigation, resetMyToursToCreateTour],
   );
-  const resetToSupportScreen = useCallback(
-  (screenName: string) => {
-    guardActiveTour(() => {
-      navigation.dispatch(
-        CommonActions.reset({
-          index: 0,
-          routes: [
-            {
-              name: 'Support',
-              params: {
-                screen: screenName,
-              },
-            },
-          ],
-        }),
-      );
-
-      requestAnimationFrame(() => {
-        navigation.closeDrawer();
-      });
-    });
-  },
-  [guardActiveTour, navigation]
-);
 
   const handleLogout = useCallback(() => {
     return guardActiveTour(async () => {
+      if (logoutInFlightRef.current) return;
+      logoutInFlightRef.current = true;
+      dispatch(logoutStart());
+      navigation.closeDrawer();
       try {
         await logoutUser();
         dispatch(logout());
@@ -196,10 +190,12 @@ const CustomDrawer = ({ navigation }: any) => {
             ? error.message
             : 'Unable to logout.';
 
+        logoutInFlightRef.current = false;
+        dispatch(logoutFailure(message));
         showError('Logout Failed', message);
       }
-    });
-  }, [dispatch, guardActiveTour]);
+    }, () => dispatch(logoutStart()), () => dispatch(logoutFailure('Unable to pause tour.')));
+  }, [dispatch, guardActiveTour, navigation]);
 
 
   return (
@@ -298,17 +294,13 @@ const CustomDrawer = ({ navigation }: any) => {
           <TabsButtons
             title="Help & Support"
             Icon={HelpIcon}
-            onPress={() =>
-              resetToSupportScreen('Help_Support')
-            }
+            onPress={() => navigateTo('Support')}
           />
 
           <TabsButtons
             title="Terms & Conditions"
             Icon={TermsIcon}
-            onPress={() =>
-              resetToSupportScreen('Terms_Conditions')
-            }
+            onPress={() => navigateTo('Terms')}
           />
         </View>
       </DrawerContentScrollView>

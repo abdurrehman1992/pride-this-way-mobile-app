@@ -75,7 +75,7 @@ const getUserDocumentRef = (uid: string) =>
 
 const getUserDocument = async (uid: string) => {
   const snapshot = await getUserDocumentRef(uid).get();
-  return snapshot.exists ? snapshot.data() : null;
+  return snapshot.exists() ? snapshot.data() : null;
 };
 
 const upsertUserDocument = async ({
@@ -99,7 +99,7 @@ const upsertUserDocument = async ({
   const trimmedPhone = phone.trim();
   const nowIso = new Date().toISOString();
 
-  const payload: FirebaseFirestoreTypes.UpdateData = {
+  const payload: FirebaseFirestoreTypes.DocumentData = {
     uid,
     name: trimmedName,
     fullName: trimmedName,
@@ -160,6 +160,7 @@ const buildAuthSession = async (
 };
 
 export const signupUser = async (data: SignupPayload): Promise<AuthSession> => {
+  let createdUserId: string | null = null;
   try {
     const email = data.email.trim().toLowerCase();
     const password = data.password.trim();
@@ -172,6 +173,7 @@ export const signupUser = async (data: SignupPayload): Promise<AuthSession> => {
       email,
       password
     );
+    createdUserId = credential.user.uid;
 
     if (fullName) {
       await credential.user.updateProfile({ displayName: fullName });
@@ -187,6 +189,9 @@ export const signupUser = async (data: SignupPayload): Promise<AuthSession> => {
 
     return buildAuthSession(credential.user, profile);
   } catch (error) {
+    if (createdUserId && auth().currentUser?.uid === createdUserId) {
+      await auth().signOut().catch(() => { });
+    }
     throw new Error(getFriendlyAuthMessage(error));
   }
 };
@@ -292,17 +297,26 @@ export const changeCurrentUserPassword = async ({
 export const logoutUser = async () => {
   const userId = auth().currentUser?.uid;
   // Stop tour tracking and tracking alerts while the session can still write
-  // the final state.
-  await stopTourTrackingForSignOut();
-  await stopNativeTourLocation();
-  if (userId) {
-    await unregisterPushToken(userId);
-  }
+  // the final state. Network/native cleanup must not hold the account open.
+  const cleanup = Promise.allSettled([
+    Promise.resolve().then(stopTourTrackingForSignOut),
+    Promise.resolve().then(stopNativeTourLocation),
+    ...(userId ? [Promise.resolve().then(() => unregisterPushToken(userId))] : []),
+  ]);
+  let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    cleanup,
+    new Promise<void>((resolve) => {
+      cleanupTimer = setTimeout(resolve, 2000);
+    }),
+  ]);
+  if (cleanupTimer) clearTimeout(cleanupTimer);
   await auth().signOut();
 };
 
 export const subscribeToAuthState = (
-  callback: (session: AuthSession | null) => void
+  callback: (session: AuthSession | null) => void,
+  isInteractiveAuthPending: () => boolean = () => false
 ) => {
   let unsubscribeProfile: (() => void) | null = null;
 
@@ -319,7 +333,18 @@ export const subscribeToAuthState = (
 
     unsubscribeProfile = getUserDocumentRef(firebaseUser.uid).onSnapshot(
       async (snapshot) => {
-        if (!snapshot.exists) {
+        if (!snapshot.exists()) {
+          // Firebase signs in before signupUser finishes creating the profile.
+          // Let that request finish before deciding the account is unavailable.
+          if (isInteractiveAuthPending()) return;
+          // A cached missing snapshot can arrive after the signup request
+          // completes. Confirm the document before signing out.
+          const profile = await getUserDocument(firebaseUser.uid).catch(() => null);
+          if (isInteractiveAuthPending()) return;
+          if (profile) {
+            callback(await buildAuthSession(firebaseUser, profile));
+            return;
+          }
           await auth().signOut().catch(() => { });
           callback(null);
           return;
@@ -331,6 +356,7 @@ export const subscribeToAuthState = (
         try {
           const profile = await getUserDocument(firebaseUser.uid);
           if (!profile) {
+            if (isInteractiveAuthPending()) return;
             await auth().signOut().catch(() => { });
             callback(null);
             return;

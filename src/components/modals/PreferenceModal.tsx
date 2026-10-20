@@ -10,6 +10,7 @@ import {
     ScrollView,
     Platform,
     Pressable,
+    ActivityIndicator,
 } from "react-native";
 
 import {
@@ -36,6 +37,7 @@ interface Props {
     primaryLabel?: string;
     secondaryLabel?: string;
     showTwoButtons?: boolean;
+    loading?: boolean;
 }
 
 const PreferenceModal: React.FC<Props> = ({
@@ -51,6 +53,7 @@ const PreferenceModal: React.FC<Props> = ({
     primaryLabel,
     secondaryLabel,
     showTwoButtons = true,
+    loading = false,
 }) => {
 
     const panY = useRef(new Animated.Value(1000)).current;
@@ -118,7 +121,7 @@ const PreferenceModal: React.FC<Props> = ({
                             Select Preferences
                         </Text>
 
-                        <ActionTouchable onPress={clearAll}>
+                        <ActionTouchable onPress={clearAll} disabled={loading}>
                             <Text style={styles.clearText}>
                                 Clear All
                             </Text>
@@ -133,6 +136,7 @@ const PreferenceModal: React.FC<Props> = ({
                             return (
                                 <ActionTouchable
                                     key={i}
+                                    disabled={loading}
                                     style={[
                                         styles.prefItem,
                                         isLast && styles.noBorder,
@@ -169,7 +173,7 @@ const PreferenceModal: React.FC<Props> = ({
 
                             <ActionTouchable
                                 style={[styles.primaryBtnSmall, !hasSelection && styles.primaryBtnSmallDisabled]}
-                                disabled={!hasSelection}
+                                disabled={!hasSelection || loading}
                                 onPress={() => {
                                     if (!selectedPrefs.length) {
                                         const alertMessage =
@@ -184,9 +188,13 @@ const PreferenceModal: React.FC<Props> = ({
                                     return onPrimary?.();
                                 }}
                             >
-                                <Text style={[styles.primaryText, !hasSelection && styles.primaryTextDisabled]}>
-                                    {primaryText}
-                                </Text>
+                                {loading ? (
+                                    <ActivityIndicator color={COLORS.WHITE} />
+                                ) : (
+                                    <Text style={[styles.primaryText, !hasSelection && styles.primaryTextDisabled]}>
+                                        {primaryText}
+                                    </Text>
+                                )}
                             </ActionTouchable>
 
                         </View>

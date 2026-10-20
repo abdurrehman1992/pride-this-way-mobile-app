@@ -8,12 +8,12 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
+import LoadingCards from '../../components/common/LoadingCards';
 import CustomSearchInput from '../../components/Home/CustomSearchInput';
 import PlacesArroundCard from '../../components/Home/PlacesArroundCard';
 import { COLORS } from '../../constants/colors';
@@ -51,7 +51,7 @@ const AddLocations = () => {
 
   const [searchText, setSearchText] = useState('');
   const [places, setPlaces] = useState<FirebasePlace[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [pendingPlaceIds, setPendingPlaceIds] = useState<string[]>([]);
   const isMultiSelect = fromScreen === 'TourSuggestion';
   const existingPlaceIdSet = useMemo(
@@ -165,7 +165,7 @@ const AddLocations = () => {
 
           {loading ? (
             <View style={styles.loaderWrap}>
-              <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
+              <LoadingCards count={3} />
             </View>
           ) : (
             <FlatList
@@ -398,8 +398,7 @@ const styles = StyleSheet.create({
   },
   loaderWrap: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingTop: 16,
   },
   emptyState: {
     paddingTop: 40,

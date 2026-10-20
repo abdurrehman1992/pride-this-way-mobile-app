@@ -8,12 +8,14 @@ import {
   ScrollView,
   Image,
   RefreshControl,
-  } from 'react-native';
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSelector } from 'react-redux';
 
 import ForgeTopHeader from '../../components/common/ForgeTopHeader';
+import LoadingCards from '../../components/common/LoadingCards';
 import { COLORS } from '../../constants/colors';
 import { PLACES_ARROUND, RewardsBackground } from '../../constants/images';
 import {
@@ -27,8 +29,33 @@ import {
 } from '../../constants/icons';
 
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
-import { fetchRewardsSummary } from '../../services/myTourService';
+import { fetchRewardsSummary, RewardsSummary } from '../../services/myTourService';
 import { RootState } from '../../Redux/store';
+
+const RewardsLoading = () => (
+  <View accessibilityLabel="Loading rewards">
+    <View style={[styles.bg, styles.loadingSummary]}>
+      <View style={styles.contentTop}>
+        <View style={[styles.loadingBlock, styles.loadingIcon]} />
+        <View style={[styles.loadingBlock, styles.loadingPoints]} />
+      </View>
+      <View style={[styles.loadingBlock, styles.loadingLine]} />
+      <View style={[styles.loadingBlock, styles.loadingLineShort]} />
+      <View style={[styles.loadingBlock, styles.loadingProgress]} />
+      <View style={[styles.loadingBlock, styles.loadingLineShort]} />
+    </View>
+    <View style={styles.pointsTitleCont}>
+      <View style={[styles.loadingBlock, styles.loadingSectionTitle]} />
+    </View>
+    <View style={styles.listContainer}>
+      <LoadingCards count={2} />
+    </View>
+    <View style={styles.loadingCaption}>
+      <ActivityIndicator size="small" color={COLORS.BUTTON_COLOR} />
+      <Text style={styles.loadingCaptionText}>Loading your rewards...</Text>
+    </View>
+  </View>
+);
 
 const Rewards = () => {
   const userId = useSelector((state: RootState) => state.auth.user?.id);
@@ -36,9 +63,13 @@ const Rewards = () => {
   const [totalPoints, setTotalPoints] = useState(0);
   const [rewards, setRewards] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
-  const loadRewards = useCallback(async () => {
-    const summary = await fetchRewardsSummary(userId);
+  const loadRewards = useCallback(() => fetchRewardsSummary(userId), [userId]);
+
+  const applyRewards = useCallback((summary: RewardsSummary) => {
     setTotalPoints(summary.totalPoints);
     setRewards(
       summary.tours.map((tour, index) => ({
@@ -51,25 +82,54 @@ const Rewards = () => {
         places: tour.places,
       }))
     );
-  }, [userId]);
+    setHasLoaded(true);
+    setLoadError(false);
+  }, []);
 
   const nextUnlock = Math.max(1500, totalPoints + 250);
   const progressRatio = nextUnlock > 0 ? Math.min(1, totalPoints / nextUnlock) : 0;
 
   useFocusEffect(
     useCallback(() => {
-      loadRewards().catch(() => { });
-    }, [loadRewards])
+      let active = true;
+      loadRewards()
+        .then(summary => {
+          if (active) applyRewards(summary);
+        })
+        .catch(() => {
+          if (active) setLoadError(true);
+        })
+        .finally(() => {
+          if (active) setInitialLoading(false);
+        });
+      return () => {
+        active = false;
+      };
+    }, [loadRewards, applyRewards])
   );
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await loadRewards();
+      applyRewards(await loadRewards());
+    } catch {
+      setLoadError(true);
     } finally {
       setRefreshing(false);
     }
-  }, [loadRewards]);
+  }, [loadRewards, applyRewards]);
+
+  const handleRetry = useCallback(async () => {
+    setInitialLoading(true);
+    setLoadError(false);
+    try {
+      applyRewards(await loadRewards());
+    } catch {
+      setLoadError(true);
+    } finally {
+      setInitialLoading(false);
+    }
+  }, [loadRewards, applyRewards]);
 
   const toggleCard = (id: number) => {
     setRewards(prev =>
@@ -84,19 +144,47 @@ const Rewards = () => {
   return (
     <>
       <SafeAreaView style={styles.container}>
+        <View style={styles.up}>
+          <ForgeTopHeader title="Rewards" />
+        </View>
         <ScrollView
+          style={styles.scroll}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-              tintColor={COLORS.BUTTON_COLOR}
-            />
+            !initialLoading ? (
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={handleRefresh}
+                tintColor={COLORS.BUTTON_COLOR}
+              />
+            ) : undefined
           }
         >
-          <View style={styles.up}>
-            <ForgeTopHeader title="Rewards" />
-          </View>
+          {initialLoading && !hasLoaded ? (
+            <RewardsLoading />
+          ) : loadError && !hasLoaded ? (
+            <View style={styles.errorState}>
+              <RewardIcon width={40} height={40} />
+              <Text style={styles.errorTitle}>Couldn't load rewards</Text>
+              <Text style={styles.errorText}>Please check your connection and try again.</Text>
+              <TouchableOpacity accessibilityRole="button" onPress={handleRetry} style={styles.retryButton}>
+                <Text style={styles.retryText}>Try Again</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+          <>
+          {loadError ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              disabled={refreshing}
+              onPress={handleRefresh}
+              style={styles.refreshError}
+            >
+              <Text style={styles.refreshErrorText}>
+                {refreshing ? 'Refreshing rewards...' : "Couldn't refresh rewards. Tap to retry."}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
           <ImageBackground source={RewardsBackground} style={styles.bg}>
             <View style={styles.contentTop}>
               <RewardIcon width={33} height={33} />
@@ -218,6 +306,8 @@ const Rewards = () => {
               </View>
             ))}
           </View>
+          </>
+          )}
         </ScrollView>
       </SafeAreaView>
     </>
@@ -252,10 +342,107 @@ const styles = StyleSheet.create({
   },
   up: {
     marginTop: 16,
+    minHeight: 43,
+    backgroundColor: COLORS.BACKGROUND,
+    zIndex: 1,
+  },
+  scroll: {
+    flex: 1,
+  },
+
+  loadingSummary: {
+    backgroundColor: '#DCEAF5',
+  },
+  loadingBlock: {
+    backgroundColor: '#D9DDE2',
+    borderRadius: 8,
+  },
+  loadingIcon: {
+    width: 33,
+    height: 33,
+  },
+  loadingPoints: {
+    width: 120,
+    height: 22,
+    backgroundColor: '#FFFFFFA8',
+  },
+  loadingLine: {
+    width: '88%',
+    height: 12,
+    marginTop: 17,
+    backgroundColor: '#FFFFFFA8',
+  },
+  loadingLineShort: {
+    width: '58%',
+    height: 12,
+    marginTop: 9,
+    backgroundColor: '#FFFFFFA8',
+  },
+  loadingProgress: {
+    width: '100%',
+    height: 11,
+    marginTop: 20,
+    backgroundColor: '#FFFFFFA8',
+  },
+  loadingSectionTitle: {
+    width: 190,
+    height: 24,
+  },
+  loadingCaption: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  loadingCaptionText: {
+    color: COLORS.TEXT_SECONDARY,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    fontSize: FONT_SIZE.CARD_TEXT,
+  },
+  errorState: {
+    alignItems: 'center',
+    paddingVertical: 64,
+    paddingHorizontal: 20,
+    gap: 12,
+  },
+  errorTitle: {
+    color: COLORS.TEXT_PRIMARY,
+    fontFamily: FONT_FAMILY.Poppins_SemiBold,
+    fontSize: FONT_SIZE.LARGE_TEXT,
+  },
+  errorText: {
+    color: COLORS.TEXT_SECONDARY,
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    fontSize: FONT_SIZE.TEXT,
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: COLORS.BUTTON_COLOR,
+    borderRadius: 10,
+  },
+  retryText: {
+    color: COLORS.WHITE,
+    fontFamily: FONT_FAMILY.Poppins_SemiBold,
+    fontSize: FONT_SIZE.TEXT,
+  },
+  refreshError: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: COLORS.WHITE,
+  },
+  refreshErrorText: {
+    color: COLORS.TEXT_SECONDARY,
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    fontSize: FONT_SIZE.CARD_TEXT,
+    textAlign: 'center',
   },
 
   bg: {
-    marginTop: 32,
+    marginTop: 16,
     borderRadius: 20,
     overflow: 'hidden',
     paddingHorizontal: 20,

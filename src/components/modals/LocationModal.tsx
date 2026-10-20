@@ -258,9 +258,10 @@ const LocationModal: React.FC<Props> = ({
         if (useExternal) {
             const rawList = locations as string[];
             const list = cityOnlyResults ? rawList.filter(isCityOnlyLabel) : rawList;
-            if (!search.trim()) return list;
+            const normalizedSearch = search.trim().replace(/\s+/g, " ").toLowerCase();
+            if (!normalizedSearch) return list;
             return list.filter((item) =>
-                item.toLowerCase().includes(search.toLowerCase())
+                item.toLowerCase().includes(normalizedSearch)
             );
         }
         return cityOnlyResults ? aiCities.filter(isCityOnlyLabel) : aiCities;

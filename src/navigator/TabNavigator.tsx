@@ -1,5 +1,8 @@
 import React from "react";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import {
+  createBottomTabNavigator,
+  type BottomTabNavigationOptions,
+} from "@react-navigation/bottom-tabs";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import {
   CommonActions,
@@ -8,10 +11,11 @@ import {
 import { CustomAlert } from "../utils/CustomAlert";
 import { TabParamList } from "../types/types";
 import { COLORS } from "../constants/colors";
+import { TAB_TRANSITION_DURATION_MS } from "../constants/navigation";
 
 import ForYouNavigator from "./ForYouNavigator";
 import MyTourNavigator from "./MyTourNavigator";
-import FovoritesNavigator from "./FovoritesNavigator";
+import FavoritesNavigator from "./FavoritesNavigator";
 import MapNavigator from "./MapNavigator";
 import { FONT_SIZE, FONT_FAMILY } from "../constants/fonts";
 import {
@@ -63,6 +67,48 @@ const TAB_ICONS = {
   },
 
 };
+
+type TabName = keyof typeof TAB_ICONS;
+
+const createTabContent = (name: TabName) => ({
+  tabBarLabel: ({ focused }: { focused: boolean }) => (
+    <Text
+      style={[styles.tabLabel, focused ? styles.tabLabelActive : styles.tabLabelInactive]}
+    >
+      {name}
+    </Text>
+  ),
+  tabBarIcon: ({ focused }: { focused: boolean }) => {
+    const Icon = focused ? TAB_ICONS[name].active : TAB_ICONS[name].inactive;
+    return (
+      <View style={styles.iconWrapper}>
+        <Icon width={44} height={44} />
+      </View>
+    );
+  },
+});
+
+const TAB_CONTENT = {
+  MyTours: createTabContent("MyTours"),
+  Map: createTabContent("Map"),
+  ForYou: createTabContent("ForYou"),
+  Favorites: createTabContent("Favorites"),
+};
+
+// Keep the arriving scene opaque so a loading state on the previous tab
+// cannot show through while switching tabs.
+const forOpaqueTabShift: NonNullable<
+  BottomTabNavigationOptions['sceneStyleInterpolator']
+> = ({ current }) => ({
+  sceneStyle: {
+    transform: [{
+      translateX: current.progress.interpolate({
+        inputRange: [-1, 0, 1],
+        outputRange: [-20, 0, 20],
+      }),
+    }],
+  },
+});
 
 const TabNavigator: React.FC = () => {
   return (
@@ -171,7 +217,6 @@ const TabNavigator: React.FC = () => {
         },
       })}
       screenOptions={({ route }) => {
-        const icons = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
         const focusedNestedRouteName = getFocusedRouteNameFromRoute(route);
         const hideTabsForTourNavigation =
           route.name === "MyTours" &&
@@ -179,6 +224,13 @@ const TabNavigator: React.FC = () => {
 
         return {
           headerShown: false,
+          animation: "shift",
+          sceneStyleInterpolator: forOpaqueTabShift,
+          transitionSpec: {
+            animation: "timing",
+            config: { duration: TAB_TRANSITION_DURATION_MS },
+          },
+          freezeOnBlur: true,
           tabBarHideOnKeyboard: false,
           tabBarStyle: hideTabsForTourNavigation
             ? styles.hiddenTabBar
@@ -189,40 +241,14 @@ const TabNavigator: React.FC = () => {
           tabBarActiveBackgroundColor: "transparent",
           tabBarInactiveBackgroundColor: "transparent",
           tabBarButton: NoFeedbackTabButton,
-
-          tabBarLabel: ({ focused, color }) => (
-            <Text
-              style={{
-                marginTop: 17,
-                fontSize: FONT_SIZE.SMALL_TEXT,
-                fontFamily: focused
-                  ? FONT_FAMILY.InterTight_Medium
-                  : FONT_FAMILY.InterTight_Regular,
-                color,
-              }}
-            >
-              {route.name}
-            </Text>
-          ),
-
-          tabBarIcon: ({ focused }) => {
-            const IconComponent = focused
-              ? icons.active
-              : icons.inactive;
-
-            return (
-              <View style={styles.iconWrapper}>
-                <IconComponent width={44} height={44} />
-              </View>
-            );
-          },
+          ...TAB_CONTENT[route.name as TabName],
         };
       }}
     >
       <Tab.Screen name="MyTours" component={MyTourNavigator} />
-      <Tab.Screen name="Map" component={MapNavigator} />
-      <Tab.Screen name="ForYou" component={ForYouNavigator} />
-      <Tab.Screen name="Favorites" component={FovoritesNavigator} />
+      <Tab.Screen name="Map" component={MapNavigator} options={{ lazy: false }} />
+      <Tab.Screen name="ForYou" component={ForYouNavigator} options={{ lazy: false }} />
+      <Tab.Screen name="Favorites" component={FavoritesNavigator} />
     </Tab.Navigator>
   );
 };
@@ -252,5 +278,17 @@ const styles = StyleSheet.create({
     borderRadius: 44,
     alignItems: "center",
     justifyContent: "center",
+  },
+  tabLabel: {
+    marginTop: 17,
+    fontSize: FONT_SIZE.SMALL_TEXT,
+  },
+  tabLabelActive: {
+    fontFamily: FONT_FAMILY.InterTight_Medium,
+    color: COLORS.BUTTON_COLOR,
+  },
+  tabLabelInactive: {
+    fontFamily: FONT_FAMILY.InterTight_Regular,
+    color: COLORS.INACTIVE_COLOR,
   },
 });

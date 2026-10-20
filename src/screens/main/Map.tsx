@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import {
   Dimensions,
   Keyboard,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import Mapbox, {
   type FillLayerStyle,
   type LineLayerStyle,
@@ -19,16 +19,15 @@ import Mapbox, {
 } from '@rnmapbox/maps';
 import Geolocation, { type GeolocationResponse } from '@react-native-community/geolocation';
 import Config from 'react-native-config';
-import type { FeatureCollection, Point, Polygon } from 'geojson';
+import type { FeatureCollection, Polygon } from 'geojson';
 import EventDetailModal from '../../components/modals/EventDetailModal';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
+import { TAB_FOCUS_WORK_DELAY_MS } from '../../constants/navigation';
 import { FONT_FAMILY } from '../../constants/fonts';
 import {
   CrossIcon,
-  DropdownIcon,
   SearchIcon,
-  BlueMapIcon,
   PodcastEvent,
   PrideEvent,
   CalendarIcon,
@@ -430,7 +429,6 @@ const eventMatchesDateRange = (
 };
 
 const Map = () => {
-  const bottomTabBarHeight = useBottomTabBarHeight();
   const cameraRef = useRef<Mapbox.Camera>(null);
   const [mapReady, setMapReady] = useState(false);
   const [nativeMapReady, setNativeMapReady] = useState(false);
@@ -452,86 +450,99 @@ const Map = () => {
     return new Date(today.getFullYear(), today.getMonth(), 1);
   });
   const hasFocusedUserLocationRef = useRef(false);
+  const eventsLoadedRef = useRef(false);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     let cancelled = false;
     let watchId: number | null = null;
 
-    (async () => {
-      if (!(await requestLocationPermission()) || cancelled) return;
+    const timeout = setTimeout(() => {
+      (async () => {
+        if (!(await requestLocationPermission()) || cancelled) return;
 
-      const handlePosition = (position: GeolocationResponse) => {
-        const longitude = Number(position.coords.longitude);
-        const latitude = Number(position.coords.latitude);
-        if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
-        setCurrentLocation([longitude, latitude]);
-      };
+        const handlePosition = (position: GeolocationResponse) => {
+          if (cancelled) return;
+          const longitude = Number(position.coords.longitude);
+          const latitude = Number(position.coords.latitude);
+          if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
+          setCurrentLocation([longitude, latitude]);
+        };
 
-      Geolocation.getCurrentPosition(
-        handlePosition,
-        () => undefined,
-        { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 },
-      );
-      watchId = Geolocation.watchPosition(
-        handlePosition,
-        () => undefined,
-        {
-          enableHighAccuracy: true,
-          distanceFilter: 10,
-          maximumAge: 30_000,
-          interval: 5_000,
-          fastestInterval: 2_000,
-        },
-      );
-    })();
+        Geolocation.getCurrentPosition(
+          handlePosition,
+          () => undefined,
+          { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 },
+        );
+        watchId = Geolocation.watchPosition(
+          handlePosition,
+          () => undefined,
+          {
+            enableHighAccuracy: true,
+            distanceFilter: 10,
+            maximumAge: 30_000,
+            interval: 5_000,
+            fastestInterval: 2_000,
+          },
+        );
+      })();
+    }, TAB_FOCUS_WORK_DELAY_MS);
 
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
       if (watchId !== null) Geolocation.clearWatch(watchId);
     };
-  }, []);
+  }, []));
 
-  useEffect(() => {
-    let isMounted = true;
-    if (!Config.MAPBOX_TOKEN) return undefined;
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    const mapboxToken = Config.MAPBOX_TOKEN;
+    if (!mapboxToken || mapReady) return undefined;
 
-    Mapbox.setAccessToken(Config.MAPBOX_TOKEN)
+    // Token setup is lightweight; waiting for the tab transition added an
+    // avoidable "Loading map" flash on every first visit.
+    Mapbox.setAccessToken(mapboxToken)
       .then(() => {
-        if (isMounted) {
+        if (active) {
           setMapReady(true);
           setZoomLevel(INITIAL_CAMERA_ZOOM);
         }
       })
       .catch(() => {
-        if (isMounted) {
+        if (active) {
           setMapReady(false);
         }
       });
 
     return () => {
-      isMounted = false;
+      active = false;
     };
-  }, []);
+  }, [mapReady]));
 
-  useEffect(() => {
-    let isMounted = true;
+  useFocusEffect(useCallback(() => {
+    if (eventsLoadedRef.current) return undefined;
+    let active = true;
 
-    fetchMapEvents()
-      .then((response) => {
-        if (isMounted) {
-          setEvents(response);
-        }
-      })
-      .catch(() => {
-        if (isMounted) {
-          setEvents([]);
-        }
-      });
+    const timeout = setTimeout(() => {
+      fetchMapEvents()
+        .then((response) => {
+          if (active) {
+            setEvents(response);
+            eventsLoadedRef.current = true;
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setEvents([]);
+          }
+        });
+    }, TAB_FOCUS_WORK_DELAY_MS);
 
     return () => {
-      isMounted = false;
+      active = false;
+      clearTimeout(timeout);
     };
-  }, []);
+  }, []));
 
   useEffect(() => {
     if (selectedLocation || searchText.trim().length < 2) {
@@ -1157,7 +1168,7 @@ const Map = () => {
         </View>
       </View>
 
-      <View style={[styles.legendCard, { marginBottom: 5, }]}>
+      <View style={styles.legendCard}>
         <View style={styles.legendRow}>
           <PrideEvent width={24} height={24}/>
           <Text style={styles.legendText}>Purple markers show Pride events.</Text>
@@ -1560,6 +1571,7 @@ const styles = StyleSheet.create({
   },
   legendCard: {
     marginTop: 12,
+    marginBottom: 5,
     marginHorizontal: 20,
     paddingHorizontal: 18,
 

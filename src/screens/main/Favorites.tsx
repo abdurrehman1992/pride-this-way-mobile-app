@@ -1,16 +1,18 @@
 import TourCardHeader, { tourCardStyles } from '../../components/MyTour/TourCardHeader';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     FlatList,
-    ActivityIndicator,
+    RefreshControl,
+    ScrollView,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import TopHeader from '../../components/Home/TopHeader';
 import { COLORS } from '../../constants/colors';
+import { TAB_FOCUS_WORK_DELAY_MS } from '../../constants/navigation';
 import { FONT_FAMILY, FONT_SIZE } from '../../constants/fonts';
 import {
     FavoriteScreenIcon,
@@ -21,6 +23,7 @@ import {
 } from '../../constants/icons';
 import PlacesArroundCard from '../../components/Home/PlacesArroundCard';
 import CustomTabs from '../../components/common/CustomTabs';
+import LoadingCards from '../../components/common/LoadingCards';
 import { useFavorites } from '../../context/FavoritesContext';
 import {
     fetchEventsByIds,
@@ -41,6 +44,9 @@ const Favorites = () => {
     const [places, setPlaces] = useState<FirebasePlace[]>([]);
     const [tours, setTours] = useState<FavoriteTourItem[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const refreshInFlightRef = useRef(false);
+    const loadedIdsKey = useRef<string | null>(null);
     const [expandedTours, setExpandedTours] = useState<Record<string, boolean>>({});
 
     const tabs = [
@@ -58,25 +64,15 @@ const Favorites = () => {
         },
     ];
 
-    const loadAll = useCallback(async () => {
-        setLoading(true);
+    const loadAll = useCallback(async (showSkeleton = true) => {
+        const idsKey = JSON.stringify([favorites, favoriteTours, favoriteEvents]);
+        if (showSkeleton && loadedIdsKey.current !== idsKey) setLoading(true);
         try {
-            console.log('[Favorites] context arrays:', {
-                favorites,
-                favoriteTours,
-                favoriteEvents,
-            });
             const [placesData, toursData, eventsData] = await Promise.all([
                 fetchPlacesByIds(favorites),
                 fetchToursByIds(favoriteTours),
                 fetchEventsByIds(favoriteEvents),
             ]);
-            console.log('[Favorites] resolved from Firestore:', {
-                placesCount: placesData.length,
-                toursCount: toursData.length,
-                eventsCount: eventsData.length,
-                tourIdsFound: toursData.map((t) => t.id),
-            });
 
             const placesById = new Map(placesData.map((p) => [p.id, p]));
             // Merge any fallback place docs stored on the user's document (favoritePlaceDocs)
@@ -157,6 +153,7 @@ const Favorites = () => {
                             .filter((place): place is FirebasePlace => Boolean(place)) };
                     })
             );
+            loadedIdsKey.current = idsKey;
         } catch (err) {
             console.warn('[Favorites] failed to load', err);
         } finally {
@@ -166,8 +163,30 @@ const Favorites = () => {
 
     useFocusEffect(
         useCallback(() => {
-            loadAll();
+            const timeout = setTimeout(loadAll, TAB_FOCUS_WORK_DELAY_MS);
+            return () => clearTimeout(timeout);
         }, [loadAll])
+    );
+
+    const handleRefresh = useCallback(async () => {
+        if (refreshInFlightRef.current) return;
+        refreshInFlightRef.current = true;
+        setRefreshing(true);
+        try {
+            await loadAll(false);
+        } finally {
+            refreshInFlightRef.current = false;
+            setRefreshing(false);
+        }
+    }, [loadAll]);
+
+    const refreshControl = (
+        <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={COLORS.BUTTON_COLOR}
+            colors={[COLORS.BUTTON_COLOR]}
+        />
     );
 
     const totalCount = places.length + tours.length;
@@ -241,35 +260,35 @@ const Favorites = () => {
     const renderActiveTab = () => {
         if (loading && totalCount === 0) {
             return (
-                <View style={styles.content}>
-                    <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
+                <View style={styles.loadingList}>
+                    <LoadingCards count={3} />
                 </View>
             );
         }
 
         if (activeTab === 'Places') {
-            if (places.length === 0) {
-                return <EmptyMessage text="No favorite places yet" />;
-            }
             return (
                 <FlatList
                     data={places}
+                    alwaysBounceVertical
                     keyExtractor={(item) => item.id}
                     renderItem={renderPlaceItem}
-                    contentContainerStyle={styles.listContent}
+                    ListEmptyComponent={<EmptyMessage text="No favorite places yet" />}
+                    contentContainerStyle={[styles.listContent, places.length === 0 && styles.emptyListContent]}
+                    refreshControl={refreshControl}
                 />
             );
         }
 
-        if (tours.length === 0) {
-            return <EmptyMessage text="No favorite tours yet" />;
-        }
         return (
             <FlatList
                 data={tours}
+                alwaysBounceVertical
                 keyExtractor={(item) => item.id}
                 renderItem={renderTourItem}
-                contentContainerStyle={styles.listContent}
+                ListEmptyComponent={<EmptyMessage text="No favorite tours yet" />}
+                contentContainerStyle={[styles.listContent, tours.length === 0 && styles.emptyListContent]}
+                refreshControl={refreshControl}
             />
         );
     };
@@ -278,19 +297,26 @@ const Favorites = () => {
         <View style={styles.container}>
             <TopHeader title="Favorites" />
             {!loading && totalCount === 0 ? (
-                <View style={styles.content}>
-                    <FavoriteScreenIcon width={127.71} height={179} />
-                    <Text style={styles.title}>Oops! No Favorites Yet</Text>
-                    <Text style={styles.desc}>
-                        Discover amazing places and tours and add them here!
-                    </Text>
-                    <TouchableOpacity
-                        style={styles.btnContainer}
-                        onPress={() => navigation.navigate('ForYou')}
-                    >
-                        <Text style={styles.btn}>Explore Now</Text>
-                    </TouchableOpacity>
-                </View>
+                <ScrollView
+                    style={styles.emptyScroll}
+                    alwaysBounceVertical
+                    contentContainerStyle={styles.emptyListContent}
+                    refreshControl={refreshControl}
+                >
+                    <View style={styles.content}>
+                        <FavoriteScreenIcon width={127.71} height={179} />
+                        <Text style={styles.title}>Oops! No Favorites Yet</Text>
+                        <Text style={styles.desc}>
+                            Discover amazing places and tours and add them here!
+                        </Text>
+                        <TouchableOpacity
+                            style={styles.btnContainer}
+                            onPress={() => navigation.navigate('ForYou')}
+                        >
+                            <Text style={styles.btn}>Explore Now</Text>
+                        </TouchableOpacity>
+                    </View>
+                </ScrollView>
             ) : (
                 <View style={styles.favoritesContent}>
                     <CustomTabs
@@ -363,6 +389,17 @@ const styles = StyleSheet.create({
     listContent: {
         paddingTop: 6,
         paddingBottom: 20,
+    },
+    emptyListContent: {
+        flexGrow: 1,
+    },
+    emptyScroll: {
+        flex: 1,
+    },
+    loadingList: {
+        flex: 1,
+        paddingTop: 6,
+        paddingHorizontal: 24,
     },
 
     itemWrapper: {

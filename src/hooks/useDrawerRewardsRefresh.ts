@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useDrawerStatus } from '@react-navigation/drawer';
 
 import { fetchRewardsSummary } from '../services/myTourService';
 
@@ -9,35 +8,54 @@ export type DrawerRewards = {
 };
 
 export const useDrawerRewardsRefresh = (
-  userId?: string | null
+  userId: string | null | undefined,
+  initialPoints: number,
+  navigation: {
+    addListener: (
+      event: 'transitionEnd',
+      listener: (event: { data?: { closing?: boolean } }) => void
+    ) => () => void;
+  }
 ): DrawerRewards => {
-  const drawerStatus = useDrawerStatus();
-  const [rewardPoints, setRewardPoints] = useState(0);
+  const [rewardPoints, setRewardPoints] = useState(initialPoints);
   const [visitedPlacesCount, setVisitedPlacesCount] = useState(0);
 
   useEffect(() => {
-    if (drawerStatus !== 'open' || !userId) return;
-    let isMounted = true;
+    setRewardPoints(initialPoints);
+  }, [initialPoints, userId]);
 
-    fetchRewardsSummary(userId)
-      .then((summary) => {
-        if (!isMounted) return;
-        const visited = summary.tours.reduce(
-          (sum, tour) =>
-            sum + tour.places.filter((place) => place.visited).length,
-          0
-        );
-        setRewardPoints(summary.totalPoints);
-        setVisitedPlacesCount(visited);
-      })
-      .catch(() => {
-        // Preserve previous values on failure — do not zero out.
-      });
+  useEffect(() => {
+    if (!userId) return;
+    let isMounted = true;
+    let requestId = 0;
+
+    const refresh = () => {
+      const currentRequest = ++requestId;
+      fetchRewardsSummary(userId)
+        .then((summary) => {
+          if (!isMounted || currentRequest !== requestId) return;
+          const visited = summary.tours.reduce(
+            (sum, tour) =>
+              sum + tour.places.filter((place) => place.visited).length,
+            0
+          );
+          setRewardPoints(summary.totalPoints);
+          setVisitedPlacesCount(visited);
+        })
+        .catch(() => {
+          // Preserve previous values on failure.
+        });
+    };
+
+    const unsubscribe = navigation.addListener('transitionEnd', (event) => {
+      if (!event.data?.closing) refresh();
+    });
 
     return () => {
       isMounted = false;
+      unsubscribe();
     };
-  }, [drawerStatus, userId]);
+  }, [navigation, userId]);
 
   return { rewardPoints, visitedPlacesCount };
 };

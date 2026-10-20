@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -38,10 +38,15 @@ const CreateTour: React.FC = () => {
     const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
     const [tourName, setTourName] = useState('');
     const [locationSearch, setLocationSearch] = useState('');
+    const locationQuery = locationSearch.trim().replace(/\s+/g, ' ');
     const [selectedLocation, setSelectedLocation] = useState('');
     const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
     const [loadingSuggestions, setLoadingSuggestions] = useState(false);
     const [loadingRoutes, setLoadingRoutes] = useState(false);
+    const [transitioningToSuggestion, setTransitioningToSuggestion] = useState(false);
+    const routeRequestId = useRef(0);
+    const routeRequestInFlight = useRef(false);
+    const tourNavigationInFlight = useRef(false);
     const [pendingRecommendations, setPendingRecommendations] = useState<RecommendedRoute[]>([]);
 
     const tagNames = useMemo(() => tags.map((tag) => tag.name), [tags]);
@@ -61,37 +66,49 @@ const CreateTour: React.FC = () => {
         );
     }, []);
 
-    const clearFlow = () => {
-        setSelectedPrefs([]);
-        setTourName('');
-        setLocationSearch('');
-        setSelectedLocation('');
-        setLocationSuggestions([]);
-    };
-
     useEffect(() => {
         fetchTourTags()
             .then(setTags)
             .catch(() => setTags([]));
     }, []);
 
+    useEffect(() => () => { routeRequestId.current += 1; }, []);
+
+    const cancelRouteRequest = () => {
+        routeRequestId.current += 1;
+        routeRequestInFlight.current = false;
+        setLoadingRoutes(false);
+    };
+
     useEffect(() => {
         if (!modals.location) return;
-        if (locationSearch.trim().length < 2) {
+        if (locationQuery.length < 2) {
             setLocationSuggestions([]);
             setLoadingSuggestions(false);
             return;
         }
+        let cancelled = false;
         setLoadingSuggestions(true);
         const timeout = setTimeout(() => {
-            searchLocationSuggestions(locationSearch)
-                .then((results) => setLocationSuggestions(results.map((item) => item.label)))
-                .finally(() => setLoadingSuggestions(false));
+            searchLocationSuggestions(locationQuery)
+                .then((results) => {
+                    if (!cancelled) setLocationSuggestions(results.map((item) => item.label));
+                })
+                .catch(() => {
+                    if (!cancelled) setLocationSuggestions([]);
+                })
+                .finally(() => {
+                    if (!cancelled) setLoadingSuggestions(false);
+                });
         }, 350);
-        return () => clearTimeout(timeout);
-    }, [locationSearch, modals.location]);
+        return () => {
+            cancelled = true;
+            clearTimeout(timeout);
+        };
+    }, [locationQuery, modals.location]);
 
     const handleOpenNameModal = async () => {
+        if (routeRequestInFlight.current) return;
         if (!selectedLocation.trim()) {
             CustomAlert.alert('Please select a location', 'Choose a location first before creating a tour.');
             return;
@@ -102,13 +119,17 @@ const CreateTour: React.FC = () => {
             return;
         }
 
+        const requestId = ++routeRequestId.current;
+        routeRequestInFlight.current = true;
         setLoadingRoutes(true);
         try {
             const recommendations = await fetchRecommendedRoutes({
                 locationLabel: selectedLocation || locationSearch,
                 selectedTagIds,
                 userId,
+                availableTags: tags,
             });
+            if (requestId !== routeRequestId.current) return;
             if (recommendations.length === 0) {
                 setPendingRecommendations([]);
                 closeModal('preference');
@@ -121,16 +142,22 @@ const CreateTour: React.FC = () => {
             closeModal('preference');
             openModal('name');
         } catch (error) {
+            if (requestId !== routeRequestId.current) return;
             const message =
                 error instanceof Error ? error.message : 'Unable to load recommendations.';
             showError('Could not load tours', message);
         } finally {
-            setLoadingRoutes(false);
+            if (requestId === routeRequestId.current) {
+                routeRequestInFlight.current = false;
+                setLoadingRoutes(false);
+            }
         }
     };
 
     const createTourFromRecommendations = (nameOverride?: string) => {
+        if (tourNavigationInFlight.current) return;
         const recommendationsSnapshot = pendingRecommendations;
+        if (recommendationsSnapshot.length === 0) return;
         const tourNameSnapshot = nameOverride?.trim() || recommendationsSnapshot[0]?.route?.name || '';
         const cityLabel =
             [recommendationsSnapshot[0]?.route?.city_name, recommendationsSnapshot[0]?.route?.country]
@@ -139,20 +166,26 @@ const CreateTour: React.FC = () => {
             selectedLocation ||
             locationSearch;
 
+        // Keep a transition screen behind the dismissing native modal so
+        // Create New Tour does not flash before TourSuggestion mounts.
+        tourNavigationInFlight.current = true;
+        setTransitioningToSuggestion(true);
         closeModal('name');
-        setPendingRecommendations([]);
-
-        // Keep the already-selected location and preferences so the user can reuse them
-        // instead of losing them after creating the tour.
-
-        // Defer navigation until after the modal has had a chance to dismiss
         requestAnimationFrame(() => {
-            navigation.replace('TourSuggestion', {
-                tourName: tourNameSnapshot,
-                cityLabel,
-                recommendations: recommendationsSnapshot,
-                selectedTagIds,
-            });
+            try {
+                navigation.replace('TourSuggestion', {
+                    tourName: tourNameSnapshot,
+                    cityLabel,
+                    recommendations: recommendationsSnapshot,
+                    selectedTagIds,
+                });
+            } catch (error) {
+                tourNavigationInFlight.current = false;
+                setTransitioningToSuggestion(false);
+                openModal('name');
+                const message = error instanceof Error ? error.message : 'Unable to open your tour.';
+                showError('Could not open tour', message);
+            }
         });
     };
 
@@ -168,30 +201,23 @@ const CreateTour: React.FC = () => {
         <View style={styles.container}>
             <TopHeader title="Create New Tour" />
 
-            {loadingRoutes ? (
-                <View style={styles.loaderWrap}>
-                    <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
-                    <Text style={styles.loaderText}>Finding tours for you…</Text>
+            <View style={styles.content}>
+                <View style={styles.iconHalo}>
+                    <MapIconMain width={140} height={90} />
                 </View>
-            ) : (
-                <View style={styles.content}>
-                    <View style={styles.iconHalo}>
-                        <MapIconMain width={140} height={90} />
-                    </View>
-                    <Text style={styles.tagline}>
-                        Plan your next adventure in just a few taps.
-                    </Text>
+                <Text style={styles.tagline}>
+                    Plan your next adventure in just a few taps.
+                </Text>
 
-                    <TouchableOpacity
-                        activeOpacity={0.85}
-                        onPress={() => openModal('location')}
-                        style={styles.cta}
-                    >
-                        <IconPlus width={14} height={14} />
-                        <Text style={styles.ctaText}>Select Location</Text>
-                    </TouchableOpacity>
-                </View>
-            )}
+                <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => openModal('location')}
+                    style={styles.cta}
+                >
+                    <IconPlus width={14} height={14} />
+                    <Text style={styles.ctaText}>Select Location</Text>
+                </TouchableOpacity>
+            </View>
 
             <LocationModal
                 visible={modals.location}
@@ -211,16 +237,21 @@ const CreateTour: React.FC = () => {
 
             <PreferenceModal
                 visible={modals.preference}
+                loading={loadingRoutes}
                 preferences={tagNames}
                 selectedPrefs={selectedPrefs}
                 togglePreference={togglePreference}
                 clearAll={() => setSelectedPrefs([])}
-                onClose={() => closeModal('preference')}
+                onClose={() => {
+                    cancelRouteRequest();
+                    closeModal('preference');
+                }}
                 mode="myTour"
                 showTwoButtons
                 secondaryLabel="Back"
                 primaryLabel="Next"
                 onSecondary={() => {
+                    cancelRouteRequest();
                     closeModal('preference');
                     openModal('location');
                 }}
@@ -235,6 +266,12 @@ const CreateTour: React.FC = () => {
                 onConfirm={(nextName) => handleNameConfirm(nextName)}
                 onUpdateLater={handleUpdateLater}
             />
+            {transitioningToSuggestion ? (
+                <View style={styles.transitionOverlay}>
+                    <ActivityIndicator size="large" color={COLORS.BUTTON_COLOR} />
+                    <Text style={styles.transitionText}>Opening your tour…</Text>
+                </View>
+            ) : null}
         </View>
     );
 };
@@ -245,17 +282,6 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#F9F9F9',
-    },
-    loaderWrap: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 14,
-    },
-    loaderText: {
-        fontSize: FONT_SIZE.TEXT,
-        fontFamily: FONT_FAMILY.InterTight_Medium,
-        color: COLORS.TEXT_SECONDARY,
     },
     content: {
         flex: 1,
@@ -301,5 +327,21 @@ const styles = StyleSheet.create({
         color: COLORS.WHITE,
         fontSize: FONT_SIZE.TEXT,
         fontFamily: FONT_FAMILY.InterTight_SemiBold,
+    },
+    transitionOverlay: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        backgroundColor: '#F9F9F9',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    transitionText: {
+        marginTop: 14,
+        color: COLORS.TEXT_PRIMARY,
+        fontSize: FONT_SIZE.TEXT,
+        fontFamily: FONT_FAMILY.InterTight_Medium,
     },
 });

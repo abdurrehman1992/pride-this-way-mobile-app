@@ -12,6 +12,7 @@ import {
     ScrollView,
     StyleSheet,
     ActivityIndicator,
+    InteractionManager,
 } from 'react-native';
 import { CommonActions, useNavigation, usePreventRemove, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -36,18 +37,15 @@ import { showError, showSuccess } from '../../components/common/AppToast';
 import { MyTourStackParamList } from '../../types/types';
 import { RootState } from '../../Redux/store';
 import { fetchUpcomingEventSuggestions } from '../../services/myTourService';
-import firestore from '@react-native-firebase/firestore';
 import {
     FirebaseEvent,
     FirebasePlace,
     fetchPlacesByIds,
     RecommendedRoute,
-    removeTourPlaceFromUserAndRecord,
     saveUserTour,
     buildNavigableRouteFromStops,
 } from '../../services/myTourService';
 import { scheduleStopsWithEventTiming } from '../../utils/tourRouteScheduling';
-import { useFavorites } from '../../context/FavoritesContext';
 
 type NavigationProp = NativeStackNavigationProp<MyTourStackParamList, 'TourSuggestion'>;
 const POINTS_PER_LOCATION = 15;
@@ -58,7 +56,6 @@ const TourSuggestion: React.FC = () => {
     const route = useRoute<any>();
     const authUser = useSelector((state: RootState) => state.auth.user);
     const userId = authUser?.id;
-    const { removeFromFavorites, isFavorite } = useFavorites();
 
     const params = route.params as {
         tourName?: string;
@@ -86,9 +83,10 @@ const TourSuggestion: React.FC = () => {
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [suggestedEvents, setSuggestedEvents] = useState<FirebaseEvent[]>([]);
-    const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
-    const [loadingEvents, setLoadingEvents] = useState(false);
-    const [existingTourId, setExistingTourId] = useState<string | null>(null);
+    const [selectedEventIds, setSelectedEventIds] = useState<string[]>(
+        () => (primary?.events || []).map((event) => event.id)
+    );
+    const [loadingEvents, setLoadingEvents] = useState(Boolean(primary));
     const bypassGuardRef = useRef(false);
     const saveInFlightRef = useRef(false);
 
@@ -99,13 +97,6 @@ const TourSuggestion: React.FC = () => {
         const templateIds = new Set(templateEvents.map(e => e.id));
         const filteredSuggestions = suggestedEvents.filter(e => !templateIds.has(e.id));
         const all = [...templateEvents, ...filteredSuggestions];
-        console.log('DEBUG TourSuggestion - allAvailableEvents:', {
-            templateEvents: templateEvents.length,
-            suggestedEvents: suggestedEvents.length,
-            filteredSuggestions: filteredSuggestions.length,
-            total: all.length,
-            events: all.map(e => ({ id: e.id, title: e.title }))
-        });
         return all;
     }, [suggestedEvents, primary?.events]);
 
@@ -114,11 +105,6 @@ const TourSuggestion: React.FC = () => {
         const selected = allAvailableEvents.filter((event) =>
             selectedEventIds.includes(event.id)
         );
-        console.log('DEBUG TourSuggestion - selectedEvents:', {
-            selectedEventIds,
-            found: selected.length,
-            events: selected.map(e => ({ id: e.id, title: e.title }))
-        });
         return selected;
     }, [allAvailableEvents, selectedEventIds]);
 
@@ -217,45 +203,7 @@ const TourSuggestion: React.FC = () => {
         setSelectedEventIds((prev) => prev.filter((id) => id !== eventId));
     }, []);
 
-    // 1. First, fetch already saved document entries if they exist
-    useEffect(() => {
-        const loadSavedEvents = async () => {
-            try {
-                if (!primary?.route?.id || !userId) return;
-                const doc = await firestore()
-                    .collection('tours')
-                    .where('user_id', '==', userId)
-                    .where('route_id', '==', primary.route.id)
-                    .where('status', '==', 'saved')
-                    .limit(1)
-                    .get();
-                if (!doc.empty) {
-                    const tourDoc = doc.docs[0];
-                    const data = tourDoc.data();
-                    // Try to get event IDs from top-level (legacy) or from all_places (new structure)
-                    let ids = data?.event_ids || [];
-                    if (ids.length === 0 && data?.all_places && Array.isArray(data.all_places)) {
-                        // Extract event IDs from all_places entries that have event_id field
-                        ids = data.all_places
-                            .filter((item: any) => item.event_id)
-                            .map((item: any) => item.event_id);
-                    }
-                    setExistingTourId(tourDoc.id);
-                    setSelectedEventIds(ids);
-                } else {
-                    setExistingTourId(null);
-                    // Fallback: Default pre-select all standard template route events if no document exists yet
-                    const initialIds = (primary?.events || []).map(e => e.id);
-                    setSelectedEventIds(initialIds);
-                }
-            } catch (e) {
-                console.log('restore events error', e);
-            }
-        };
-        loadSavedEvents();
-    }, [primary?.route?.id, primary?.events, userId]);
-
-    // 2. Load API event suggestions without stepping on selected states
+    // Load API event suggestions without stepping on selected states
     const loadEventSuggestions = useCallback(async () => {
         if (!primary) return;
         setLoadingEvents(true);
@@ -279,7 +227,11 @@ const TourSuggestion: React.FC = () => {
     }, [cityLabel, params?.selectedTagIds, primary]);
 
     useEffect(() => {
-        loadEventSuggestions();
+        // Let the native stack transition paint before parsing the events feed.
+        const task = InteractionManager.runAfterInteractions(() => {
+            loadEventSuggestions();
+        });
+        return () => task.cancel();
     }, [loadEventSuggestions]);
 
     const resetToCreateTour = useCallback(() => {
@@ -311,77 +263,14 @@ const TourSuggestion: React.FC = () => {
         );
     }, []);
 
-    const removePlace = async (placeId: string) => {
+    const removePlace = (placeId: string) => {
         const removedPlace = places.find((place) => place.id === placeId);
         if (!removedPlace) return;
 
         const nextPlaces = places.filter((place) => place.id !== placeId);
         setPlaces(nextPlaces);
         if (!hasTourLocation(nextPlaces.length)) return;
-
-        if (!userId || !primary || !existingTourId) {
-            showSuccess('Location removed', `${removedPlace.name} was removed from your tour.`);
-            return;
-        }
-
-        try {
-            if (isFavorite(placeId)) {
-                await removeFromFavorites(placeId, 'Place');
-            }
-            await removeTourPlaceFromUserAndRecord({
-                userId,
-                tourId: existingTourId,
-                placeId,
-            });
-
-            setPlaces(nextPlaces);
-
-            console.log('DEBUG TourSuggestion - removePlace - selectedEvents:', selectedEvents);
-            const allPlacesAndEvents = [
-                ...nextPlaces.map((p, idx) => ({
-                    place_id: p.id,
-                    visited: false,
-                    visitedAt: null,
-                    pointsEarned: 0,
-                    proofImageUri: null,
-                    addedByUser: false,
-                    order: idx + 1,
-                })),
-                ...selectedEvents.map((e, idx) => ({
-                    event_id: e.id,
-                    visited: false,
-                    visitedAt: null,
-                    pointsEarned: 0,
-                    proofImageUri: null,
-                    addedByUser: false,
-                    order: nextPlaces.length + idx + 1,
-                })),
-            ];
-
-            await saveUserTour({
-                tourId: existingTourId,
-                userId,
-                userName: authUser?.name || '',
-                userEmail: authUser?.email || '',
-                route: primary.route,
-                title: tourNameState,
-                places: nextPlaces,
-                events: selectedEvents,
-                placeProgress: {},
-                currentStopIndex: 0,
-                isEdited: true,
-                status: 'saved',
-                scheduledDate: null,
-                navigableRoute: buildSuggestedNavigableRoute(
-                    nextPlaces,
-                    selectedEvents
-                ),
-                allPlacesAndEvents,
-            });
-            showSuccess('Location removed', `${removedPlace.name} was removed from your tour.`);
-        } catch {
-            showError('Remove Failed', 'Unable to remove this location from your tour.');
-        }
+        showSuccess('Location removed', `${removedPlace.name} was removed from your tour.`);
     };
 
     useEffect(() => {
@@ -501,9 +390,6 @@ const TourSuggestion: React.FC = () => {
         const now = new Date().toISOString();
         try {
             const selectedEventsToSave = [...selectedEvents];
-            console.log('DEBUG TourSuggestion - selectedEvents before save:', selectedEvents);
-            console.log('DEBUG TourSuggestion - selectedEventIds:', selectedEventIds);
-            console.log('DEBUG TourSuggestion - allAvailableEvents:', allAvailableEvents);
             const allPlacesAndEvents = [
                 ...places.map((p, idx) => ({
                     place_id: p.id,
@@ -525,10 +411,9 @@ const TourSuggestion: React.FC = () => {
                 })),
             ];
 
-            // The write may remain pending after Firestore has accepted it.
-            // Start it once, then hand the user straight to the saved-tour UI.
-            void saveUserTour({
-                tourId: existingTourId,
+            // Wait for the new document ID so My Tours can identify this
+            // specific tour even when another tour uses the same route and name.
+            const savedTourId = await saveUserTour({
                 userId,
                 userName: authUser?.name || '',
                 userEmail: authUser?.email || '',
@@ -546,18 +431,9 @@ const TourSuggestion: React.FC = () => {
                     selectedEventsToSave
                 ),
                 allPlacesAndEvents,
-            })
-                .then(() => {
-                    showSuccess('Tour Saved', 'Your tour has been saved successfully.');
-                })
-                .catch((error) => {
-                    const message =
-                        error instanceof Error ? error.message : 'Unable to save this tour right now.';
-                    showError('Save Failed', message);
-                });
+            });
 
-            // events are now embedded in all_places; no need for separate write
-
+            showSuccess('Tour Saved', 'Your tour has been saved successfully.');
             setSaved(true);
             bypassGuardRef.current = true;
 
@@ -568,6 +444,7 @@ const TourSuggestion: React.FC = () => {
             requestAnimationFrame(() => {
                 navigation.navigate('MyTour', {
                     pendingCreate: {
+                        tourId: savedTourId,
                         status: 'saved',
                         scheduledDate: null,
                         createdAt: now,

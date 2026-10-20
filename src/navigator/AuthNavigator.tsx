@@ -6,13 +6,19 @@ import ForgetPassword from "../screens/auth/ForgetPassword/ForgetPassword";
 import EnterCode from "../screens/auth/ForgetPassword/EnterCode";
 import CreateNewPassword from "../screens/auth/ForgetPassword/CreateNewPassword";
 import { AuthStackParamList } from "../types/types";
+import { COLORS } from "../constants/colors";
 
 const Stack = createNativeStackNavigator<AuthStackParamList>();
 const AuthNavigator: React.FC = () => {
   return (
     <Stack.Navigator
       initialRouteName="Login"
-      screenOptions={{ headerShown: false }}
+      screenOptions={{
+        headerShown: false,
+        animation: 'slide_from_right',
+        animationDuration: 220,
+        contentStyle: { backgroundColor: COLORS.WHITE },
+      }}
     >
       <Stack.Screen name="Login" component={Login} />
       <Stack.Screen name="Signup" component={Signup} />

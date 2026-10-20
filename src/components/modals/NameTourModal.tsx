@@ -66,7 +66,7 @@ const NameTourModal: React.FC<Props> = ({
       statusBarTranslucent
     >
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={styles.keyboardAvoidingView}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         // keyboardVerticalOffset={keyboardOffset}
       >
@@ -90,9 +90,6 @@ const NameTourModal: React.FC<Props> = ({
             numberOfLines={1}
             multiline={false}
             textAlignVertical="center"
-            ellipsizeMode="tail"
-            adjustsFontSizeToFit
-            minimumFontScale={0.85}
           />
 
           <View style={styles.nameModalButtonRow}>
@@ -121,6 +118,9 @@ const NameTourModal: React.FC<Props> = ({
 export default NameTourModal;
 
 const styles = StyleSheet.create({
+    keyboardAvoidingView: {
+        flex: 1,
+    },
     centerOverlay: {
         flex: 1,
         justifyContent: "center",

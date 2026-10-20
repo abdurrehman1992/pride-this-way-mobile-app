@@ -106,13 +106,14 @@ const Login: React.FC = () => {
                 password,
             });
 
-            if (rememberMe) {
-                await saveRememberEmail(email.trim());
-            } else {
-                await clearRememberEmail();
-            }
-
             dispatch(loginSuccess(session));
+
+            // Remembering the address must not hold up the screen transition.
+            if (rememberMe) {
+                saveRememberEmail(email.trim()).catch(() => {});
+            } else {
+                clearRememberEmail().catch(() => {});
+            }
 
             // showSuccess("Login Successful", "Welcome back to Pride this way!","top");
             showSuccess("Login Successful", "Welcome back to Pride this way!");
@@ -132,6 +133,7 @@ const Login: React.FC = () => {
         <>
             <ImageBackground style={styles.container}
                 source={AuthBackGroundImage}
+                fadeDuration={0}
             >
                 <View
                     style={[styles.bottomSheetContainer, { bottom: keyboardHeight }]}
@@ -212,7 +214,11 @@ const Login: React.FC = () => {
                             <AuthBottomNavigation
                                 text={"Don't have an account?"}
                                 btnText={"Sign up"}
-                                onpress={() => navigation.navigate("Signup")}
+                                onpress={() => {
+                                    if (loading) return;
+                                    Keyboard.dismiss();
+                                    navigation.navigate("Signup");
+                                }}
                             />
                         </View>
                         </ScrollView>

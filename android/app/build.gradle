@@ -8,6 +8,11 @@ def keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
+// Opt in only when updating an installed release-signed app without clearing its data.
+def useReleaseSigningForDebug = project.findProperty("useReleaseSigningForDebug") == "true"
+if (useReleaseSigningForDebug && !keystorePropertiesFile.exists()) {
+    throw new GradleException("useReleaseSigningForDebug requires android/key.properties")
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -110,7 +115,7 @@ android {
     }
     buildTypes {
         debug {
-            signingConfig signingConfigs.debug
+            signingConfig useReleaseSigningForDebug ? signingConfigs.release : signingConfigs.debug
         }
         release {
             // Caution! In production, you need to generate your own keystore file.

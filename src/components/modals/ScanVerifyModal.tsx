@@ -19,24 +19,27 @@ import { FONT_FAMILY, FONT_SIZE } from "../../constants/fonts";
 import { CrossIcon } from "../../constants/icons";
 import { CameraIcon, DoneModalIcon } from "../../constants/images";
 import { CustomAlert } from "../../utils/CustomAlert";
+import {
+  prefetchCapturedVerificationImage,
+  prefetchPlaceVerificationReference,
+} from "../../services/aiService";
+import { subscribeToAmbientLight } from "../../utils/ambientLight";
 
-const NIGHT_START_HOUR = 18;
-const NIGHT_END_HOUR = 6;
-
-const isLocalNightTime = (date = new Date()) => {
-  const hour = date.getHours();
-  return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR;
-};
+const TORCH_ON_BELOW_LUX = 15;
+const TORCH_OFF_ABOVE_LUX = 60;
+const DARK_CONFIRMATION_MS = 1200;
+const BRIGHT_CONFIRMATION_MS = 800;
 
 type Props = {
   visible: boolean;
   title?: string;
   successPoints?: number;
+  referenceImageUrl?: string;
   onClose: () => void;
   onScanSuccess: (imageUri: string) =>
     | boolean
-    | { verified: boolean; reason?: string }
-    | Promise<boolean | { verified: boolean; reason?: string }>;
+    | { verified: boolean; reason?: string; retryable?: boolean }
+    | Promise<boolean | { verified: boolean; reason?: string; retryable?: boolean }>;
 };
 
 type StepType = "scan" | "confirm" | "success";
@@ -45,12 +48,14 @@ const ScanVerifyModal: React.FC<Props> = ({
   visible,
   title,
   successPoints = 10,
+  referenceImageUrl,
   onClose,
   onScanSuccess,
 }) => {
   const [step, setStep] = useState<StepType>("scan");
   const [capturedImage, setCapturedImage] = useState<{ uri: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [canRetryVerification, setCanRetryVerification] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [torchEnabled, setTorchEnabled] = useState(false);
   const [cameraPreviewReady, setCameraPreviewReady] = useState(false);
@@ -138,9 +143,22 @@ const ScanVerifyModal: React.FC<Props> = ({
       setTorchEnabled(false);
       setCameraPreviewReady(false);
       setCapturedImage(null);
+      setCanRetryVerification(false);
       setStep("scan");
     }
   }, [visible]);
+
+  useEffect(() => {
+    if (visible) {
+      prefetchPlaceVerificationReference(referenceImageUrl);
+    }
+  }, [referenceImageUrl, visible]);
+
+  useEffect(() => {
+    if (visible && capturedImage?.uri) {
+      prefetchCapturedVerificationImage(capturedImage.uri);
+    }
+  }, [capturedImage?.uri, visible]);
 
   useEffect(() => {
     if (step !== "scan") {
@@ -150,16 +168,57 @@ const ScanVerifyModal: React.FC<Props> = ({
   }, [step]);
 
   useEffect(() => {
-    const shouldEnableNightTorch = Boolean(
-      visible &&
-      step === "scan" &&
-      hasPermission &&
-      cameraPreviewReady &&
-      device?.hasTorch &&
-      isLocalNightTime()
-    );
-    setTorchEnabled(shouldEnableNightTorch);
-  }, [cameraPreviewReady, device?.hasTorch, hasPermission, step, visible]);
+    if (!visible || step !== "scan" || !hasPermission || !device?.hasTorch) {
+      setTorchEnabled(false);
+      return;
+    }
+
+    let darkTimer: ReturnType<typeof setTimeout> | null = null;
+    let brightTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearDarkTimer = () => {
+      if (darkTimer) clearTimeout(darkTimer);
+      darkTimer = null;
+    };
+    const clearBrightTimer = () => {
+      if (brightTimer) clearTimeout(brightTimer);
+      brightTimer = null;
+    };
+
+    const subscription = subscribeToAmbientLight((lux) => {
+      if (lux <= TORCH_ON_BELOW_LUX) {
+        clearBrightTimer();
+        if (!darkTimer) {
+          darkTimer = setTimeout(() => {
+            darkTimer = null;
+            setTorchEnabled((enabled) => {
+              if (!enabled) console.log('[ScanVerifyModal] Torch on in low light:', { lux });
+              return true;
+            });
+          }, DARK_CONFIRMATION_MS);
+        }
+      } else if (lux >= TORCH_OFF_ABOVE_LUX) {
+        clearDarkTimer();
+        if (!brightTimer) {
+          brightTimer = setTimeout(() => {
+            brightTimer = null;
+            setTorchEnabled((enabled) => {
+              if (enabled) console.log('[ScanVerifyModal] Torch off in bright light:', { lux });
+              return false;
+            });
+          }, BRIGHT_CONFIRMATION_MS);
+        }
+      } else {
+        clearDarkTimer();
+        clearBrightTimer();
+      }
+    });
+
+    return () => {
+      clearDarkTimer();
+      clearBrightTimer();
+      subscription.remove();
+    };
+  }, [device?.hasTorch, hasPermission, step, visible]);
 
   useEffect(() => {
     if (visible && step === "scan") {
@@ -224,6 +283,7 @@ const ScanVerifyModal: React.FC<Props> = ({
         });
         setTorchEnabled(false);
         setCapturedImage({ uri });
+        setCanRetryVerification(false);
         setStep("confirm");
         return;
       }
@@ -234,6 +294,7 @@ const ScanVerifyModal: React.FC<Props> = ({
           // console.log("Resolved snapshot URI:", uri);
           setTorchEnabled(false);
           setCapturedImage({ uri });
+          setCanRetryVerification(false);
           setStep("confirm");
           return;
         } catch (encodeError) {
@@ -245,6 +306,7 @@ const ScanVerifyModal: React.FC<Props> = ({
         const uri = photo.startsWith("file://") || photo.startsWith("content://") ? photo : `file://${photo}`;
         setTorchEnabled(false);
         setCapturedImage({ uri });
+        setCanRetryVerification(false);
         setStep("confirm");
         return;
       }
@@ -262,6 +324,7 @@ const ScanVerifyModal: React.FC<Props> = ({
     }
 
     confirmInFlightRef.current = true;
+    const verificationStartedAt = Date.now();
     try {
       setIsCapturing(true);
       const verification = await onScanSuccess(capturedImage.uri);
@@ -269,18 +332,31 @@ const ScanVerifyModal: React.FC<Props> = ({
         ? verification
         : verification.verified;
       if (!isVerified) {
+        const retryable = typeof verification === 'object' && verification.retryable;
+        setCanRetryVerification(Boolean(retryable));
         CustomAlert.alert(
-          'Verification Failed',
+          retryable ? 'Verification Temporarily Unavailable' : 'Verification Failed',
           typeof verification === 'object' && verification.reason
-            ? verification.reason
+            ? `${verification.reason}${retryable ? ' Tap Retry Verification to use this photo again.' : ''}`
             : 'This image does not match the location. Please retake the photo from the correct place.',
-          [{ text: 'Retake Photo', style: 'cancel', onPress: () => {
-            setCapturedImage(null);
-            setStep('scan');
-          }}]
+          retryable
+            ? [
+              { text: 'Keep Photo', style: 'cancel' },
+              { text: 'Retake Photo', onPress: () => {
+                setCapturedImage(null);
+                setCanRetryVerification(false);
+                setStep('scan');
+              }},
+            ]
+            : [{ text: 'Retake Photo', style: 'cancel', onPress: () => {
+              setCapturedImage(null);
+              setCanRetryVerification(false);
+              setStep('scan');
+            }}]
         );
         return;
       }
+      setCanRetryVerification(false);
       setStep("success");
     } catch (error) {
       // Technical failures (AI service, network, saving progress) are logged,
@@ -291,16 +367,21 @@ const ScanVerifyModal: React.FC<Props> = ({
         'We could not verify your photo right now. Please try again.',
         [{ text: 'Try Again', style: 'cancel', onPress: () => {
           setCapturedImage(null);
+          setCanRetryVerification(false);
           setStep('scan');
         }}]
       );
     } finally {
+      console.log('[ScanVerifyModal] Verification flow timing:', {
+        elapsedMs: Date.now() - verificationStartedAt,
+      });
       setIsCapturing(false);
       confirmInFlightRef.current = false;
     }
   };
   const handleConfirmNo = () => {
     setCapturedImage(null);
+    setCanRetryVerification(false);
     setStep("scan");
   };
 
@@ -358,7 +439,7 @@ const ScanVerifyModal: React.FC<Props> = ({
                       // so night capture intentionally uses the flash only.
                       // Do not send a torch command until the preview itself
                       // is active; CameraX cancels commands before that point.
-                      torchMode={cameraPreviewReady && torchEnabled ? "on" : undefined}
+                      torchMode={cameraPreviewReady ? (torchEnabled ? "on" : "off") : undefined}
                       onPreviewStarted={() => setCameraPreviewReady(true)}
                       onPreviewStopped={() => setCameraPreviewReady(false)}
                       // @ts-ignore: enable photo capture on Vision Camera
@@ -414,6 +495,7 @@ const ScanVerifyModal: React.FC<Props> = ({
               style={styles.closeBtn}
               onPress={() => {
                 setCapturedImage(null);
+                setCanRetryVerification(false);
                 setStep("scan");
               }}
             >
@@ -439,7 +521,7 @@ const ScanVerifyModal: React.FC<Props> = ({
                 {isCapturing ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.scanText}>Confirm</Text>
+                  <Text style={styles.scanText}>{canRetryVerification ? 'Retry Verification' : 'Confirm'}</Text>
                 )}
               </ActionTouchable>
             </View>

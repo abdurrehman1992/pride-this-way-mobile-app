@@ -82,6 +82,7 @@ import {
 } from '../../utils/navigationHeading';
 import { checkInternetConnection, useInternetConnectivity } from '../../utils/networkStatus';
 import { requestLocationPermission } from '../../utils/location';
+import { waitForVerificationLocation } from '../../utils/verificationLocation';
 import {
   getNativeTourLocationSamples,
   getNativeTourLocationStatus,
@@ -99,6 +100,7 @@ import {
 } from '../../services/tourTrackingService';
 import { showLocationRequiredAlert } from '../../utils/locationRequiredAlert';
 import { showInternetRequiredAlert } from '../../utils/internetRequiredAlert';
+import { finishDrawerTourPause } from '../../utils/drawerTourPause';
 import { verifyPlaceImageMatch } from '../../services/aiService';
 import { initializeMapbox } from '../../services/mapboxConfig';
 import { useDispatch, useSelector } from 'react-redux';
@@ -302,6 +304,8 @@ const NAVIGATION_ACCESS_CONNECTOR_MIN_METERS = 8;
 const DETAIL_CARD_WIDTH = 260;
 const DETAIL_CARD_HEIGHT = 255;
 const MAX_INITIAL_FIX_AGE_MS = 15_000;
+const VERIFICATION_GATE_FIX_MAX_AGE_MS = 60_000;
+const VERIFICATION_MAP_FIX_MAX_AGE_MS = 60_000;
 
 const headingDifferenceDegrees = (from: number, to: number) =>
   Math.abs(((to - from + 540) % 360) - 180);
@@ -325,12 +329,17 @@ const isFreshGpsPosition = (position: any) => {
   return !Number.isFinite(timestamp) || timestamp <= 0 || Date.now() - timestamp <= MAX_INITIAL_FIX_AGE_MS;
 };
 
-const getCurrentPositionAsync = async (timeout = 5000) =>
+const getCurrentPositionAsync = async (timeout = 5000, maxAccuracyMeters?: number) =>
   new Promise<[number, number]>((resolve, reject) => {
     Geolocation.getCurrentPosition(
       (pos) => {
         if (!isFreshGpsPosition(pos)) {
           reject(new Error('Stale GPS position'));
+          return;
+        }
+        if (maxAccuracyMeters !== undefined &&
+          (!Number.isFinite(pos.coords.accuracy) || pos.coords.accuracy > maxAccuracyMeters)) {
+          reject(new Error('GPS position is not accurate enough for verification'));
           return;
         }
         resolve([pos.coords.longitude, pos.coords.latitude]);
@@ -340,7 +349,7 @@ const getCurrentPositionAsync = async (timeout = 5000) =>
     );
   });
 
-type VerificationFailure = { verified: false; reason: string };
+type VerificationFailure = { verified: false; reason: string; retryable?: boolean };
 
 const getVerificationFailureMessage = (
   placeName: string,
@@ -625,6 +634,8 @@ const MyTourStart = () => {
   const [expanded, setExpanded] = useState(false);
 
   const [scanVisible, setScanVisible] = useState(false);
+  const [verificationLocationPending, setVerificationLocationPending] = useState(false);
+  const verificationLocationPendingRef = useRef(false);
   const [scanTargetEvent, setScanTargetEvent] = useState<FirebaseEvent | null>(null);
   // iOS cannot present a new modal while another is still animating out, so we
   // hide the event modal first and open the scan modal after a short delay.
@@ -716,6 +727,16 @@ const MyTourStart = () => {
     accuracy: number;
     speed: number | null;
   } | null>(null);
+  const lastMapLocationFixRef = useRef<{
+    coordinate: [number, number];
+    timestamp: number;
+    accuracy: number;
+  } | null>(null);
+  const verificationGateFixRef = useRef<{
+    coordinate: [number, number];
+    destinationCoordinate: [number, number];
+    checkedAt: number;
+  } | null>(null);
   const pendingStationaryJumpRef = useRef<{
     coordinate: [number, number];
     timestamp: number;
@@ -742,6 +763,7 @@ const MyTourStart = () => {
       const target = currentLocationRef.current;
       const displayed = displayedUserLocationRef.current;
       if (!target || !displayed) return;
+      if (displayed === target) return;
 
       const next: [number, number] = [
         displayed[0] + (target[0] - displayed[0]) * USER_MARKER_SMOOTHING_FACTOR,
@@ -4841,10 +4863,8 @@ const MyTourStart = () => {
 
   usePreventRemove(tourStarted, handlePreventRemove);
 
-  // Tab-press interception happens in TabNavigator (more reliable than
-  // chasing parent listeners). When the user chooses "Pause & Leave" in
-  // that alert, TabNavigator re-navigates here with `pauseAndLeave` set;
-  // we react to that param and persist the paused state.
+  // Tab and drawer leave actions ask this screen to pause through the
+  // `pauseAndLeave` param. Drawer navigation waits for the pause to finish.
   useEffect(() => {
     if (!tourStarted) {
       leavingRef.current = false;
@@ -4853,17 +4873,22 @@ const MyTourStart = () => {
     const pauseAndLeave = route.params?.pauseAndLeave;
     if (!pauseAndLeave) return;
 
-    pauseTourState().then((savedId) => {
-      navigation.setParams({ pauseAndLeave: undefined });
-      navigation.navigate('MyTour', {
-        tourUpdate: {
-          tourId: savedId || tourId || undefined,
-          routeId: routeId,
-          status: 'paused',
-          updatedAt: new Date().toISOString(),
-        },
+    pauseTourState()
+      .then((savedId) => {
+        navigation.setParams({ pauseAndLeave: undefined });
+        navigation.navigate('MyTour', {
+          tourUpdate: {
+            tourId: savedId || tourId || undefined,
+            routeId: routeId,
+            status: 'paused',
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        finishDrawerTourPause(pauseAndLeave, true);
+      })
+      .catch(() => {
+        finishDrawerTourPause(pauseAndLeave, false);
       });
-    });
   }, [navigation, pauseTourState, route.params?.pauseAndLeave, routeId, tourId, tourStarted]);
 
   const handleStopFavorite = async (place: FirebasePlace) => {
@@ -4912,7 +4937,14 @@ const MyTourStart = () => {
               reject(new Error('Stale GPS position'));
               return;
             }
-            resolve([pos.coords.longitude, pos.coords.latitude]);
+            const coordinate: [number, number] = [pos.coords.longitude, pos.coords.latitude];
+            lastMapLocationFixRef.current = {
+              coordinate,
+              timestamp: Number(pos.timestamp) > 0 ? Number(pos.timestamp) : Date.now(),
+              accuracy: Number(pos.coords.accuracy),
+            };
+            nativeLocationDisabledRef.current = false;
+            resolve(coordinate);
           },
           () => {
             Geolocation.getCurrentPosition(
@@ -4921,7 +4953,14 @@ const MyTourStart = () => {
                   reject(new Error('Stale GPS position'));
                   return;
                 }
-                resolve([pos.coords.longitude, pos.coords.latitude]);
+                const coordinate: [number, number] = [pos.coords.longitude, pos.coords.latitude];
+                lastMapLocationFixRef.current = {
+                  coordinate,
+                  timestamp: Number(pos.timestamp) > 0 ? Number(pos.timestamp) : Date.now(),
+                  accuracy: Number(pos.coords.accuracy),
+                };
+                nativeLocationDisabledRef.current = false;
+                resolve(coordinate);
               },
               reject,
               { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
@@ -5032,13 +5071,26 @@ const MyTourStart = () => {
     destinationName: string,
     destinationCoordinate: [number, number],
   ): Promise<[number, number] | null> => {
-    // The watcher already maintains the latest GPS fix. Use it immediately
-    // for the radius gate so an out-of-range user gets feedback without
-    // waiting for another OS GPS request to time out.
-    const latestCoordinates = currentLocationRef.current;
-    if (latestCoordinates) {
-      const latestDistance = distanceMetersBetween(latestCoordinates, destinationCoordinate);
-      if (latestDistance > VISIT_DISTANCE_THRESHOLD_METERS) {
+    if (verificationLocationPendingRef.current) return null;
+    verificationLocationPendingRef.current = true;
+    setVerificationLocationPending(true);
+    try {
+      verificationGateFixRef.current = null;
+      // Reuse a recent accurate watcher fix; request GPS only when that fix is
+      // unavailable. The same helper is used before confirming the photo.
+      const captureCoordinates = await getCoordinatesForVerification();
+      if (!captureCoordinates) {
+        CustomAlert.alert(
+          'Location Not Ready',
+          'Still waiting for an accurate GPS fix. Keep Precise Location on, stay near the destination, and try again.',
+          [{ text: 'OK', style: 'cancel' }],
+        );
+        return null;
+      }
+
+      setCurrentLocation(captureCoordinates);
+      const distance = distanceMetersBetween(captureCoordinates, destinationCoordinate);
+      if (distance > VISIT_DISTANCE_THRESHOLD_METERS) {
         CustomAlert.alert(
           'Too Far Away',
           `You must be within 100 meters of ${destinationName} to verify this location.`,
@@ -5046,38 +5098,97 @@ const MyTourStart = () => {
         );
         return null;
       }
-      return latestCoordinates;
-    }
 
-    const captureCoordinates = await getCoordinatesForVerification();
-    if (!captureCoordinates) {
-      CustomAlert.alert(
-        'Location Required',
-        'Unable to get your current location. Please enable location access and try again.',
-        [{ text: 'OK', style: 'cancel' }],
-      );
-      return null;
+      verificationGateFixRef.current = {
+        coordinate: captureCoordinates,
+        destinationCoordinate,
+        checkedAt: Date.now(),
+      };
+      return captureCoordinates;
+    } finally {
+      verificationLocationPendingRef.current = false;
+      setVerificationLocationPending(false);
     }
-
-    setCurrentLocation(captureCoordinates);
-    const distance = distanceMetersBetween(captureCoordinates, destinationCoordinate);
-    if (distance > VISIT_DISTANCE_THRESHOLD_METERS) {
-      CustomAlert.alert(
-        'Too Far Away',
-        `You must be within 100 meters of ${destinationName} to verify this location.`,
-        [{ text: 'OK', style: 'cancel' }],
-      );
-      return null;
-    }
-
-    return captureCoordinates;
   };
 
-  const getCoordinatesForVerification = async (): Promise<[number, number] | null> => {
-    const permitted = await requestLocationPermission();
-    if (!permitted) return currentLocationRef.current;
+  const getCoordinatesForVerification = async (
+    destinationCoordinate?: [number, number],
+  ): Promise<[number, number] | null> => {
+    // The active GPS watcher already validates freshness and accuracy. Use its
+    // recent fix instead of waiting for a second high-accuracy OS request.
+    const liveFix = lastAcceptedLocationFixRef.current;
+    if (
+      !nativeLocationDisabledRef.current &&
+      liveFix &&
+      Date.now() - liveFix.timestamp <= MAX_INITIAL_FIX_AGE_MS &&
+      liveFix.accuracy <= MAX_ACCEPTED_GPS_ACCURACY_METERS
+    ) {
+      return liveFix.coordinate;
+    }
 
-    return getCurrentPositionAsync().catch(() => currentLocationRef.current);
+    // On Android the foreground location service can keep a fresh fix even
+    // while the camera modal has paused the JS watcher.
+    const nativeStatus = await getNativeTourLocationStatus();
+    if (nativeStatus?.locationEnabled === false) return null;
+    if (nativeStatus?.locationEnabled === true) {
+      nativeLocationDisabledRef.current = false;
+    }
+    const nativeTimestamp = Number(nativeStatus?.timestamp);
+    const nativeAccuracy = Number(nativeStatus?.accuracy);
+    const nativeLatitude = Number(nativeStatus?.latitude);
+    const nativeLongitude = Number(nativeStatus?.longitude);
+    if (
+      nativeStatus &&
+      nativeTimestamp > 0 &&
+      Date.now() - nativeTimestamp <= MAX_INITIAL_FIX_AGE_MS &&
+      Number.isFinite(nativeAccuracy) &&
+      nativeAccuracy <= MAX_ACCEPTED_GPS_ACCURACY_METERS &&
+      Number.isFinite(nativeLatitude) &&
+      Number.isFinite(nativeLongitude)
+    ) {
+      return [nativeLongitude, nativeLatitude];
+    }
+
+    // The map may have just obtained a valid network-assisted fix while its
+    // high-accuracy watcher is still waiting for a satellite fix.
+    const mapFix = lastMapLocationFixRef.current;
+    if (
+      !nativeLocationDisabledRef.current &&
+      mapFix &&
+      Date.now() - mapFix.timestamp <= VERIFICATION_MAP_FIX_MAX_AGE_MS &&
+      Number.isFinite(mapFix.accuracy) &&
+      mapFix.accuracy <= MAX_ACCEPTED_GPS_ACCURACY_METERS
+    ) {
+      return mapFix.coordinate;
+    }
+
+    // Camera/confirmation can pause the JS GPS watcher. The location that
+    // opened this exact stop's camera remains usable briefly if neither live
+    // source has a newer fix and the device's location service is still on.
+    const gateFix = verificationGateFixRef.current;
+    if (
+      destinationCoordinate &&
+      !nativeLocationDisabledRef.current &&
+      gateFix &&
+      Date.now() - gateFix.checkedAt <= VERIFICATION_GATE_FIX_MAX_AGE_MS &&
+      gateFix.destinationCoordinate[0] === destinationCoordinate[0] &&
+      gateFix.destinationCoordinate[1] === destinationCoordinate[1]
+    ) {
+      return gateFix.coordinate;
+    }
+
+    const permitted = await requestLocationPermission();
+    if (!permitted) {
+      console.warn('[MyTourStart] Verification location permission unavailable');
+      return null;
+    }
+
+    return waitForVerificationLocation()
+      .then((coordinate) => {
+        if (nativeLocationDisabledRef.current) return null;
+        return coordinate;
+      })
+      .catch(() => null);
   };
 
   // The highlighted destination pin sits above the regular stop marker. Send
@@ -5118,27 +5229,38 @@ const MyTourStart = () => {
       return false;
     }
 
-    const isOnline = await checkInternetConnection();
-    if (!isOnline) {
-      showInternetRequiredAlert();
-      return false;
-    }
-
     const eventMeta = event as any;
     const eventCoordinate: [number, number] = [
       Number(event.coordinates?.longitude || 0),
       Number(event.coordinates?.latitude || 0),
     ];
-    const captureCoordinates = ALLOW_ANY_IMAGE_FOR_TESTING
-      ? currentLocation || eventCoordinate
-      : await getCoordinatesForVerification();
+    const locationCheckStartedAt = Date.now();
+    const [isOnline, captureCoordinates] = await Promise.all([
+      checkInternetConnection(),
+      ALLOW_ANY_IMAGE_FOR_TESTING
+        ? Promise.resolve(currentLocation || eventCoordinate)
+        : getCoordinatesForVerification(eventCoordinate),
+    ]);
+    console.log('[MyTourStart] Event verification prerequisites:', {
+      elapsedMs: Date.now() - locationCheckStartedAt,
+      hasCoordinates: Boolean(captureCoordinates),
+    });
+    if (!isOnline) {
+      return {
+        verified: false,
+        retryable: true,
+        reason: 'No internet connection. Please reconnect and retry with the same photo.',
+      } satisfies VerificationFailure;
+    }
+
     const captureDistanceMeters = captureCoordinates
       ? distanceMetersBetween(captureCoordinates, eventCoordinate)
       : undefined;
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && !captureCoordinates) {
       return {
         verified: false,
-        reason: 'Unable to get your current location. Please enable location access and try again.',
+        retryable: true,
+        reason: 'Could not confirm your location right now. Check that Precise Location is enabled, then retry with the same photo.',
       } satisfies VerificationFailure;
     }
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && captureDistanceMeters !== undefined && captureDistanceMeters > VISIT_DISTANCE_THRESHOLD_METERS) {
@@ -5155,7 +5277,7 @@ const MyTourStart = () => {
       captureCoordinates: captureCoordinates || undefined,
       captureDistanceMeters,
       verificationRadius: VISIT_DISTANCE_THRESHOLD_METERS,
-    }, imageUri);
+    }, imageUri, { connectivityChecked: true });
     const eventLocationMatched = Boolean(
       captureCoordinates &&
       captureDistanceMeters !== undefined &&
@@ -5165,6 +5287,7 @@ const MyTourStart = () => {
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && (!aiMatch.matched || !eventLocationMatched)) {
       return {
         verified: false,
+        retryable: aiMatch.retryable,
         reason: aiMatch.reason || getVerificationFailureMessage(
           event.title,
           aiMatch.matched,
@@ -5236,6 +5359,7 @@ const MyTourStart = () => {
         });
         const computedStatus = (checkRemainingPlaces.length === 0 && checkRemainingEvents.length === 0) ? 'completed' : 'active';
 
+        const eventSaveStartedAt = Date.now();
         const savedId = await saveUserTour({
           tourId: tourIdRef.current,
           userId: user?.id || '',
@@ -5259,6 +5383,9 @@ const MyTourStart = () => {
             stop_id: stop.place ? stop.place.id : stop.event ? stop.event.id : '',
           })),
           allPlacesAndEvents: buildAllPlacesArray(allStopsForPersistence),
+        });
+        console.log('[MyTourStart] Verified event save:', {
+          elapsedMs: Date.now() - eventSaveStartedAt,
         });
         if (savedId) {
           tourIdRef.current = savedId;
@@ -5303,23 +5430,34 @@ const MyTourStart = () => {
       return false;
     }
 
-    const isOnline = await checkInternetConnection();
+    const locationCheckStartedAt = Date.now();
+    const [isOnline, captureCoordinates] = await Promise.all([
+      checkInternetConnection(),
+      ALLOW_ANY_IMAGE_FOR_TESTING
+        ? Promise.resolve(currentLocation || selectedStop.coordinate)
+        : getCoordinatesForVerification(selectedStop.coordinate),
+    ]);
+    console.log('[MyTourStart] Place verification prerequisites:', {
+      elapsedMs: Date.now() - locationCheckStartedAt,
+      hasCoordinates: Boolean(captureCoordinates),
+    });
     if (!isOnline) {
-      showInternetRequiredAlert();
-      return false;
+      return {
+        verified: false,
+        retryable: true,
+        reason: 'No internet connection. Please reconnect and retry with the same photo.',
+      } satisfies VerificationFailure;
     }
 
     const placeMeta = selectedStop.place as any;
-    const captureCoordinates = ALLOW_ANY_IMAGE_FOR_TESTING
-      ? currentLocation || selectedStop.coordinate
-      : await getCoordinatesForVerification();
     const captureDistanceMeters = captureCoordinates
       ? distanceMetersBetween(captureCoordinates, selectedStop.coordinate)
       : undefined;
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && !captureCoordinates) {
       return {
         verified: false,
-        reason: 'Unable to get your current location. Please enable location access and try again.',
+        retryable: true,
+        reason: 'Could not confirm your location right now. Check that Precise Location is enabled, then retry with the same photo.',
       } satisfies VerificationFailure;
     }
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && captureDistanceMeters !== undefined && captureDistanceMeters > VISIT_DISTANCE_THRESHOLD_METERS) {
@@ -5336,7 +5474,7 @@ const MyTourStart = () => {
       captureCoordinates: captureCoordinates || undefined,
       captureDistanceMeters,
       verificationRadius: VISIT_DISTANCE_THRESHOLD_METERS,
-    }, imageUri);
+    }, imageUri, { connectivityChecked: true });
 
     const placeLocationMatched = Boolean(
       captureCoordinates &&
@@ -5347,6 +5485,7 @@ const MyTourStart = () => {
     if (!ALLOW_ANY_IMAGE_FOR_TESTING && (!aiMatch.matched || !placeLocationMatched)) {
       return {
         verified: false,
+        retryable: aiMatch.retryable,
         reason: aiMatch.reason || getVerificationFailureMessage(
           selectedStop.place.name,
           aiMatch.matched,
@@ -5404,26 +5543,32 @@ const MyTourStart = () => {
       const nextStartedAt = startedAt || new Date().toISOString();
       setStartedAt(nextStartedAt);
       let savedTourId: string | null = tourId;
+      const saveStartedAt = Date.now();
       try {
         savedTourId = await persistTourIfNeeded(nextProgress, nextStartedAt);
       } catch (error) {
         if (!ALLOW_ANY_IMAGE_FOR_TESTING) {
           throw error;
         }
+      } finally {
+        console.log('[MyTourStart] Verified visit save:', {
+          elapsedMs: Date.now() - saveStartedAt,
+        });
       }
 
       if (user?.id && savedTourId && pointsEarned > 0) {
-        try {
-          await addUserVisitPoints({
-            userId: user.id,
-            tourId: savedTourId,
-            placeId: selectedStop.place.id,
-            pointsToAdd: pointsEarned,
-          });
+        // The tour visit is already saved. Points are independent bookkeeping;
+        // do not leave the confirmation spinner up for a second network write.
+        addUserVisitPoints({
+          userId: user.id,
+          tourId: savedTourId,
+          placeId: selectedStop.place.id,
+          pointsToAdd: pointsEarned,
+        }).then(() => {
           dispatch(setUserPoints((user.points || 0) + pointsEarned));
-        } catch (err) {
+        }).catch((err) => {
           console.warn('[MyTourStart] failed to add visit points', err);
-        }
+        });
       }
       // Check if all places and events are now complete with the updated progress
       // A better approach: recalculate what remaining stops would be with the new progress
@@ -5949,7 +6094,7 @@ const MyTourStart = () => {
                 <ActionTouchable
                   style={[
                     styles.confirmBtn,
-                    (!selectedStopIsNearestPending ||
+                    (verificationLocationPending || !selectedStopIsNearestPending ||
                       Boolean(placeProgress[selectedStop.id]?.visited)) &&
                     styles.confirmBtnDisabled,
                   ]}
@@ -5968,10 +6113,12 @@ const MyTourStart = () => {
                     setScanForEvent(false);
                     setScanVisible(true);
                   }}
-                  disabled={Boolean(placeProgress[selectedStop.id]?.visited)}
+                  disabled={verificationLocationPending || Boolean(placeProgress[selectedStop.id]?.visited)}
                 >
                   <Text style={styles.confirmText}>
-                    {placeProgress[selectedStop.id]?.visited
+                    {verificationLocationPending
+                      ? 'Getting location…'
+                      : placeProgress[selectedStop.id]?.visited
                       ? 'Visited'
                       : selectedStopIsNearestPending
                         ? 'Confirm Visit'
@@ -6065,7 +6212,9 @@ const MyTourStart = () => {
                 : 'info'
           }
           primaryActionLabel={
-            selectedEvent && eventProgress[selectedEvent.id]?.attended
+            verificationLocationPending
+              ? 'Getting location…'
+              : selectedEvent && eventProgress[selectedEvent.id]?.attended
               ? 'Attended'
               : selectedEvent &&
                 (eventProgress[selectedEvent.id]?.expired || isEventTimeExpired(selectedEvent))
@@ -6123,7 +6272,7 @@ const MyTourStart = () => {
               }
               : undefined
           }
-          primaryDisabled={Boolean(selectedEvent && eventProgress[selectedEvent.id]?.attended)}
+          primaryDisabled={verificationLocationPending || Boolean(selectedEvent && eventProgress[selectedEvent.id]?.attended)}
           secondaryActionLabel={
             selectedEvent &&
               !eventProgress[selectedEvent.id]?.attended &&
@@ -6146,6 +6295,14 @@ const MyTourStart = () => {
 
         <ScanVerifyModal
           visible={scanVisible}
+          referenceImageUrl={
+            scanForEvent || selectedStop?.event
+              ? (scanTargetEvent as any)?.imageUrl || scanTargetEvent?.coverImage ||
+                (selectedEvent as any)?.imageUrl || selectedEvent?.coverImage ||
+                (selectedStop?.event as any)?.imageUrl || selectedStop?.event?.coverImage || ''
+              : selectedStop?.place?.imageUrl || (selectedStop?.place as any)?.image ||
+                (selectedStop?.place as any)?.coverImage || ''
+          }
           title={
             scanForEvent
               ? scanTargetEvent?.title || selectedEvent?.title || 'this event'
@@ -6155,6 +6312,7 @@ const MyTourStart = () => {
             scanForEvent ? 0 : Number(selectedStop?.place?.points || 10)
           }
           onClose={() => {
+            verificationGateFixRef.current = null;
             setScanVisible(false);
             setScanForEvent(false);
             pendingEventScanRef.current = false;

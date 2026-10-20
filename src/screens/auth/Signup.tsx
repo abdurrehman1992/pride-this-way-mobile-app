@@ -131,6 +131,7 @@ const Signup: React.FC = () => {
         <>
             <ImageBackground style={styles.container}
                 source={AuthBackGroundImage}
+                fadeDuration={0}
             >
                 <View
                     style={[styles.bottomSheetContainer, { bottom: keyboardHeight }]}
@@ -239,7 +240,12 @@ const Signup: React.FC = () => {
                             <AuthBottomNavigation
                                 text="Already have an account?"
                                 btnText="Sign in"
-                                onpress={() => navigation.navigate("Login")}
+                                onpress={() => {
+                                    if (loading) return;
+                                    Keyboard.dismiss();
+                                    if (navigation.canGoBack()) navigation.goBack();
+                                    else navigation.replace("Login");
+                                }}
                             />
                         </View>
                         </ScrollView>

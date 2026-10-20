@@ -32,6 +32,17 @@ npm run android
 yarn android
 ```
 
+If Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE` because a release-signed
+copy is already installed, use `npm run android:keep-data` to install a debug
+build signed with the release key. This keeps the app's local data and requires
+`android/key.properties` and its matching keystore on your machine.
+
+For JavaScript changes, keep Metro running when testing a debug build. A
+previously built APK does not update when source files change. To test the
+latest code without Metro, rebuild the release APK with
+`cd android && ./gradlew :app:assembleRelease` and install the new file from
+`android/app/build/outputs/apk/release/app-release.apk`.
+
 ### iOS
 
 For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).

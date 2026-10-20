@@ -10,6 +10,7 @@ class TourLocationPackage : ReactPackage {
     listOf(
       TourLocationModule(reactContext),
       TourHeadingModule(reactContext),
+      AmbientLightModule(reactContext),
     )
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =

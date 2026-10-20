@@ -1125,6 +1125,112 @@ async function uriToBase64(
   return bytesToBase64(new Uint8Array(arrayBuffer));
 }
 
+// Preparing images while the camera/confirmation UI is open hides the decode
+// and reference-download time. Reuse the same work during verification, with a
+// small cache so retakes do not keep old photos in memory indefinitely.
+const VERIFICATION_IMAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+const VERIFICATION_IMAGE_CACHE_LIMIT = 6;
+const VERIFICATION_REFERENCE_WAIT_MS = 3_000;
+const VERIFICATION_CAPTURE_WAIT_MS = 10_000;
+const verificationImageCache = new Map<
+  string,
+  { promise: Promise<string>; expiresAt: number }
+>();
+
+function prepareVerificationImage(
+  uri: string,
+  maxDimension: number,
+  quality: number,
+): Promise<string> {
+  if (uri.startsWith('data:')) {
+    return uriToBase64(uri, { maxDimension, quality });
+  }
+  const key = `${maxDimension}:${quality}:${uri}`;
+  const cached = verificationImageCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    verificationImageCache.delete(key);
+    verificationImageCache.set(key, cached);
+    return cached.promise;
+  }
+
+  verificationImageCache.delete(key);
+  const promise = uriToBase64(uri, { maxDimension, quality });
+  verificationImageCache.set(key, {
+    promise,
+    expiresAt: Date.now() + VERIFICATION_IMAGE_CACHE_TTL_MS,
+  });
+  while (verificationImageCache.size > VERIFICATION_IMAGE_CACHE_LIMIT) {
+    const oldestKey = verificationImageCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    verificationImageCache.delete(oldestKey);
+  }
+  promise.catch(() => {
+    if (verificationImageCache.get(key)?.promise === promise) {
+      verificationImageCache.delete(key);
+    }
+  });
+  return promise;
+}
+
+export function prefetchPlaceVerificationReference(imageUrl?: string): void {
+  if (imageUrl) {
+    prepareVerificationImage(
+      imageUrl,
+      GEMINI_REFERENCE_MAX_IMAGE_DIMENSION,
+      GEMINI_REFERENCE_JPEG_QUALITY,
+    ).catch(() => {});
+  }
+}
+
+export function prefetchCapturedVerificationImage(imageUri: string): void {
+  if (imageUri.startsWith('data:')) return;
+  // Camera APIs may reuse a temporary path. A new capture must never inherit
+  // encoded pixels from an earlier photo at that path.
+  verificationImageCache.delete(
+    `${GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION}:${GEMINI_VERIFICATION_JPEG_QUALITY}:${imageUri}`,
+  );
+  prepareVerificationImage(
+    imageUri,
+    GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION,
+    GEMINI_VERIFICATION_JPEG_QUALITY,
+  ).catch(() => {});
+}
+
+async function waitForOptionalVerificationReference(
+  referencePromise: Promise<string>,
+): Promise<string> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      referencePromise,
+      new Promise<string>((resolve) => {
+        timeoutId = setTimeout(() => resolve(''), VERIFICATION_REFERENCE_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+async function waitForCapturedVerificationImage(
+  capturedPromise: Promise<string>,
+): Promise<string> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      capturedPromise,
+      new Promise<string>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('Captured image preparation timed out')),
+          VERIFICATION_CAPTURE_WAIT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 // export async function verifyPlaceImageMatch(
 //   place: {
 //     title?: string;
@@ -1284,7 +1390,10 @@ async function uriToBase64(
 // configuration). The details are logged, never shown to the user.
 const PHOTO_VERIFICATION_ERROR_MESSAGE =
   'Something went wrong while verifying your photo. Please try again.';
-const GEMINI_VERIFICATION_TIMEOUT_MS = 75_000;
+const GEMINI_VERIFICATION_TIMEOUT_MS = 18_000;
+const GEMINI_VERIFICATION_MODEL = 'gemini-3.5-flash-lite';
+const PHOTO_VERIFICATION_BUSY_MESSAGE =
+  'The verification service is busy right now. Please try again with the same photo.';
 // A verification photo does not need a 4K upload. Keeping the request under
 // a few hundred KB materially improves cellular latency without affecting the
 // visual evidence Gemini needs for a place check.
@@ -1307,14 +1416,16 @@ export async function verifyPlaceImageMatch(
     verificationRadius?: number;
   },
   localImageUri: string,
-): Promise<{ matched: boolean; reason: string; confidence: number }> {
-  const isOnline = await checkInternetConnection();
+  options: { connectivityChecked?: boolean } = {},
+): Promise<{ matched: boolean; reason: string; confidence: number; retryable?: boolean }> {
+  const isOnline = options.connectivityChecked || await checkInternetConnection();
 
   if (!isOnline) {
     return {
       matched: false,
       reason: 'No internet connection. Please reconnect and try again.',
       confidence: 0,
+      retryable: true,
     };
   }
 
@@ -1370,10 +1481,6 @@ A large destination may extend far beyond its coordinate pin, so the user does n
 `
       : '';
 
-  const targetImageHint = place.imageUrl
-    ? 'A reference image of the target place is provided.'
-    : 'No reference image is available.';
-
   const mimeType = /\.png$/i.test(localImageUri)
     ? 'image/png'
     : 'image/jpeg';
@@ -1388,27 +1495,37 @@ A large destination may extend far beyond its coordinate pin, so the user does n
     // Encode the captured photo and fetch/resize the target reference in
     // parallel. Previously a mobile connection paid for these two expensive
     // operations one after another before Gemini was even contacted.
-    const capturedImagePromise = uriToBase64(localImageUri, {
-      maxDimension: GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION,
-      quality: GEMINI_VERIFICATION_JPEG_QUALITY,
-    });
+    const imagePreparationStartedAt = Date.now();
+    const capturedImagePromise = prepareVerificationImage(
+      localImageUri,
+      GEMINI_VERIFICATION_MAX_IMAGE_DIMENSION,
+      GEMINI_VERIFICATION_JPEG_QUALITY,
+    );
     const referenceImagePromise = place.imageUrl
-      ? uriToBase64(place.imageUrl, {
-        maxDimension: GEMINI_REFERENCE_MAX_IMAGE_DIMENSION,
-        quality: GEMINI_REFERENCE_JPEG_QUALITY,
-      }).catch((error) => {
+      ? prepareVerificationImage(
+        place.imageUrl,
+        GEMINI_REFERENCE_MAX_IMAGE_DIMENSION,
+        GEMINI_REFERENCE_JPEG_QUALITY,
+      ).catch((error) => {
         console.warn('[aiService] Could not load Cloudinary reference image:', error);
         return '';
       })
       : Promise.resolve('');
     const [base64, referenceBase64] = await Promise.all([
-      capturedImagePromise,
-      referenceImagePromise,
+      waitForCapturedVerificationImage(capturedImagePromise),
+      waitForOptionalVerificationReference(referenceImagePromise),
     ]);
+    console.log('[aiService] Verification image preparation:', {
+      elapsedMs: Date.now() - imagePreparationStartedAt,
+      hasReferenceImage: Boolean(referenceBase64),
+    });
+    const targetImageHint = referenceBase64
+      ? 'A reference image of the target place is provided.'
+      : 'No reference image is available.';
 
-    const defaultEndpoint =
-      `${GEMINI_BASE_V1BETA}/models/${GEMINI_DEFAULT_MODEL}:generateContent`;
-    const endpoint = GEMINI_ENDPOINT?.trim() || defaultEndpoint;
+    const configuredEndpoint = GEMINI_ENDPOINT?.trim();
+    const endpoint = configuredEndpoint ||
+      `${GEMINI_BASE_V1BETA}/models/${GEMINI_VERIFICATION_MODEL}:generateContent`;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1505,37 +1622,57 @@ Return matched=true only when the captured image provides reasonable visual evid
 
     console.log('[aiService] Gemini verification request:', {
       endpoint: endpoint.replace(/([?&](?:key|api_key)=)[^&]+/gi, '$1[redacted]'),
-      hasReferenceImage: Boolean(place.imageUrl),
+      hasReferenceImage: Boolean(referenceBase64),
       capturedImageBytes: base64.length,
       hasTargetCoordinates: Boolean(targetCoordinates),
       hasCaptureCoordinates: Boolean(captureCoordinates),
     });
 
+    const requestBody = JSON.stringify({
+      contents: [{ parts }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        // A place comparison needs a short visual judgment, not extended
+        // reasoning. The built-in verification model supports this setting.
+        ...(!configuredEndpoint && {
+          thinkingConfig: { thinkingLevel: 'minimal' },
+        }),
+      },
+    });
     const requestController = new AbortController();
-    const requestTimeoutId = setTimeout(() => {
-      didRequestTimeout = true;
-      requestController.abort();
-    }, GEMINI_VERIFICATION_TIMEOUT_MS);
+    let requestTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    const requestTimeout = new Promise<never>((_, reject) => {
+      requestTimeoutId = setTimeout(() => {
+        didRequestTimeout = true;
+        requestController.abort();
+        reject(new Error('Verification request timed out'));
+      }, GEMINI_VERIFICATION_TIMEOUT_MS);
+    });
+    const requestStartedAt = Date.now();
     let response: Response;
     try {
-      response = await fetch(endpoint, {
+      const request = fetch(endpoint, {
         method: 'POST',
         headers,
         signal: requestController.signal,
-        body: JSON.stringify({
-          contents: [
-            {
-              parts,
-            },
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-          },
-        }),
+        body: requestBody,
       });
+      response = await Promise.race([request, requestTimeout]);
+    } catch (error) {
+      if (didRequestTimeout) throw error;
+      console.warn('[aiService] Verification request failed:', error);
+      return {
+        matched: false,
+        reason: 'Could not reach the verification service. Please check your connection and retry with the same photo.',
+        confidence: 0,
+        retryable: true,
+      };
     } finally {
-      clearTimeout(requestTimeoutId);
+      if (requestTimeoutId !== undefined) clearTimeout(requestTimeoutId);
+      console.log('[aiService] Gemini verification timing:', {
+        model: configuredEndpoint ? 'configured' : GEMINI_VERIFICATION_MODEL,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
     }
 
     if (!response.ok) {
@@ -1548,8 +1685,11 @@ Return matched=true only when the captured image provides reasonable visual evid
 
       return {
         matched: false,
-        reason: PHOTO_VERIFICATION_ERROR_MESSAGE,
+        reason: [408, 429, 500, 502, 503, 504].includes(response.status)
+          ? PHOTO_VERIFICATION_BUSY_MESSAGE
+          : PHOTO_VERIFICATION_ERROR_MESSAGE,
         confidence: 0,
+        retryable: [408, 429, 500, 502, 503, 504].includes(response.status),
       };
     }
 
@@ -1609,8 +1749,8 @@ Return matched=true only when the captured image provides reasonable visual evid
       confidence,
     };
   } catch (error) {
-    const wasAborted =
-      error instanceof Error && /abort/i.test(error.message);
+    const wasAborted = didRequestTimeout ||
+      (error instanceof Error && /abort/i.test(error.message));
     // A timeout is a recoverable free-tier/network condition. Keep it out of
     // the red RN error overlay and give the user an actionable retry message.
     if (wasAborted) {
@@ -1627,9 +1767,12 @@ Return matched=true only when the captured image provides reasonable visual evid
     return {
       matched: false,
       reason: wasAborted
-        ? 'Verification took too long. Please check your internet connection and try again.'
-        : PHOTO_VERIFICATION_ERROR_MESSAGE,
+        ? 'Verification took too long. Please retry with the same photo.'
+        : error instanceof Error && error.message === 'Captured image preparation timed out'
+          ? 'Preparing the photo took too long. Please retake it and try again.'
+          : PHOTO_VERIFICATION_ERROR_MESSAGE,
       confidence: 0,
+      retryable: wasAborted,
     };
   }
 }

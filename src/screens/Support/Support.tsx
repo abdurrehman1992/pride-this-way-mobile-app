@@ -51,7 +51,7 @@ const Support = () => {
         return;
       }
 
-    } catch (error) {
+    } catch {
 
       // console.log("SUPPORT ERROR:", error);
 

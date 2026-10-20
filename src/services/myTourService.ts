@@ -640,6 +640,15 @@ const fetchAllPlacesMap = async (): Promise<Map<string, FirebasePlace>> => {
   return placesMap;
 };
 
+// Detail screens know the IDs they need. Avoid downloading whole collections
+// when rendering saved tours or favorites.
+const fetchExistingDocsByIds = async (collectionName: string, ids: string[]) => {
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  const collection = firestore().collection(collectionName);
+  const docs = await Promise.all(uniqueIds.map((id) => collection.doc(id).get()));
+  return docs.filter((doc) => doc.exists);
+};
+
 export const fetchTourTags = async (): Promise<FirebaseTag[]> => {
   const snapshot = await firestore()
     .collection(TAGS_COLLECTION)
@@ -888,10 +897,12 @@ export const fetchRecommendedRoutes = async ({
   locationLabel,
   selectedTagIds,
   userId,
+  availableTags,
 }: {
   locationLabel: string;
   selectedTagIds: string[];
   userId?: string;
+  availableTags?: FirebaseTag[];
 }): Promise<RecommendedRoute[]> => {
   const [routesSnapshot, placesMap, favoritePlaceIds, tags] =
     await Promise.all([
@@ -900,13 +911,9 @@ export const fetchRecommendedRoutes = async ({
         .get(),
       fetchAllPlacesMap(),
       fetchUserFavoritePlaceIds(userId),
-      fetchTourTags().catch(() => []),
+      availableTags?.length ? Promise.resolve(availableTags) : fetchTourTags().catch(() => []),
     ]);
 
-  const allPlaces = Array.from(placesMap.values()).filter(
-    (place: FirebasePlace) => place.isActive !== false
-  );
-  const favoritePlaceIdSet = new Set(favoritePlaceIds);
   // Routes created by different data flows may store either the tag document
   // id or the tag name. Resolve both forms to one canonical key before
   // counting matches.
@@ -934,31 +941,6 @@ export const fetchRecommendedRoutes = async ({
       const routeTagIds = extractRoutePreferenceTagIds(route)
         .map(canonicalTag)
         .filter(Boolean);
-      const selectedIds = new Set(places.map((place) => place.id));
-      const favoritePlaces = allPlaces
-        .filter((place) => favoritePlaceIdSet.has(place.id))
-        .filter((place) =>
-          locationMatches(
-            buildLocationLabel(route.city_name, route.country) || locationLabel,
-            place.city_name,
-            place.country
-          )
-        )
-        .filter((place) => !selectedIds.has(place.id))
-        .sort((a, b) => (b.rating || 0) - (a.rating || 0));
-
-      const fallbackPlace =
-        allPlaces
-          .filter((place) =>
-            locationMatches(
-              buildLocationLabel(route.city_name, route.country) || locationLabel,
-              place.city_name,
-              place.country
-            )
-          )
-          .filter((place) => !selectedIds.has(place.id))
-          .sort((a, b) => (b.rating || 0) - (a.rating || 0))[0] || null;
-
       const matchedTagCount = routeTagIds.filter((tagId) =>
         selectedTagIdSet.has(tagId)
       ).length;
@@ -978,8 +960,6 @@ export const fetchRecommendedRoutes = async ({
         route,
         places,
         events,
-        favoritePlace: favoritePlaces[0] || fallbackPlace,
-        favoritePlaces,
         matchedTagCount,
         locationCount,
         locationMatched: routeMatchesLocation(locationLabel, route, places, events),
@@ -1024,20 +1004,39 @@ export const fetchRecommendedRoutes = async ({
     })
     .map(({ locationMatched: _locationMatched, originalIndex: _originalIndex, ...item }) => item);
 
-  console.log('[myTourService] route recommendation ranking:', {
-    selectedTagIds: normalizedSelectedTagIds,
-    selectedLocation: locationLabel,
-    routes: sorted.map((item) => ({
-    name: item.route.name,
-    city: item.route.city_name,
-    matchedTagCount: item.matchedTagCount,
-    locationCount: item.locationCount,
-    createdAt: item.route.createdAt,
-    updatedAt: item.route.updatedAt,
-    })),
-  });
+  // Only the winning route needs favorite and fallback places. Previously
+  // every route scanned and sorted the full places collection twice.
+  const favoritePlaceIdSet = new Set(favoritePlaceIds);
+  return sorted.slice(0, 1).map((item) => {
+    const selectedIds = new Set(item.places.map((place) => place.id));
+    const routeLocation =
+      buildLocationLabel(item.route.city_name, item.route.country) || locationLabel;
+    const favoritePlaces: FirebasePlace[] = [];
+    let fallbackPlace: FirebasePlace | null = null;
 
-  return sorted.slice(0, 1);
+    for (const place of placesMap.values()) {
+      if (
+        place.isActive === false ||
+        selectedIds.has(place.id) ||
+        !locationMatches(routeLocation, place.city_name, place.country)
+      ) {
+        continue;
+      }
+      if (!fallbackPlace || (place.rating || 0) > (fallbackPlace.rating || 0)) {
+        fallbackPlace = place;
+      }
+      if (favoritePlaceIdSet.has(place.id)) {
+        favoritePlaces.push(place);
+      }
+    }
+
+    favoritePlaces.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+    return {
+      ...item,
+      favoritePlace: favoritePlaces[0] || fallbackPlace,
+      favoritePlaces,
+    };
+  });
 };
 
 export const fetchRouteDetails = async ({
@@ -1125,10 +1124,8 @@ export const fetchPlacesByIds = async (placeIds: string[]) => {
     return [];
   }
 
-  const placesMap = await fetchAllPlacesMap();
-  const placeIdSet = new Set(placeIds);
-
-  return Array.from(placesMap.values()).filter((place) => placeIdSet.has(place.id));
+  const docs = await fetchExistingDocsByIds(PLACES_COLLECTION, placeIds);
+  return docs.map((doc) => parsePlace(doc.id, doc.data()));
 };
 
 /** Preserve tour / saved order when place docs are loaded by id. */
@@ -1166,18 +1163,8 @@ export const fetchRoutesByIds = async (
 ): Promise<FirebaseRoute[]> => {
   if (routeIds.length === 0) return [];
 
-  const snapshot = await firestore()
-    .collection(ROUTES_COLLECTION)
-    .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
-  const wanted = new Set(routeIds);
-  return snapshot.docs
-    .filter(
-      (doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
-        wanted.has(doc.id)
-    )
-    .map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
-      parseRoute(doc.id, doc.data())
-    );
+  const docs = await fetchExistingDocsByIds(ROUTES_COLLECTION, routeIds);
+  return docs.map((doc) => parseRoute(doc.id, doc.data()));
 };
 
 export const fetchToursByIds = async (
@@ -1185,18 +1172,8 @@ export const fetchToursByIds = async (
 ): Promise<SavedTour[]> => {
   if (tourIds.length === 0) return [];
 
-  const snapshot = await firestore()
-    .collection(TOURS_COLLECTION)
-    .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
-  const wanted = new Set(tourIds);
-  return snapshot.docs
-    .filter(
-      (doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
-        wanted.has(doc.id)
-    )
-    .map((doc: FirebaseFirestoreTypes.QueryDocumentSnapshot) =>
-      parseSavedTour(doc.id, doc.data())
-    );
+  const docs = await fetchExistingDocsByIds(TOURS_COLLECTION, tourIds);
+  return docs.map((doc) => parseSavedTour(doc.id, doc.data()));
 };
 
 export const fetchEventsByIds = async (
@@ -1204,20 +1181,8 @@ export const fetchEventsByIds = async (
 ): Promise<FirebaseEvent[]> => {
   if (eventIds.length === 0) return [];
 
-  const snapshot = await firestore()
-    .collection(EVENTS_COLLECTION)
-    .get() as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
-  const docsById = new Map<string, FirebaseFirestoreTypes.DocumentData>(
-    snapshot.docs.map((doc) => [doc.id, doc.data()])
-  );
-
-  return eventIds
-    .map((eventId) => {
-      const data = docsById.get(eventId);
-      if (!data) return null;
-      return parseEvent(eventId, data);
-    })
-    .filter((event): event is FirebaseEvent => Boolean(event));
+  const docs = await fetchExistingDocsByIds(EVENTS_COLLECTION, eventIds);
+  return docs.map((doc) => parseEvent(doc.id, doc.data()));
 };
 
 export const saveUserTour = async ({
@@ -1331,8 +1296,6 @@ export const saveUserTour = async ({
       return (eventA?.startTime || '').localeCompare(eventB?.startTime || '');
     });
 
-  console.log('DEBUG saveUserTour - events param:', events);
-  console.log('DEBUG saveUserTour - eventEntries:', eventEntries);
 
   const placeEntriesById = new Map(
     allPlaces.map((item) => [item.place_id, item])
@@ -1383,7 +1346,6 @@ export const saveUserTour = async ({
       })
       .filter(Boolean) as Record<string, any>[];
   } else if (Array.isArray(navigableRoute) && navigableRoute.length > 0) {
-    console.log('DEBUG saveUserTour - navigableRoute param:', navigableRoute);
     const orderedStops = [...navigableRoute].sort((a, b) => a.order - b.order);
     const orderedEntries: Record<string, any>[] = orderedStops
       .map((entry) => {
@@ -1436,9 +1398,6 @@ export const saveUserTour = async ({
         ...item,
         order: orderedEntries.length + missingPlaces.length + index + 1,
       }));
-    console.log('DEBUG saveUserTour - orderedEntries (from navigableRoute):', orderedEntries);
-    console.log('DEBUG saveUserTour - missingPlaces:', missingPlaces);
-    console.log('DEBUG saveUserTour - missingEvents:', missingEvents);
 
     allPlacesAndEventsFinal = [
       ...orderedEntries.map((item, index) => ({ ...item, order: index + 1 })),
@@ -1480,7 +1439,6 @@ export const saveUserTour = async ({
     updatedAt: now,
   });
 
-  console.log('DEBUG saveUserTour - final all_places payload:', allPlacesAndEventsFinal.map(p=>p.place_id || p.event_id));
 
   let savedId: string;
   if (tourId) {

@@ -29,6 +29,7 @@ export type MyTourStackParamList = {
     routeId?: string;
     timestamp?: number;
     pendingCreate?: {
+      tourId: string;
       status: 'active' | 'saved';
       scheduledDate: string | null;
       createdAt: string;
@@ -60,7 +61,7 @@ export type ProfileStackParamList = {
   ChangePassword: undefined
 };
 
-export type FovoritesStackParamList = {
+export type FavoritesStackParamList = {
   Favorites: undefined,
   RecommendationDetials: {
     item: {
@@ -90,11 +91,6 @@ export type AppStackParamList = {
   Tabs: undefined;
   Main: undefined,
 };
-export type SupportParamList = {
-  Help_Support: undefined;
-  Terms_Conditions: undefined,
-};
-
 export type TabParamList = {
   Favorites: undefined;
   MyTours: undefined;

@@ -17,6 +17,7 @@ interface AuthState {
   isLoggedIn: boolean;
   initialized: boolean;
   loading: boolean;
+  signingOut: boolean;
   error: string | null;
 }
 const initialState: AuthState = {
@@ -25,12 +26,29 @@ const initialState: AuthState = {
   isLoggedIn: false,
   initialized: false,
   loading: false,
+  signingOut: false,
   error: null,
 };
 const authSlice = createSlice({
   name: "auth",
   initialState,
   reducers: {
+    clearStaleAuthLoading: (state) => {
+      // A request interrupted by app termination must not block Firebase restore.
+      state.loading = false;
+      state.signingOut = false;
+    },
+    logoutStart: (state) => {
+      state.signingOut = true;
+      state.error = null;
+    },
+    logoutFailure: (state, action: PayloadAction<string>) => {
+      state.signingOut = false;
+      state.error = action.payload;
+    },
+    finishLogoutTransition: (state) => {
+      state.signingOut = false;
+    },
     loginStart: (state) => {
       state.loading = true;
       state.error = null;
@@ -44,6 +62,7 @@ const authSlice = createSlice({
       state.isLoggedIn = true;
       state.initialized = true;
       state.loading = false;
+      state.signingOut = false;
       state.error = null;
     },
     loginFailure: (state, action: PayloadAction<string>) => {
@@ -91,6 +110,10 @@ const authSlice = createSlice({
   },
 });
 export const {
+  clearStaleAuthLoading,
+  logoutStart,
+  logoutFailure,
+  finishLogoutTransition,
   loginStart,
   loginSuccess,
   loginFailure,
